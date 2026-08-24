@@ -151,9 +151,11 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         }
 
         try {
+#if !BROWSER
             if ((capabilities.Usages & WGPUTextureUsage.RenderAttachment) == 0) {
                 throw new WgpuException("The selected surface cannot be used as a render attachment.");
             }
+#endif
             if (capabilities.FormatCount == 0) {
                 throw new WgpuException("The selected surface exposes no texture formats.");
             }
