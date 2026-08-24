@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices.JavaScript;
 using Sia.GLFW;
 using Sia.Input;
 using Sia.WebGPU;
@@ -20,6 +21,7 @@ internal sealed partial class SceneExampleApp
     private bool RenderAnimationFrame(double timestampMilliseconds)
     {
         if (Glfw.ShouldClose(_window)) return false;
+        ResizeWindowToCanvas();
         Glfw.PollEvents();
         var currentTime = timestampMilliseconds / 1000.0;
         var deltaTime = _previousAnimationFrameTime is double previous
@@ -39,12 +41,17 @@ internal sealed partial class SceneExampleApp
     {
         Glfw.Initialize();
         _glfwInitialized = true;
+        var initialSize = GetCanvasSize();
         _window = Glfw.CreateWindow(
-            new WindowDescriptor(_initialWidth, _initialHeight, "Sia.Engine - Scene Example", Resizable: true),
+            new WindowDescriptor(
+                initialSize.Width,
+                initialSize.Height,
+                "Sia.Engine - Scene Example",
+                Resizable: true),
             new GlfwWindowOptions(ClientApi.NoApi));
         _instance = Wgpu.CreateInstance();
         _surface = CreateSurface(_instance, _window);
-        _adapter = await Wgpu.RequestAdapterAsync(_instance, BuildAdapterOptions());
+        _adapter = await RequestBrowserAdapterAsync();
         var surfaceInfo = GetSurfaceInfo(_surface, _adapter);
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
@@ -56,6 +63,45 @@ internal sealed partial class SceneExampleApp
         ResizeIfNeeded(force: true);
         UpdateScene(0f);
         RenderFrame();
+    }
+
+    private void ResizeWindowToCanvas()
+    {
+        var target = GetCanvasSize();
+        var current = Glfw.GetSize(_window);
+        if (target.Width != current.Width || target.Height != current.Height) {
+            Glfw.SetSize(_window, target);
+        }
+    }
+
+    private static WindowSize GetCanvasSize() =>
+        new(GetCanvasWidth(), GetCanvasHeight());
+
+    [JSImport("getCanvasWidth", "main.js")]
+    private static partial int GetCanvasWidth();
+
+    [JSImport("getCanvasHeight", "main.js")]
+    private static partial int GetCanvasHeight();
+
+    private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
+    {
+        try {
+            return await Wgpu.RequestAdapterAsync(_instance, BuildAdapterOptions());
+        }
+        catch (WgpuException coreError) {
+            try {
+                return await Wgpu.RequestAdapterAsync(
+                    _instance,
+                    BuildAdapterOptions(
+                        WGPUFeatureLevel.Compatibility,
+                        WGPUPowerPreference.Undefined));
+            }
+            catch (WgpuException compatibilityError) {
+                throw new WgpuException(
+                    $"Browser adapter requests failed. Core: {coreError.Message} " +
+                    $"Compatibility: {compatibilityError.Message}");
+            }
+        }
     }
 }
 #endif

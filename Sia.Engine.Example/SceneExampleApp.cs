@@ -91,10 +91,12 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         RenderFrame();
     }
 
-    private WGPURequestAdapterOptions BuildAdapterOptions() => new() {
+    private WGPURequestAdapterOptions BuildAdapterOptions(
+        WGPUFeatureLevel featureLevel = WGPUFeatureLevel.Core,
+        WGPUPowerPreference powerPreference = WGPUPowerPreference.HighPerformance) => new() {
         NextInChain = null,
-        FeatureLevel = WGPUFeatureLevel.Core,
-        PowerPreference = WGPUPowerPreference.HighPerformance,
+        FeatureLevel = featureLevel,
+        PowerPreference = powerPreference,
         ForceFallbackAdapter = 0,
         BackendType = WGPUBackendType.Undefined,
         CompatibleSurface = Pointer(_surface),
@@ -273,7 +275,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         try {
             UpdateRenderGraph(surfaceTexture.Texture);
             ExecuteRenderGraph();
+#if !BROWSER
             Wgpu.PresentSurfaceOrThrow(_surface);
+#endif
         }
         finally {
             Wgpu.Release(ref surfaceTexture);

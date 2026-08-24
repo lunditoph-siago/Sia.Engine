@@ -12,8 +12,7 @@ internal static unsafe class ClusterCullingBindGroupLayout
     public const uint LightsBinding = 1;
     public const uint LightGridBinding = 2;
     public const uint LightIndexListBinding = 3;
-    public const uint CursorBinding = 4;
-    private const int EntryCount = 5;
+    private const int EntryCount = 4;
 
     public static WgpuHandle<WGPUBindGroupLayout> Create(WgpuHandle<WGPUDevice> device)
     {
@@ -41,12 +40,6 @@ internal static unsafe class ClusterCullingBindGroupLayout
         entries[3].Visibility = WGPUShaderStage.Compute;
         entries[3].Buffer = WGPUBufferBindingLayout.Default;
         entries[3].Buffer.Type = WGPUBufferBindingType.Storage;
-
-        entries[4] = WGPUBindGroupLayoutEntry.Default;
-        entries[4].Binding = CursorBinding;
-        entries[4].Visibility = WGPUShaderStage.Compute;
-        entries[4].Buffer = WGPUBufferBindingLayout.Default;
-        entries[4].Buffer.Type = WGPUBufferBindingType.Storage;
 
         fixed (WGPUBindGroupLayoutEntry* entriesPtr = entries) {
             var descriptor = WGPUBindGroupLayoutDescriptor.Default;
@@ -76,8 +69,7 @@ internal static unsafe class ClusterCullingBindGroupLayout
         WgpuHandle<WGPUBuffer> lightGrid,
         ulong lightGridSize,
         WgpuHandle<WGPUBuffer> lightIndexList,
-        ulong lightIndexListSize,
-        WgpuHandle<WGPUBuffer> cursor)
+        ulong lightIndexListSize)
     {
         Span<WGPUBindGroupEntry> entries = stackalloc WGPUBindGroupEntry[EntryCount];
         entries[0] = WGPUBindGroupEntry.Default with {
@@ -100,12 +92,6 @@ internal static unsafe class ClusterCullingBindGroupLayout
             Buffer = (WGPUBuffer*)lightIndexList.DangerousGetHandle(),
             Size = lightIndexListSize
         };
-        entries[4] = WGPUBindGroupEntry.Default with {
-            Binding = CursorBinding,
-            Buffer = (WGPUBuffer*)cursor.DangerousGetHandle(),
-            Size = sizeof(uint)
-        };
-
         fixed (WGPUBindGroupEntry* entriesPtr = entries) {
             var descriptor = WGPUBindGroupDescriptor.Default;
             descriptor.Layout = (WGPUBindGroupLayout*)layout.DangerousGetHandle();

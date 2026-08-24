@@ -85,8 +85,6 @@ public sealed class PbrRenderer(
         _clusterBuffers.UpdateConfig(
             in frame, clusterConfig, in matrices, camera.Near, camera.Far,
             _lights.ClusteredLights.Count, (uint)viewport.Width, (uint)viewport.Height);
-        _clusterBuffers.ResetCursor(in frame);
-
         if (lightsResized || buffersResized || !_cullingBindGroup.IsValid) {
             EnsureCullingBindGroup(in frame);
         }
@@ -299,8 +297,7 @@ public sealed class PbrRenderer(
             _clusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
             _lights.ClusteredBuffer.GetWgpu<WGPUBuffer>(), _lights.ClusteredCapacity,
             _clusterBuffers.LightGridBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightGridSize,
-            _clusterBuffers.LightIndexListBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightIndexListCapacity,
-            _clusterBuffers.CursorBuffer.GetWgpu<WGPUBuffer>()));
+            _clusterBuffers.LightIndexListBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightIndexListCapacity));
     }
 
     private void EnsureForwardLightingBindGroup(in GpuFrame frame)

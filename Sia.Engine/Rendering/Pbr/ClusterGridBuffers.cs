@@ -18,7 +18,6 @@ public sealed class ClusterGridBuffers
     private Entity _configBuffer;
     private Entity _lightGridBuffer;
     private Entity _lightIndexListBuffer;
-    private Entity _cursorBuffer;
     private uint _configuredClusterCount;
     private uint _configuredMaxIndices;
 
@@ -31,8 +30,6 @@ public sealed class ClusterGridBuffers
     public Entity LightIndexListBuffer => _lightIndexListBuffer;
 
     public ulong LightIndexListCapacity { get; private set; }
-
-    public Entity CursorBuffer => _cursorBuffer;
 
     public bool IsValid => _configBuffer.IsValid;
 
@@ -74,14 +71,6 @@ public sealed class ClusterGridBuffers
             MappedAtCreation = 0
         });
 
-        _cursorBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
-            NextInChain = null,
-            Label = default,
-            Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst,
-            Size = sizeof(uint),
-            MappedAtCreation = 0
-        });
-
         _configuredClusterCount = clusterCount;
         _configuredMaxIndices = config.MaxLightIndicesPerCluster;
         return true;
@@ -109,12 +98,6 @@ public sealed class ClusterGridBuffers
         Wgpu.WriteBuffer(frame.Queue.GetWgpu<WGPUQueue>(), _configBuffer.GetWgpu<WGPUBuffer>(), 0, [data]);
     }
 
-    public void ResetCursor(in GpuFrame frame)
-    {
-        uint zero = 0;
-        Wgpu.WriteBuffer(frame.Queue.GetWgpu<WGPUQueue>(), _cursorBuffer.GetWgpu<WGPUBuffer>(), 0, [zero]);
-    }
-
     private void DestroyBuffers()
     {
         if (_configBuffer.IsValid) {
@@ -125,9 +108,6 @@ public sealed class ClusterGridBuffers
         }
         if (_lightIndexListBuffer.IsValid) {
             _lightIndexListBuffer.Destroy();
-        }
-        if (_cursorBuffer.IsValid) {
-            _cursorBuffer.Destroy();
         }
     }
 }

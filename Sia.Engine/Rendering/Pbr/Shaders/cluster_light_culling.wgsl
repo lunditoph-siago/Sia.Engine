@@ -13,8 +13,6 @@ const MAX_LOCAL_LIGHTS: u32 = 64u;
 @group(0) @binding(1) var<storage, read> lights: array<ClusteredLight>;
 @group(0) @binding(2) var<storage, read_write> light_grid: array<vec2<u32>>;
 @group(0) @binding(3) var<storage, read_write> light_index_list: array<u32>;
-@group(0) @binding(4) var<storage, read_write> cursor: atomic<u32>;
-
 fn sphere_intersects_aabb(center: vec3<f32>, radius: f32, aabb_min: vec3<f32>, aabb_max: vec3<f32>) -> bool {
     let closest = clamp(center, aabb_min, aabb_max);
     let d = center - closest;
@@ -59,7 +57,8 @@ fn cull(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var match_count = 0u;
     let light_count = u32(config.z_factors.z);
 
-    for (var i = 0u; i < light_count && match_count < MAX_LOCAL_LIGHTS; i = i + 1u) {
+    let max_lights_per_cluster = min(config.tiles.w, MAX_LOCAL_LIGHTS);
+    for (var i = 0u; i < light_count && match_count < max_lights_per_cluster; i = i + 1u) {
         let light = lights[i];
         let view_position = (config.view * vec4<f32>(light.position_range.xyz, 1.0)).xyz;
         let radius = light.position_range.w;
@@ -69,17 +68,13 @@ fn cull(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    var offset = 0u;
-    if (match_count > 0u) {
-        offset = atomicAdd(&cursor, match_count);
-        let capacity = arrayLength(&light_index_list);
-        for (var i = 0u; i < match_count; i = i + 1u) {
-            let dst = offset + i;
-            if (dst < capacity) {
-                light_index_list[dst] = matches[i];
-            }
-        }
+    let offset = index * config.tiles.w;
+    let capacity = arrayLength(&light_index_list);
+    let available = select(0u, capacity - offset, offset < capacity);
+    let stored_count = min(match_count, available);
+    for (var i = 0u; i < stored_count; i = i + 1u) {
+        light_index_list[offset + i] = matches[i];
     }
 
-    light_grid[index] = vec2<u32>(offset, match_count);
+    light_grid[index] = vec2<u32>(offset, stored_count);
 }
