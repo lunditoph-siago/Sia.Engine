@@ -29,10 +29,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sia.Engine\Sia.Engine.csproj" />
-    <PackageReference Include="Sia.Graphics" Version="0.0.2" />
-    <PackageReference Include="Sia.RenderGraph" Version="0.0.2" />
-    <PackageReference Include="Sia.WebGPU" Version="0.0.2" />
-    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.2" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.3" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.3" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.3" />
+    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.3" />
     <PackageReference Include="Sia.GLFW" Version="0.0.4" />
     <PackageReference Include="Sia.GLFW.Native" Version="0.0.4" />
   </ItemGroup>

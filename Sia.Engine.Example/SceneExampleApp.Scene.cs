@@ -1,5 +1,10 @@
 using Sia;
 using Sia.Engine;
+using Sia.Engine.Camera;
+using Sia.Engine.Lighting;
+using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
+using Sia.Engine.Rendering.Pbr;
 using Sia.Graphics.Rendering;
 using Sia.Math;
 using Sia.Reactors;
