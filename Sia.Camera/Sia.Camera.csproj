@@ -2,8 +2,8 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>true</IsPackable>
-    <PackageId>Sia.Engine.Mesh</PackageId>
-    <PackageDescription>Mesh data, registries, and procedural geometry for Sia.Engine.</PackageDescription>
+    <PackageId>Sia.Camera</PackageId>
+    <PackageDescription>Camera components and view-matrix systems for Sia.Engine.</PackageDescription>
   </PropertyGroup>
 
   <ItemGroup>

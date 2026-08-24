@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net11.0;net11.0-browser</TargetFrameworks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Sia.Rendering</PackageId>
+    <PackageDescription>Scene-to-render-pipeline integration for Sia.Engine.</PackageDescription>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sia.Engine\Sia.Engine.csproj" />
+    <ProjectReference Include="..\Sia.Mesh\Sia.Mesh.csproj" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.2" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.2" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
+    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+</Project>
