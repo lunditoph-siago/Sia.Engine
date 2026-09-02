@@ -10,7 +10,7 @@
     <PackageDescription>Asset module for Sia.NET</PackageDescription>
     <Author>Phlamcenth Sicusa</Author>
     <Company>Lunditöph Siagö</Company>
-    <RepositoryUrl>https://github.com/lunditoph-siago/Sia.Asset</RepositoryUrl>
+    <RepositoryUrl>https://github.com/lunditoph-siago/Sia.Engine</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
