@@ -19,7 +19,6 @@ jobs:
     env:
       BUILD_CONFIG: Release
       SOLUTION: Sia.Engine.slnx
-      PACKAGE_PROJECT: Sia.Engine/Sia.Engine.csproj
       PACKAGE_OUTPUT_DIRECTORY: ${{ github.workspace }}/output
 
     steps:
@@ -30,9 +29,6 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 11.x
-
-      - name: Restore dependencies
-        run: dotnet restore "$SOLUTION"
 
       - name: Get version from tag
         env:
@@ -45,29 +41,37 @@ jobs:
 
           echo "VERSION=${TAG_NAME#v}" >> "$GITHUB_ENV"
 
+      - name: Restore WebAssembly workload
+        run: dotnet workload restore Sia.Rendering.Pbr/Sia.Rendering.Pbr.csproj
+
+      - name: Restore dependencies
+        run: dotnet restore "$SOLUTION"
+
       - name: Build project
-        run: >
-          dotnet build "$SOLUTION"
-          --configuration "$BUILD_CONFIG"
-          -p:Version="$VERSION"
-          --no-restore
+        run: |
+          dotnet build "$SOLUTION" \
+            --configuration "$BUILD_CONFIG" \
+            -p:Version="$VERSION" \
+            --no-restore
 
       - name: Run tests
-        run: >
-          dotnet test "$SOLUTION"
-          --configuration "$BUILD_CONFIG"
-          --no-restore
-          --no-build
-          --verbosity normal
+        run: |
+          dotnet test "$SOLUTION" \
+            --configuration "$BUILD_CONFIG" \
+            --no-restore \
+            --no-build \
+            --blame-hang \
+            --blame-hang-timeout 5m \
+            --verbosity normal
 
-      - name: Pack project
-        run: >
-          dotnet pack "$PACKAGE_PROJECT"
-          --configuration "$BUILD_CONFIG"
-          -p:PackageVersion="$VERSION"
-          --no-restore
-          --no-build
-          --output "$PACKAGE_OUTPUT_DIRECTORY"
+      - name: Pack projects
+        run: |
+          dotnet pack "$SOLUTION" \
+            --configuration "$BUILD_CONFIG" \
+            -p:PackageVersion="$VERSION" \
+            --no-restore \
+            --no-build \
+            --output "$PACKAGE_OUTPUT_DIRECTORY"
 
       - name: Upload packages
         uses: actions/upload-artifact@v4

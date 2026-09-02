@@ -11,7 +11,7 @@
     <IsPackable>true</IsPackable>
     <PackageId>Sia.Asset.CodeGenerators</PackageId>
     <PackageDescription>Code generators for Sia.Asset</PackageDescription>
-    <RepositoryUrl>https://github.com/lunditoph-siago/Sia.Asset</RepositoryUrl>
+    <RepositoryUrl>https://github.com/lunditoph-siago/Sia.Engine</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 
