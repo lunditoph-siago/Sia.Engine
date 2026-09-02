@@ -8,7 +8,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public static class PbrShaderSource
 {
-    private const string ResourcePrefix = "Sia.Engine.Rendering.Pbr.Shaders.";
+    private const string ResourcePrefix = "Sia.Rendering.Pbr.Shaders.";
 
     private static readonly string[] ModuleResourceNames = [
         ResourcePrefix + "scene_common.wgsl",

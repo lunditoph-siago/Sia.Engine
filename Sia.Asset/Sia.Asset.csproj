@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Sia.Asset</PackageId>
+    <PackageDescription>Asset module for Sia.NET</PackageDescription>
+    <Author>Phlamcenth Sicusa</Author>
+    <Company>Lunditöph Siagö</Company>
+    <RepositoryUrl>https://github.com/lunditoph-siago/Sia.Asset</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Sia" Version="2.1.5" />
+    <PackageReference Include="Sia.Prelude" Version="2.1.5" />
+    <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" />
+  </ItemGroup>
+
+</Project>

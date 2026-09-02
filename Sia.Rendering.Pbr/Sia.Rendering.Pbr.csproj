@@ -1,16 +1,26 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net11.0;net11.0-browser</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
-    <PackageId>Sia.Engine</PackageId>
+    <PackageId>Sia.Rendering.Pbr</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Sia.Prelude" Version="2.1.5" />
     <PackageReference Include="Sia.Math" Version="0.0.3" />
     <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../Sia.Engine/Sia.Engine.csproj" />
+    <ProjectReference Include="../Sia.Rendering/Sia.Rendering.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
+    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Shaders/*.wgsl" />
   </ItemGroup>
 </Project>

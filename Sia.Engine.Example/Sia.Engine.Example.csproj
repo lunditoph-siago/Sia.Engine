@@ -16,6 +16,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sia.Engine\Sia.Engine.csproj" />
+    <ProjectReference Include="..\Sia.Camera\Sia.Camera.csproj" />
+    <ProjectReference Include="..\Sia.Light\Sia.Light.csproj" />
+    <ProjectReference Include="..\Sia.Mesh\Sia.Mesh.csproj" />
+    <ProjectReference Include="..\Sia.Rendering\Sia.Rendering.csproj" />
+    <ProjectReference Include="..\Sia.Rendering.Pbr\Sia.Rendering.Pbr.csproj" />
     <PackageReference Include="Sia.Graphics" Version="0.0.15" />
     <PackageReference Include="Sia.RenderGraph" Version="0.0.15" />
     <PackageReference Include="Sia.WebGPU" Version="0.0.15" />
