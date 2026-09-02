@@ -7,5 +7,4 @@
   <Project Path="Sia.Rendering.Pbr/Sia.Rendering.Pbr.csproj" />
   <Project Path="Sia.Asset/Sia.Asset.csproj" />
   <Project Path="Sia.Asset.CodeGenerators/Sia.Asset.CodeGenerators.csproj" />
-  <Project Path="Sia.Engine.Example/Sia.Engine.Example.Browser.csproj" />
 </Solution>
