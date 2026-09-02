@@ -5,13 +5,19 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
-    <PackageId>Sia.Engine</PackageId>
+    <PackageId>Sia.Rendering</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Sia.Prelude" Version="2.1.5" />
     <PackageReference Include="Sia.Math" Version="0.0.3" />
     <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.15" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.15" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.15" />
+    <ProjectReference Include="../Sia.Camera/Sia.Camera.csproj" />
+    <ProjectReference Include="../Sia.Light/Sia.Light.csproj" />
+    <ProjectReference Include="../Sia.Mesh/Sia.Mesh.csproj" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
