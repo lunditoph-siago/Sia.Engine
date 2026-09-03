@@ -46,7 +46,7 @@ internal static class UiPresentationMapper
 
     public static Color Color(Color color, float opacity)
     {
-        var alpha = opacity == 0f ? color.A : color.A * System.Math.Clamp(opacity, 0f, 1f);
+        var alpha = color.A * System.Math.Clamp(opacity, 0f, 1f);
         return color with { A = alpha };
     }
 
