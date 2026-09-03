@@ -8,5 +8,7 @@ public readonly record struct TypographyStyle
 
     public FontWeight Weight { get; init; }
 
+    public FontSlant Slant { get; init; }
+
     public bool Wrap { get; init; }
 }

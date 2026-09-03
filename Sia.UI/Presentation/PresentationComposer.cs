@@ -88,6 +88,7 @@ public static class PresentationComposer
         Font = Value(patch.Font, style.Font),
         Size = Value(patch.Size, style.Size),
         Weight = Value(patch.Weight, style.Weight),
+        Slant = Value(patch.Slant, style.Slant),
         Wrap = Value(patch.Wrap, style.Wrap),
     };
 

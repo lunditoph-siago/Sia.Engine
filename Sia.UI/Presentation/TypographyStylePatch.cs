@@ -8,5 +8,7 @@ public readonly record struct TypographyStylePatch
 
     public StyleValue<FontWeight> Weight { get; init; }
 
+    public StyleValue<FontSlant> Slant { get; init; }
+
     public StyleValue<bool> Wrap { get; init; }
 }
