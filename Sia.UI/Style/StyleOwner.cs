@@ -1,3 +1,3 @@
 namespace Sia.UI;
 
-internal readonly record struct StyleOwner(Type Style);
+public readonly record struct StyleOwner(Type Style);
