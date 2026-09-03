@@ -30,6 +30,8 @@ public readonly record struct LayoutStyle
 
     public float Grow { get; init; }
 
+    public float? Shrink { get; init; }
+
     public bool Wrap { get; init; }
 
     public LayoutAlignment MainAlignment { get; init; }

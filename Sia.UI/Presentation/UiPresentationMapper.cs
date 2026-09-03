@@ -39,6 +39,7 @@ internal static class UiPresentationMapper
                 : FlexDirection.Row,
             FlexWrap = layout.Wrap ? FlexWrap.Wrap : FlexWrap.NoWrap,
             FlexGrow = layout.Grow,
+            FlexShrink = layout.Shrink ?? 1f,
             FlexBasis = Value(layout.Basis),
         };
     }
