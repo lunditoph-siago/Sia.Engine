@@ -5,6 +5,5 @@ public enum LayoutFlow : byte
     Content,
     Horizontal,
     Vertical,
-    Overlay,
-    Detached
+    Overlay
 }
