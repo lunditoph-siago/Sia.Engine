@@ -52,6 +52,7 @@ internal static class UiPresentationMapper
 
     private static Display Display(LayoutFlow flow) => flow switch {
         LayoutFlow.Content => global::Sia.UI.Display.Block,
+        LayoutFlow.Inline => global::Sia.UI.Display.Block,
         LayoutFlow.Overlay => global::Sia.UI.Display.Grid,
         _ => global::Sia.UI.Display.Flex,
     };
