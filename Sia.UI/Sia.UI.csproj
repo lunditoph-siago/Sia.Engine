@@ -28,6 +28,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sia.UI.CodeGenerators\Sia.UI.CodeGenerators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Render/Shaders/*.wgsl" />
   </ItemGroup>
 
