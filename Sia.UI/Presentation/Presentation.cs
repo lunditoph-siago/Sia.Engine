@@ -10,5 +10,7 @@ public readonly record struct Presentation
 
     public InteractionStyle Interaction { get; init; }
 
+    public AccessibilityStyle Accessibility { get; init; }
+
     public Visibility Visibility { get; init; }
 }

@@ -39,6 +39,7 @@ public static class PresentationComposer
         Paint = Apply(presentation.Paint, patch.Paint),
         Typography = Apply(presentation.Typography, patch.Typography),
         Interaction = Apply(presentation.Interaction, patch.Interaction),
+        Accessibility = Apply(presentation.Accessibility, patch.Accessibility),
         Visibility = Value(patch.Visibility, presentation.Visibility),
     };
 
@@ -98,6 +99,20 @@ public static class PresentationComposer
         Cursor = Value(patch.Cursor, style.Cursor),
     };
 
+    private static AccessibilityStyle Apply(
+        scoped in AccessibilityStyle style,
+        scoped in AccessibilityStylePatch patch) => style with {
+        Role = Value(patch.Role, style.Role),
+        Name = Value(patch.Name, style.Name),
+        Description = Value(patch.Description, style.Description),
+        Disabled = Value(patch.Disabled, style.Disabled),
+        ReadOnly = Value(patch.ReadOnly, style.ReadOnly),
+        Selected = Value(patch.Selected, style.Selected),
+        Checked = Value(patch.Checked, style.Checked),
+        Expanded = Value(patch.Expanded, style.Expanded),
+        HeadingLevel = Value(patch.HeadingLevel, style.HeadingLevel),
+    };
+
     private static T Value<T>(StyleValue<T> patch, T current)
-        where T : struct => patch.IsSpecified ? patch.Value : current;
+        => patch.IsSpecified ? patch.Value : current;
 }
