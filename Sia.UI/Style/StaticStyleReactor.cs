@@ -15,7 +15,7 @@ public class StaticStyleReactor<
     where TInteraction : struct
     where TPresentation : struct
 {
-    private static readonly Type s_StyleType = typeof(TStyle);
+    private static readonly StyleOwner s_Owner = new(typeof(TStyle));
 
     private readonly Dictionary<Entity, Entity> _themeByTarget = [];
     private readonly Dictionary<Entity, HashSet<Entity>> _targetsByTheme = [];
@@ -198,43 +198,30 @@ public class StaticStyleReactor<
             binding.State,
             binding.Theme.Get<TTheme>(),
             interaction);
-        Claim(target);
-        var resolved = new ResolvedStyle<TPresentation>(presentation);
-        if (target.Contains<ResolvedStyle<TPresentation>>()) {
-            target.Set(resolved);
+        var contribution = new StyleContribution<TPresentation>(
+            s_Owner,
+            binding.Layer,
+            presentation);
+        if (target.Contains<StyleContributions<TPresentation>>()) {
+            var contributions = target.Get<StyleContributions<TPresentation>>();
+            target.Set(contributions.Set(contribution));
         }
         else {
-            target.Add(resolved);
-        }
-    }
-
-    private static void Claim(Entity target)
-    {
-        if (!target.Contains<StyleOwner>()) {
-            if (target.Contains<ResolvedStyle<TPresentation>>()) {
-                throw new InvalidOperationException(
-                    $"Entity '{target}' already contains an unowned resolved style.");
-            }
-            target.Add(new StyleOwner(s_StyleType));
-            return;
-        }
-        if (target.Get<StyleOwner>().Style != s_StyleType) {
-            throw new InvalidOperationException(
-                $"Entity '{target}' is already styled by "
-                + $"'{target.Get<StyleOwner>().Style.FullName}'.");
+            target.Add(default(StyleContributions<TPresentation>).Set(contribution));
         }
     }
 
     private static void Release(Entity target)
     {
-        if (!target.IsValid
-            || !target.Contains<StyleOwner>()
-            || target.Get<StyleOwner>().Style != s_StyleType) {
+        if (!target.IsValid || !target.Contains<StyleContributions<TPresentation>>()) {
             return;
         }
-        if (target.Contains<ResolvedStyle<TPresentation>>()) {
-            target.Remove<ResolvedStyle<TPresentation>>();
+        var contributions = target.Get<StyleContributions<TPresentation>>().Remove(s_Owner);
+        if (contributions.IsEmpty) {
+            target.Remove<StyleContributions<TPresentation>>();
         }
-        target.Remove<StyleOwner>();
+        else {
+            target.Set(contributions);
+        }
     }
 }

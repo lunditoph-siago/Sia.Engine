@@ -99,7 +99,7 @@ internal sealed class StaticStyleAttribute<TState, TTheme, TInteraction, TPresen
         WriteTypes(source, style, state, theme, interaction, presentation);
         source.Write("> Bind(scoped in ");
         source.Write(state);
-        source.Write(" state, global::Sia.Entity theme) => new(state, theme);");
+        source.Write(" state, global::Sia.Entity theme, global::Sia.UI.StyleLayer layer = default) => new(state, theme, layer);");
         source.WriteLine();
         source.WriteLine();
         source.Write("public sealed class Reactor : global::Sia.UI.StaticStyleReactor<");

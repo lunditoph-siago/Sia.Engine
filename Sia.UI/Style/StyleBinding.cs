@@ -9,7 +9,8 @@ public readonly record struct StyleBinding<
     TInteraction,
     TPresentation>(
     TState State,
-    Entity Theme)
+    Entity Theme,
+    StyleLayer Layer)
     where TStyle : struct, IStaticStyle<TState, TTheme, TInteraction, TPresentation>
     where TState : struct
     where TTheme : struct
