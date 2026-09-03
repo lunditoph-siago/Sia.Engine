@@ -72,6 +72,9 @@ public sealed class UiPresentationReactor : ReactorBase
             presentation.Paint.Border,
             presentation.Paint.Opacity)));
         Set(target, new ZIndex(presentation.Layout.Layer));
+        Set(target, presentation.Interaction);
+        Set(target, presentation.Accessibility);
+        Set(target, presentation.Visibility);
 
         if (target.Contains<TextStyle>()) {
             var text = target.Get<TextStyle>();
@@ -97,6 +100,9 @@ public sealed class UiPresentationReactor : ReactorBase
         Restore(target, baseline.Border);
         Restore(target, baseline.ZIndex);
         Restore(target, baseline.Text);
+        Restore(target, baseline.Interaction);
+        Restore(target, baseline.Accessibility);
+        Restore(target, baseline.Visibility);
     }
 
     private static void Set<TComponent>(Entity target, in TComponent component)
@@ -124,14 +130,20 @@ public sealed class UiPresentationReactor : ReactorBase
         Component<BackgroundColor> Background,
         Component<BorderColor> Border,
         Component<ZIndex> ZIndex,
-        Component<TextStyle> Text)
+        Component<TextStyle> Text,
+        Component<InteractionStyle> Interaction,
+        Component<AccessibilityStyle> Accessibility,
+        Component<Visibility> Visibility)
     {
         public static Baseline Capture(Entity target) => new(
             Component<Node>.Capture(target),
             Component<BackgroundColor>.Capture(target),
             Component<BorderColor>.Capture(target),
             Component<ZIndex>.Capture(target),
-            Component<TextStyle>.Capture(target));
+            Component<TextStyle>.Capture(target),
+            Component<InteractionStyle>.Capture(target),
+            Component<AccessibilityStyle>.Capture(target),
+            Component<Visibility>.Capture(target));
     }
 
     private readonly record struct Component<TComponent>(bool Exists, TComponent Value)
