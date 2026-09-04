@@ -52,7 +52,6 @@ public static class PresentationComposer
         SelfAlignment = Value(patch.SelfAlignment, style.SelfAlignment),
         InlineOverflow = Value(patch.InlineOverflow, style.InlineOverflow),
         BlockOverflow = Value(patch.BlockOverflow, style.BlockOverflow),
-        Order = Value(patch.Order, style.Order),
         Layer = Value(patch.Layer, style.Layer),
     };
 

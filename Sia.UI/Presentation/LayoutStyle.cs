@@ -44,7 +44,5 @@ public readonly record struct LayoutStyle
 
     public OverflowPolicy BlockOverflow { get; init; }
 
-    public int Order { get; init; }
-
     public int Layer { get; init; }
 }

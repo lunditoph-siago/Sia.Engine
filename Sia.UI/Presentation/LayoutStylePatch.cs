@@ -44,7 +44,5 @@ public readonly record struct LayoutStylePatch
 
     public StyleValue<OverflowPolicy> BlockOverflow { get; init; }
 
-    public StyleValue<int> Order { get; init; }
-
     public StyleValue<int> Layer { get; init; }
 }
