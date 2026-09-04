@@ -2,7 +2,7 @@ using Sia;
 
 namespace Sia.UI;
 
-internal static class UiVisibility
+public static class UiVisibility
 {
     public static bool IsVisible(Entity entity)
     {
