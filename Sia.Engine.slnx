@@ -9,4 +9,7 @@
   <Project Path="Sia.UI.CodeGenerators/Sia.UI.CodeGenerators.csproj" />
   <Project Path="Sia.Asset/Sia.Asset.csproj" />
   <Project Path="Sia.Asset.CodeGenerators/Sia.Asset.CodeGenerators.csproj" />
+  <Folder Name="/tests/">
+    <Project Path="Sia.Mesh.Tests/Sia.Mesh.Tests.csproj" />
+  </Folder>
 </Solution>
