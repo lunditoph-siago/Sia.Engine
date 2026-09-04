@@ -19,7 +19,7 @@ public static class Program
     public static async Task<int> Main()
     {
         try {
-            using var app = new StyleShowcaseApp();
+            using var app = new BrowserDomStyleShowcase();
             await app.RunAsync();
             return 0;
         }

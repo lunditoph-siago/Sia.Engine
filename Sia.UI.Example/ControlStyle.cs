@@ -4,8 +4,8 @@ namespace Sia.UI.Example;
 
 internal readonly record struct ControlState(
     string Name,
-    bool Checked = false,
-    bool Expanded = false);
+    bool? Checked = null,
+    bool? Expanded = null);
 
 [StaticStyle<ControlState, ShowcaseTheme, ControlInteraction, PresentationPatch>]
 internal readonly partial struct ControlStyle
@@ -43,8 +43,10 @@ internal readonly partial struct ControlStyle
                 Opacity = interaction.IsDisabled ? 0.55f : 1f,
             },
             Typography = new() {
+                Font = new FontToken(1),
                 Size = LayoutLength.Logical(15f),
                 Weight = FontWeight.Medium,
+                Slant = FontSlant.Upright,
             },
             Interaction = new() {
                 HitTestVisible = !interaction.IsDisabled,
@@ -55,12 +57,16 @@ internal readonly partial struct ControlStyle
                 Role = AccessibilityRole.Button,
                 Name = state.Name,
                 Disabled = disabled,
-                Checked = state.Checked
-                    ? AccessibilityState.True
-                    : AccessibilityState.False,
-                Expanded = state.Expanded
-                    ? AccessibilityState.True
-                    : AccessibilityState.False,
+                Checked = state.Checked switch {
+                    true => AccessibilityState.True,
+                    false => AccessibilityState.False,
+                    null => AccessibilityState.NotApplicable,
+                },
+                Expanded = state.Expanded switch {
+                    true => AccessibilityState.True,
+                    false => AccessibilityState.False,
+                    null => AccessibilityState.NotApplicable,
+                },
             },
             Visibility = Visibility.Visible,
         };

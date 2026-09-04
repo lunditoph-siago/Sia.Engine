@@ -26,9 +26,6 @@ internal readonly partial struct DetailsStyle
             Accessibility = new() {
                 Role = AccessibilityRole.Region,
                 Name = "Resolved presentation details",
-                Expanded = state.IsVisible
-                    ? AccessibilityState.True
-                    : AccessibilityState.False,
             },
             Visibility = state.IsVisible ? Visibility.Visible : Visibility.Collapsed,
         };

@@ -5,7 +5,8 @@ namespace Sia.UI.Example;
 internal readonly record struct LabelState(
     float Size,
     bool Muted = false,
-    bool Heading = false);
+    bool Heading = false,
+    bool Italic = false);
 
 [StaticStyle<LabelState, ShowcaseTheme, NoStyleInteraction, PresentationPatch>]
 internal readonly partial struct LabelStyle
@@ -23,8 +24,10 @@ internal readonly partial struct LabelStyle
                 Foreground = state.Muted ? theme.Muted : theme.Foreground,
             },
             Typography = new() {
+                Font = new FontToken(1),
                 Size = LayoutLength.Logical(state.Size),
                 Weight = state.Heading ? FontWeight.Bold : FontWeight.Normal,
+                Slant = state.Italic ? FontSlant.Italic : FontSlant.Upright,
                 Wrap = true,
             },
             Accessibility = new() {

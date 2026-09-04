@@ -92,9 +92,9 @@ internal sealed unsafe partial class StyleShowcaseApp
             RenderTextNode,
             new TextNodeProps(
                 "subtitle", "root", 1,
-                "State + shared Theme + ECS Interaction → typed Presentation → native/browser GPU adapter",
+                "State + shared Theme + ECS Interaction → typed Presentation → native graphics adapter",
                 font,
-                new LabelState(15f, Muted: true),
+                new LabelState(15f, Muted: true, Italic: true),
                 props.App._theme));
         var controls = ReactiveUiNode.Create(
             "controls",
