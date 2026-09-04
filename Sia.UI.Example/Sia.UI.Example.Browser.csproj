@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0-browser</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <WasmEnableSIMD>true</WasmEnableSIMD>
+    <WasmBuildNative>false</WasmBuildNative>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="StyleShowcaseApp.cs;StyleShowcaseApp.Ui.cs;obj_desktop\**;publish\**" />
+    <EmbeddedResource Remove="obj_desktop\**;publish\**" />
+    <None Remove="obj_desktop\**;publish\**" />
+    <Content Remove="obj_desktop\**;publish\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sia.UI\Sia.UI.csproj" />
+    <ProjectReference Include="..\Sia.UI.CodeGenerators\Sia.UI.CodeGenerators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\NotoSans-UiSubset.ttf"
+                      LogicalName="Sia.UI.Example.NotoSans-UiSubset.ttf" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
+    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+</Project>
