@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;obj_desktop\**;obj_browser\**;publish\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sia.UI.Example'">
+    <BaseIntermediateOutputPath>obj_desktop\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>obj_desktop\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sia.UI.Example.Browser'">
+    <BaseIntermediateOutputPath>obj_browser\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>obj_browser\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>
