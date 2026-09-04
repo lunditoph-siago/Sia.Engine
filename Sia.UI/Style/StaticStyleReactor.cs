@@ -143,6 +143,7 @@ public class StaticStyleReactor<
     {
         if (_targetsByTheme.TryGetValue(entity, out var targets)) {
             foreach (var target in targets.ToArray()) {
+                _themeByTarget.Remove(target);
                 Release(target);
             }
             _targetsByTheme.Remove(entity);
