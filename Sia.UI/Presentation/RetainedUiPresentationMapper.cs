@@ -6,9 +6,9 @@ internal static class RetainedUiPresentationMapper
     {
         var layout = presentation.Layout;
         return new() {
-            Display = presentation.Visibility == Visibility.Visible
-                ? Display(layout.Flow)
-                : global::Sia.UI.Display.None,
+            Display = presentation.Visibility == Visibility.Collapsed
+                ? global::Sia.UI.Display.None
+                : Display(layout.Flow),
             PositionType = layout.Positioning == LayoutPositioning.Flow
                 ? PositionType.Relative
                 : PositionType.Absolute,

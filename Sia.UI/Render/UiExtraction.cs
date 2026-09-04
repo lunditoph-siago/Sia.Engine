@@ -18,15 +18,22 @@ internal static class UiExtraction
         result.Clear();
         backgrounds.ForEach(
             result,
-            static (in List<ExtractedUiNode> output, Entity entity) =>
-                AppendBackground(entity, output));
+            static (in List<ExtractedUiNode> output, Entity entity) => {
+                if (UiVisibility.IsVisible(entity))
+                    AppendBackground(entity, output);
+            });
         borders.ForEach(
             result,
-            static (in List<ExtractedUiNode> output, Entity entity) =>
-                AppendBorder(entity, output));
+            static (in List<ExtractedUiNode> output, Entity entity) => {
+                if (UiVisibility.IsVisible(entity))
+                    AppendBorder(entity, output);
+            });
         text.ForEach(
             result,
-            static (in List<ExtractedUiNode> output, Entity entity) => AppendGlyphs(entity, output));
+            static (in List<ExtractedUiNode> output, Entity entity) => {
+                if (UiVisibility.IsVisible(entity))
+                    AppendGlyphs(entity, output);
+            });
         result.Sort(static (left, right) => {
             var stackOrder = left.StackIndex.CompareTo(right.StackIndex);
             return stackOrder != 0 ? stackOrder : left.SubOrder.CompareTo(right.SubOrder);
@@ -36,7 +43,7 @@ internal static class UiExtraction
     internal static void Extract(Entity entity, List<ExtractedUiNode> result)
     {
         result.Clear();
-        if (!entity.IsValid)
+        if (!entity.IsValid || !UiVisibility.IsVisible(entity))
             return;
         if (entity.Contains<ComputedNode>() && entity.Contains<UiGlobalTransform>()) {
             if (entity.Contains<BackgroundColor>())
