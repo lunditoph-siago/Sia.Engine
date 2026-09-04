@@ -107,6 +107,13 @@ public sealed class UiHitTestSystem() : SystemBase(
         candidates.Sort((a, b) => b.Get<ComputedNode>().StackIndex.CompareTo(a.Get<ComputedNode>().StackIndex));
 
         foreach (var entity in candidates) {
+            if (!UiVisibility.IsVisible(entity)) {
+                continue;
+            }
+            if (entity.Contains<InteractionStyle>()
+                && !entity.Get<InteractionStyle>().HitTestVisible) {
+                continue;
+            }
             var computed = entity.Get<ComputedNode>();
             if (computed.ClipRect is { } clip && !clip.Contains(pointer))
                 continue;

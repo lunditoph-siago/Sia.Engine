@@ -29,6 +29,13 @@ public sealed class UiChangeTracker : IAddon
         RenderStructureVersion++;
     }
 
+    public void MarkVisibilityDirty()
+    {
+        LayoutVersion++;
+        RenderVersion++;
+        RenderStructureVersion++;
+    }
+
     void IAddon.OnInitialize(World world)
     {
         Subscribe<UiNodeIdentity, HierarchyInvalidation>(world);
@@ -40,6 +47,7 @@ public sealed class UiChangeTracker : IAddon
         Subscribe<ZIndex, LayoutInvalidation>(world);
         Subscribe<Text, LayoutInvalidation>(world);
         Subscribe<TextStyle, LayoutInvalidation>(world);
+        Subscribe<Visibility, VisibilityInvalidation>(world);
 
         SubscribeRender<ComputedNode>(world);
         SubscribeRender<UiGlobalTransform>(world);
@@ -59,6 +67,7 @@ public sealed class UiChangeTracker : IAddon
         Unsubscribe<ZIndex, LayoutInvalidation>(world);
         Unsubscribe<Text, LayoutInvalidation>(world);
         Unsubscribe<TextStyle, LayoutInvalidation>(world);
+        Unsubscribe<Visibility, VisibilityInvalidation>(world);
 
         UnsubscribeRender<ComputedNode>(world);
         UnsubscribeRender<UiGlobalTransform>(world);
@@ -154,6 +163,14 @@ public sealed class UiChangeTracker : IAddon
         public static void Apply(UiChangeTracker tracker, Entity _)
         {
             tracker.MarkLayoutDirty();
+        }
+    }
+
+    private readonly struct VisibilityInvalidation : IInvalidation
+    {
+        public static void Apply(UiChangeTracker tracker, Entity _)
+        {
+            tracker.MarkVisibilityDirty();
         }
     }
 }
