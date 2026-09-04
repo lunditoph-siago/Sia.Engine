@@ -23,7 +23,7 @@ internal static partial class BrowserDomPresentationAdapter
             var transform = entity.Get<UiGlobalTransform>();
             var presentation = entity.Get<ResolvedStyle<Presentation>>().Presentation;
             var text = entity.Contains<Text>() ? entity.Get<Text>().Value : string.Empty;
-            var visible = IsVisible(entity);
+            var visible = UiVisibility.IsVisible(entity);
             nodes.Add(new BrowserDomNode(
                 identity.Key,
                 text,
@@ -64,21 +64,6 @@ internal static partial class BrowserDomPresentationAdapter
         nodes.Sort(static (left, right) => left.StackIndex.CompareTo(right.StackIndex));
         var frame = new BrowserDomFrame(width, height, nodes);
         RenderFrame(JsonSerializer.Serialize(frame, BrowserDomJsonContext.Default.BrowserDomFrame));
-    }
-
-    private static bool IsVisible(Entity entity)
-    {
-        while (entity.IsValid) {
-            if (entity.Contains<Visibility>()
-                && entity.Get<Visibility>() != Visibility.Visible) {
-                return false;
-            }
-            if (!entity.Contains<UiChildOf>()) {
-                return true;
-            }
-            entity = entity.Get<UiChildOf>().Parent;
-        }
-        return false;
     }
 
     public static string? ReadEvent() => DequeueEvent();
