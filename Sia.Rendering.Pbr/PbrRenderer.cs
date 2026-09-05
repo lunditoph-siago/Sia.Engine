@@ -18,109 +18,147 @@ public sealed class PbrRenderer(
     private static readonly IEntityMatcher _directionalMatcher =
         Matchers.Of<DirectionalLight, LightColor, GlobalTransform>();
 
-    private readonly PbrInstanceGpuStore _instances = new();
-    private readonly CameraUniforms _cameraUniforms = new();
-    private readonly LightGpuStore _lights = new();
-    private readonly ClusterGridBuffers _clusterBuffers = new();
-    private readonly ShadowAtlasGpuStore _shadowAtlas = new();
-    private readonly ShadowGpuStore _shadows = new();
-    private readonly IblEnvironmentGpuStore _ibl = new();
-    private Entity _depthBindGroup;
-    private Entity _forwardBindGroup;
-    private Entity _forwardLightingBindGroup;
-    private Entity _cullingBindGroup;
-    private Entity[] _shadowCameraBuffers = [];
-    private Entity[] _shadowDrawBindGroups = [];
-    private Entity _iblPrefilterParamsBuffer;
-    private Entity _iblPrefilterBindGroup;
-    private Entity _iblBindGroup;
-    private bool _iblBaked;
-    private IReadOnlyList<int> _visible = [];
-
-    public LightGpuStore Lights => _lights;
-
-    public ClusterGridBuffers ClusterBuffers => _clusterBuffers;
-
-    public ShadowGpuStore Shadows => _shadows;
-
-    public ShadowAtlasGpuStore ShadowAtlas => _shadowAtlas;
-
-    public IblEnvironmentGpuStore Ibl => _ibl;
-
-    public void PrepareFrame(in GpuFrame frame, Entity cameraEntity)
+    public PbrExtractedView ExtractFrame(
+        PbrViewState state,
+        in GpuFrame frame,
+        Entity cameraEntity,
+        ClusterGridConfig clusterConfig,
+        ShadowAtlasConfig shadowConfig)
     {
-        var cache = frame.World.AcquireAddon<PbrRenderCache>();
+        var cache = frame.MainWorld.AcquireAddon<PbrRenderCache>();
         cache.Refresh();
 
         var matrices = cameraEntity.Get<CameraMatrices>();
-        _cameraUniforms.Update(in frame, in matrices);
+        var visible = cache.Cull(matrices.Frustum);
+        var extractedShadowConfig = Copy(shadowConfig);
+        state.Shadows.Refresh(frame.MainWorld, extractedShadowConfig, cameraEntity);
+        state.Lights.Refresh(frame.MainWorld, state.Shadows);
 
-        var resized = _instances.Upload(in frame, cache.Data);
-        if (resized || !_depthBindGroup.IsValid) {
-            EnsureBindGroups(in frame);
-        }
-
-        _visible = cache.Cull(matrices.Frustum);
-    }
-
-    public void PrepareLighting(
-        in GpuFrame frame, ClusterGridConfig clusterConfig, ShadowAtlasConfig shadowConfig, Entity cameraEntity)
-    {
-        _shadows.Refresh(frame.World, shadowConfig, cameraEntity);
-        var atlasResized = _shadowAtlas.EnsureCapacity(in frame, shadowConfig);
-        var shadowLayersResized = _shadows.Upload(in frame, shadowConfig);
-        var layerCount = shadowConfig.LayerCount;
-        EnsureShadowCameraBuffers(in frame, layerCount);
-        if (atlasResized || _shadowDrawBindGroups.Length != layerCount) {
-            EnsureShadowDrawBindGroups(in frame, layerCount);
-        }
-
-        _lights.Refresh(frame.World, _shadows);
-        var lightsResized = _lights.Upload(in frame);
-        var buffersResized = _clusterBuffers.EnsureCapacity(in frame, clusterConfig);
-
-        var camera = cameraEntity.Get<global::Sia.Engine.Camera.Camera>();
-        var matrices = cameraEntity.Get<CameraMatrices>();
-        var viewport = frame.World.AcquireAddon<Viewport>().Value;
-        _clusterBuffers.UpdateConfig(
-            in frame, clusterConfig, in matrices, camera.Near, camera.Far,
-            _lights.ClusteredLights.Count, (uint)viewport.Width, (uint)viewport.Height);
-        if (lightsResized || buffersResized || !_cullingBindGroup.IsValid) {
-            EnsureCullingBindGroup(in frame);
-        }
-        if (lightsResized || buffersResized || atlasResized || shadowLayersResized || !_forwardLightingBindGroup.IsValid) {
-            EnsureForwardLightingBindGroup(in frame);
-        }
-
-        PrepareIbl(in frame);
-    }
-
-    public void PrepareIbl(in GpuFrame frame)
-    {
-        var created = _ibl.EnsureCapacity(in frame);
-        if (created) {
-            EnsureIblPrefilterBindGroup(in frame);
-            EnsureIblBindGroup(in frame);
-        }
-        if (!_iblBaked && _ibl.IsValid) {
-            BakeIblSh(in frame);
-            _iblBaked = true;
-        }
-    }
-
-    private void BakeIblSh(in GpuFrame frame)
-    {
         var sunDirection = math.normalize(new float3(0.4f, 1.0f, 0.3f));
         var sunColor = new float3(1.0f, 0.96f, 0.9f);
-
-        frame.World.Query(_directionalMatcher, entity => {
+        frame.MainWorld.Query(_directionalMatcher, entity => {
             var lightColor = entity.Get<LightColor>();
             sunDirection = -math.normalize(entity.Get<GlobalTransform>().Affine.RotationScale.c2);
             sunColor = lightColor.Color * lightColor.Intensity;
         });
+        var coefficients = state.IblBaked
+            ? null
+            : IrradianceSh.Project(direction => SkyColor(direction, sunDirection, sunColor));
+        var allItems = cache.MeshHandles
+            .Select(static (mesh, index) => new PbrDrawItem(mesh, index))
+            .ToArray();
+        var visibleItems = visible
+            .Select(index => new PbrDrawItem(cache.MeshHandles[index], index))
+            .ToArray();
+        return new PbrExtractedView(
+            matrices,
+            cameraEntity.Get<global::Sia.Engine.Camera.Camera>(),
+            frame.MainWorld.AcquireAddon<Viewport>().Value,
+            Copy(clusterConfig),
+            extractedShadowConfig,
+            cache.Data.ToArray(),
+            allItems,
+            visibleItems,
+            sunDirection,
+            sunColor,
+            coefficients);
+    }
 
-        var coefficients = IrradianceSh.Project(direction => SkyColor(direction, sunDirection, sunColor));
-        _ibl.UploadSh(in frame, coefficients);
+    public void PrepareFrame(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted)
+    {
+        var meshStore = frame.ResourceWorld.AcquireAddon<MeshGpuStore>();
+        var meshRegistry = frame.ResourceWorld.AcquireAddon<MeshRegistry>();
+        state.Meshes.Clear();
+        foreach (var item in extracted.AllItems) {
+            state.Meshes.TryAdd(item.Mesh, meshStore.GetOrUpload(in frame, meshRegistry, item.Mesh));
+        }
+
+        var matrices = extracted.CameraMatrices;
+        state.CameraUniforms.Update(in frame, in matrices);
+
+        var resized = state.Instances.Upload(in frame, extracted.Instances);
+        if (resized || !state.DepthBindGroup.IsValid) {
+            EnsureBindGroups(state, in frame);
+        }
+    }
+
+    public void QueueOpaque(PbrExtractedView extracted, RenderPhase<PbrDrawItem> phase)
+    {
+        ArgumentNullException.ThrowIfNull(phase);
+        phase.AddRange(extracted.VisibleItems);
+        phase.Sort();
+    }
+
+    public void PrepareLighting(
+        PbrViewState state,
+        in GpuFrame frame,
+        PbrExtractedView extracted)
+    {
+        var clusterConfig = extracted.ClusterConfig;
+        var shadowConfig = extracted.ShadowConfig;
+        var atlasResized = state.ShadowAtlas.EnsureCapacity(in frame, shadowConfig);
+        var shadowLayersResized = state.Shadows.Upload(in frame, shadowConfig);
+        var layerCount = shadowConfig.LayerCount;
+        EnsureShadowCameraBuffers(state, in frame, layerCount);
+        if (atlasResized || state.ShadowDrawBindGroups.Length != layerCount) {
+            EnsureShadowDrawBindGroups(state, in frame, layerCount);
+        }
+
+        for (var layer = 0; layer < layerCount; layer++) {
+            Wgpu.WriteBuffer(
+                frame.Queue.GetWgpu<WGPUQueue>(),
+                state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
+                0,
+                [new CameraUniformData(state.Shadows.LayerViewProj(layer), float4.zero)]);
+        }
+
+        var lightsResized = state.Lights.Upload(in frame);
+        var buffersResized = state.ClusterBuffers.EnsureCapacity(in frame, clusterConfig);
+
+        var camera = extracted.Camera;
+        var matrices = extracted.CameraMatrices;
+        var viewport = extracted.Viewport;
+        state.ClusterBuffers.UpdateConfig(
+            in frame, clusterConfig, in matrices, camera.Near, camera.Far,
+            state.Lights.ClusteredLights.Count, (uint)viewport.Width, (uint)viewport.Height);
+        if (lightsResized || buffersResized || !state.CullingBindGroup.IsValid) {
+            EnsureCullingBindGroup(state, in frame);
+        }
+        if (lightsResized || buffersResized || atlasResized || shadowLayersResized || !state.ForwardLightingBindGroup.IsValid) {
+            EnsureForwardLightingBindGroup(state, in frame);
+        }
+
+        PrepareIbl(state, in frame, extracted);
+    }
+
+    public void PrepareIbl(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted)
+    {
+        var created = state.Ibl.EnsureCapacity(in frame);
+        if (created) {
+            EnsureIblPrefilterBindGroups(state, in frame);
+            EnsureIblBindGroup(state, in frame);
+        }
+        var mipCount = IblEnvironmentGpuStore.PrefilteredMipCount;
+        for (var face = 0; face < 6; face++) {
+            for (var mip = 0; mip < mipCount; mip++) {
+                var roughness = mipCount > 1 ? (float)mip / (mipCount - 1) : 0.0f;
+                Wgpu.WriteBuffer(
+                    frame.Queue.GetWgpu<WGPUQueue>(),
+                    state.IblPrefilterParamsBuffers[face * mipCount + mip].GetWgpu<WGPUBuffer>(),
+                    0,
+                    [new IblPrefilterParamsGpu(
+                        new float4(roughness, mip == 0 ? 1 : 48, face, 0.0f),
+                        new float4(extracted.SkySunDirection, 0.0f),
+                        new float4(extracted.SkySunColor, 0.0f))]);
+            }
+        }
+        if (!state.IblBaked && state.Ibl.IsValid) {
+            var coefficients = extracted.IrradianceCoefficients ??
+                throw new InvalidOperationException(
+                    "The extracted view does not contain irradiance coefficients.");
+            state.Ibl.UploadSh(in frame, coefficients);
+            state.IblBaked = true;
+        }
     }
 
     private const float _skyExposure = 0.25f;
@@ -144,28 +182,31 @@ public sealed class PbrRenderer(
         return t * t * (3.0f - 2.0f * t);
     }
 
+    private static ClusterGridConfig Copy(ClusterGridConfig source) => new() {
+        TilesX = source.TilesX,
+        TilesY = source.TilesY,
+        ZSlices = source.ZSlices,
+        MaxLightIndicesPerCluster = source.MaxLightIndicesPerCluster
+    };
+
+    private static ShadowAtlasConfig Copy(ShadowAtlasConfig source) => new() {
+        TileResolution = source.TileResolution,
+        CascadeCount = source.CascadeCount,
+        CascadeSplitLambda = source.CascadeSplitLambda,
+        CascadeShadowPullback = source.CascadeShadowPullback,
+        ShadowDistance = source.ShadowDistance,
+        MaxShadowedSpotLights = source.MaxShadowedSpotLights
+    };
+
     public void EncodeIblPrefilter(
-        in GpuFrame frame, int face, int mip, int mipCount, WgpuHandle<WGPURenderPassEncoder> renderPass)
+        PbrViewState state,
+        int face,
+        int mip,
+        WgpuHandle<WGPURenderPassEncoder> renderPass)
     {
-        var roughness = mipCount > 1 ? (float)mip / (mipCount - 1) : 0.0f;
-        var sampleCount = mip == 0 ? 1 : 48;
-        var sunDirection = math.normalize(new float3(0.4f, 1.0f, 0.3f));
-        var sunColor = new float3(1.0f, 0.96f, 0.9f);
-        frame.World.Query(_directionalMatcher, entity => {
-            var lightColor = entity.Get<LightColor>();
-            sunDirection = -math.normalize(entity.Get<GlobalTransform>().Affine.RotationScale.c2);
-            sunColor = lightColor.Color * lightColor.Intensity;
-        });
-
-        Wgpu.WriteBuffer(
-            frame.Queue.GetWgpu<WGPUQueue>(), _iblPrefilterParamsBuffer.GetWgpu<WGPUBuffer>(), 0,
-            [new IblPrefilterParamsGpu(
-                new float4(roughness, sampleCount, face, 0.0f),
-                new float4(sunDirection, 0.0f),
-                new float4(sunColor, 0.0f))]);
-
+        var index = face * IblEnvironmentGpuStore.PrefilteredMipCount + mip;
         Wgpu.SetRenderPipeline(renderPass, iblPipelines.PrefilterPipeline.GetWgpu<WGPURenderPipeline>());
-        Wgpu.SetBindGroup(renderPass, 0, _iblPrefilterBindGroup.GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(renderPass, 0, state.IblPrefilterBindGroups[index].GetWgpu<WGPUBindGroup>());
         Wgpu.Draw(renderPass, vertexCount: 3);
     }
 
@@ -175,84 +216,88 @@ public sealed class PbrRenderer(
         Wgpu.Draw(renderPass, vertexCount: 3);
     }
 
-    private void EnsureIblPrefilterBindGroup(in GpuFrame frame)
+    private void EnsureIblPrefilterBindGroups(PbrViewState state, in GpuFrame frame)
     {
-        if (!_iblPrefilterParamsBuffer.IsValid) {
-            _iblPrefilterParamsBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
-                NextInChain = null,
-                Label = default,
+        var count = 6 * IblEnvironmentGpuStore.PrefilteredMipCount;
+        if (state.IblPrefilterBindGroups.Length == count) {
+            return;
+        }
+        state.IblPrefilterParamsBuffers = new Entity[count];
+        state.IblPrefilterBindGroups = new Entity[count];
+        for (var index = 0; index < count; index++) {
+            var buffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
                 Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,
-                Size = IblPrefilterParamsGpu.Stride,
-                MappedAtCreation = 0
+                Size = IblPrefilterParamsGpu.Stride
             });
+            state.IblPrefilterParamsBuffers[index] = buffer;
+            state.IblPrefilterBindGroups[index] = frame.ResourceWorld.OwnWgpu(
+                IblPrefilterBindGroupLayout.CreateBindGroup(
+                    frame.Device.GetWgpu<WGPUDevice>(),
+                    iblPipelines.PrefilterBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
+                    buffer.GetWgpu<WGPUBuffer>()));
         }
-        if (_iblPrefilterBindGroup.IsValid) {
-            _iblPrefilterBindGroup.Destroy();
-        }
-        var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        _iblPrefilterBindGroup = frame.World.OwnWgpu(IblPrefilterBindGroupLayout.CreateBindGroup(
-            deviceHandle,
-            iblPipelines.PrefilterBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            _iblPrefilterParamsBuffer.GetWgpu<WGPUBuffer>()));
     }
 
-    private void EnsureIblBindGroup(in GpuFrame frame)
+    private void EnsureIblBindGroup(PbrViewState state, in GpuFrame frame)
     {
-        if (_iblBindGroup.IsValid) {
-            _iblBindGroup.Destroy();
+        if (state.IblBindGroup.IsValid) {
+            state.IblBindGroup.Destroy();
         }
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        _iblBindGroup = frame.World.OwnWgpu(PbrIblBindGroupLayout.CreateBindGroup(
+        state.IblBindGroup = frame.ResourceWorld.OwnWgpu(PbrIblBindGroupLayout.CreateBindGroup(
             deviceHandle,
             forwardPipeline.IblBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            _ibl.ShBuffer.GetWgpu<WGPUBuffer>(),
-            _ibl.PrefilteredSamplingView.GetWgpu<WGPUTextureView>(),
-            _ibl.PrefilteredSampler.GetWgpu<WGPUSampler>(),
-            _ibl.BrdfLutView.GetWgpu<WGPUTextureView>(),
-            _ibl.BrdfLutSampler.GetWgpu<WGPUSampler>()));
+            state.Ibl.ShBuffer.GetWgpu<WGPUBuffer>(),
+            state.Ibl.PrefilteredSamplingView.GetWgpu<WGPUTextureView>(),
+            state.Ibl.PrefilteredSampler.GetWgpu<WGPUSampler>(),
+            state.Ibl.BrdfLutView.GetWgpu<WGPUTextureView>(),
+            state.Ibl.BrdfLutSampler.GetWgpu<WGPUSampler>()));
     }
 
     public void EncodeClusterLightCulling(
-        in GpuFrame frame, ClusterGridConfig clusterConfig, WgpuHandle<WGPUComputePassEncoder> computePass)
+        PbrViewState state,
+        ClusterGridConfig clusterConfig,
+        WgpuHandle<WGPUComputePassEncoder> computePass)
     {
         Wgpu.SetComputePipeline(computePass, cullingPipeline.ComputePipeline.GetWgpu<WGPUComputePipeline>());
-        Wgpu.SetBindGroup(computePass, 0, _cullingBindGroup.GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(computePass, 0, state.CullingBindGroup.GetWgpu<WGPUBindGroup>());
         var workgroups = (clusterConfig.ClusterCount + 63) / 64;
         Wgpu.DispatchWorkgroups(computePass, workgroups);
     }
 
-    public void EncodeShadowLayer(in GpuFrame frame, int layer, WgpuHandle<WGPURenderPassEncoder> renderPass)
+    public void EncodeShadowLayer(
+        PbrViewState state,
+        IReadOnlyList<PbrDrawItem> items,
+        int layer,
+        WgpuHandle<WGPURenderPassEncoder> renderPass)
     {
-        var cache = frame.World.AcquireAddon<PbrRenderCache>();
-        if (cache.Data.Length == 0) {
+        if (items.Count == 0) {
             return;
         }
 
-        Wgpu.WriteBuffer(
-            frame.Queue.GetWgpu<WGPUQueue>(), _shadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(), 0,
-            [new CameraUniformData(_shadows.LayerViewProj(layer), float4.zero)]);
-
         Wgpu.SetRenderPipeline(renderPass, shadowDepthPipeline.RenderPipeline.GetWgpu<WGPURenderPipeline>());
-        Wgpu.SetBindGroup(renderPass, 0, _shadowDrawBindGroups[layer].GetWgpu<WGPUBindGroup>());
-        for (var index = 0; index < cache.Data.Length; index++) {
-            var handle = cache.MeshHandles[index];
-            var meshStore = frame.World.AcquireAddon<MeshGpuStore>();
-            var meshRegistry = frame.World.AcquireAddon<MeshRegistry>();
-            var mesh = meshStore.GetOrUpload(in frame, meshRegistry, handle);
+        Wgpu.SetBindGroup(renderPass, 0, state.ShadowDrawBindGroups[layer].GetWgpu<WGPUBindGroup>());
+        foreach (var item in items) {
+            var mesh = state.Meshes[item.Mesh];
             Wgpu.SetVertexBuffer(renderPass, 0, mesh.VertexBuffer.GetWgpu<WGPUBuffer>());
             Wgpu.SetIndexBuffer(renderPass, mesh.IndexBuffer.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-            Wgpu.DrawIndexed(renderPass, mesh.IndexCount, instanceCount: 1, firstInstance: (uint)index);
+            Wgpu.DrawIndexed(renderPass, mesh.IndexCount, instanceCount: 1, firstInstance: (uint)item.InstanceIndex);
         }
     }
 
-    private void EnsureShadowCameraBuffers(in GpuFrame frame, int layerCount)
+    private void EnsureShadowCameraBuffers(PbrViewState state, in GpuFrame frame, int layerCount)
     {
-        if (_shadowCameraBuffers.Length == layerCount) {
+        if (state.ShadowCameraBuffers.Length == layerCount) {
             return;
+        }
+        foreach (var existing in state.ShadowCameraBuffers) {
+            if (existing.IsValid) {
+                existing.Destroy();
+            }
         }
         var buffers = new Entity[layerCount];
         for (var layer = 0; layer < layerCount; layer++) {
-            buffers[layer] = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+            buffers[layer] = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
                 NextInChain = null,
                 Label = default,
                 Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,
@@ -260,12 +305,12 @@ public sealed class PbrRenderer(
                 MappedAtCreation = 0
             });
         }
-        _shadowCameraBuffers = buffers;
+        state.ShadowCameraBuffers = buffers;
     }
 
-    private void EnsureShadowDrawBindGroups(in GpuFrame frame, int layerCount)
+    private void EnsureShadowDrawBindGroups(PbrViewState state, in GpuFrame frame, int layerCount)
     {
-        foreach (var existing in _shadowDrawBindGroups) {
+        foreach (var existing in state.ShadowDrawBindGroups) {
             if (existing.IsValid) {
                 existing.Destroy();
             }
@@ -274,73 +319,78 @@ public sealed class PbrRenderer(
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
         var bindGroups = new Entity[layerCount];
         for (var layer = 0; layer < layerCount; layer++) {
-            bindGroups[layer] = frame.World.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
+            bindGroups[layer] = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
                 deviceHandle,
                 shadowDepthPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-                _shadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
-                _instances.IsValid ? _instances.Buffer.GetWgpu<WGPUBuffer>() : default,
-                _instances.Capacity));
+                state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
+                state.Instances.IsValid ? state.Instances.Buffer.GetWgpu<WGPUBuffer>() : default,
+                state.Instances.Capacity));
         }
-        _shadowDrawBindGroups = bindGroups;
+        state.ShadowDrawBindGroups = bindGroups;
     }
 
-    private void EnsureCullingBindGroup(in GpuFrame frame)
+    private void EnsureCullingBindGroup(PbrViewState state, in GpuFrame frame)
     {
-        if (_cullingBindGroup.IsValid) {
-            _cullingBindGroup.Destroy();
+        if (state.CullingBindGroup.IsValid) {
+            state.CullingBindGroup.Destroy();
         }
 
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        _cullingBindGroup = frame.World.OwnWgpu(ClusterCullingBindGroupLayout.CreateBindGroup(
+        state.CullingBindGroup = frame.ResourceWorld.OwnWgpu(ClusterCullingBindGroupLayout.CreateBindGroup(
             deviceHandle,
             cullingPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            _clusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
-            _lights.ClusteredBuffer.GetWgpu<WGPUBuffer>(), _lights.ClusteredCapacity,
-            _clusterBuffers.LightGridBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightGridSize,
-            _clusterBuffers.LightIndexListBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightIndexListCapacity));
+            state.ClusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
+            state.Lights.ClusteredBuffer.GetWgpu<WGPUBuffer>(), state.Lights.ClusteredCapacity,
+            state.ClusterBuffers.LightGridBuffer.GetWgpu<WGPUBuffer>(), state.ClusterBuffers.LightGridSize,
+            state.ClusterBuffers.LightIndexListBuffer.GetWgpu<WGPUBuffer>(), state.ClusterBuffers.LightIndexListCapacity));
     }
 
-    private void EnsureForwardLightingBindGroup(in GpuFrame frame)
+    private void EnsureForwardLightingBindGroup(PbrViewState state, in GpuFrame frame)
     {
-        if (_forwardLightingBindGroup.IsValid) {
-            _forwardLightingBindGroup.Destroy();
+        if (state.ForwardLightingBindGroup.IsValid) {
+            state.ForwardLightingBindGroup.Destroy();
         }
 
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        _forwardLightingBindGroup = frame.World.OwnWgpu(PbrLightingBindGroupLayout.CreateBindGroup(
+        state.ForwardLightingBindGroup = frame.ResourceWorld.OwnWgpu(PbrLightingBindGroupLayout.CreateBindGroup(
             deviceHandle,
             forwardPipeline.LightingBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            _clusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
-            _lights.ClusteredBuffer.GetWgpu<WGPUBuffer>(), _lights.ClusteredCapacity,
-            _clusterBuffers.LightGridBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightGridSize,
-            _clusterBuffers.LightIndexListBuffer.GetWgpu<WGPUBuffer>(), _clusterBuffers.LightIndexListCapacity,
-            _lights.DirectionalBuffer.GetWgpu<WGPUBuffer>(),
-            _shadowAtlas.SamplingView.GetWgpu<WGPUTextureView>(),
-            _shadowAtlas.Sampler.GetWgpu<WGPUSampler>(),
-            _shadows.LayerBuffer.GetWgpu<WGPUBuffer>(), _shadows.LayerBufferCapacity,
-            _shadows.ConfigBuffer.GetWgpu<WGPUBuffer>()));
+            state.ClusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
+            state.Lights.ClusteredBuffer.GetWgpu<WGPUBuffer>(), state.Lights.ClusteredCapacity,
+            state.ClusterBuffers.LightGridBuffer.GetWgpu<WGPUBuffer>(), state.ClusterBuffers.LightGridSize,
+            state.ClusterBuffers.LightIndexListBuffer.GetWgpu<WGPUBuffer>(), state.ClusterBuffers.LightIndexListCapacity,
+            state.Lights.DirectionalBuffer.GetWgpu<WGPUBuffer>(),
+            state.ShadowAtlas.SamplingView.GetWgpu<WGPUTextureView>(),
+            state.ShadowAtlas.Sampler.GetWgpu<WGPUSampler>(),
+            state.Shadows.LayerBuffer.GetWgpu<WGPUBuffer>(), state.Shadows.LayerBufferCapacity,
+            state.Shadows.ConfigBuffer.GetWgpu<WGPUBuffer>()));
     }
 
-    public void EncodeDepthPrepass(in GpuFrame frame, WgpuHandle<WGPURenderPassEncoder> renderPass) =>
-        Encode(in frame, renderPass, depthPipeline.RenderPipeline, _depthBindGroup, default, default);
-
-    public void EncodeForwardPbr(in GpuFrame frame, WgpuHandle<WGPURenderPassEncoder> renderPass) =>
+    public void EncodeDepthPrepass(
+        PbrViewState state,
+        IReadOnlyList<PbrDrawItem> items,
+        WgpuHandle<WGPURenderPassEncoder> renderPass) =>
         Encode(
-            in frame, renderPass, forwardPipeline.RenderPipeline,
-            _forwardBindGroup, _forwardLightingBindGroup, _iblBindGroup);
+            state, items, renderPass, depthPipeline.RenderPipeline,
+            state.DepthBindGroup, default, default);
 
-    private void Encode(
-        in GpuFrame frame,
+    public void EncodeForwardPbr(
+        PbrViewState state,
+        IReadOnlyList<PbrDrawItem> items,
+        WgpuHandle<WGPURenderPassEncoder> renderPass) =>
+        Encode(
+            state, items, renderPass, forwardPipeline.RenderPipeline,
+            state.ForwardBindGroup, state.ForwardLightingBindGroup, state.IblBindGroup);
+
+    private static void Encode(
+        PbrViewState state,
+        IReadOnlyList<PbrDrawItem> items,
         WgpuHandle<WGPURenderPassEncoder> renderPass,
         Entity pipeline, Entity bindGroup, Entity lightingBindGroup, Entity iblBindGroup)
     {
-        if (_visible.Count == 0) {
+        if (items.Count == 0) {
             return;
         }
-
-        var cache = frame.World.AcquireAddon<PbrRenderCache>();
-        var meshStore = frame.World.AcquireAddon<MeshGpuStore>();
-        var meshRegistry = frame.World.AcquireAddon<MeshRegistry>();
 
         Wgpu.SetRenderPipeline(renderPass, pipeline.GetWgpu<WGPURenderPipeline>());
         Wgpu.SetBindGroup(renderPass, 0, bindGroup.GetWgpu<WGPUBindGroup>());
@@ -351,39 +401,38 @@ public sealed class PbrRenderer(
             Wgpu.SetBindGroup(renderPass, 2, iblBindGroup.GetWgpu<WGPUBindGroup>());
         }
 
-        foreach (var index in _visible) {
-            var handle = cache.MeshHandles[index];
-            var mesh = meshStore.GetOrUpload(in frame, meshRegistry, handle);
+        foreach (var item in items) {
+            var mesh = state.Meshes[item.Mesh];
             Wgpu.SetVertexBuffer(renderPass, 0, mesh.VertexBuffer.GetWgpu<WGPUBuffer>());
             Wgpu.SetIndexBuffer(renderPass, mesh.IndexBuffer.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-            Wgpu.DrawIndexed(renderPass, mesh.IndexCount, instanceCount: 1, firstInstance: (uint)index);
+            Wgpu.DrawIndexed(renderPass, mesh.IndexCount, instanceCount: 1, firstInstance: (uint)item.InstanceIndex);
         }
     }
 
-    private void EnsureBindGroups(in GpuFrame frame)
+    private void EnsureBindGroups(PbrViewState state, in GpuFrame frame)
     {
-        if (_depthBindGroup.IsValid) {
-            _depthBindGroup.Destroy();
+        if (state.DepthBindGroup.IsValid) {
+            state.DepthBindGroup.Destroy();
         }
-        if (_forwardBindGroup.IsValid) {
-            _forwardBindGroup.Destroy();
+        if (state.ForwardBindGroup.IsValid) {
+            state.ForwardBindGroup.Destroy();
         }
 
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        var cameraBuffer = _cameraUniforms.Buffer.GetWgpu<WGPUBuffer>();
-        var instanceBuffer = _instances.Buffer.GetWgpu<WGPUBuffer>();
+        var cameraBuffer = state.CameraUniforms.Buffer.GetWgpu<WGPUBuffer>();
+        var instanceBuffer = state.Instances.Buffer.GetWgpu<WGPUBuffer>();
 
-        _depthBindGroup = frame.World.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
+        state.DepthBindGroup = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
             deviceHandle,
             depthPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            cameraBuffer, instanceBuffer, _instances.Capacity));
-        _forwardBindGroup = frame.World.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
+            cameraBuffer, instanceBuffer, state.Instances.Capacity));
+        state.ForwardBindGroup = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
             deviceHandle,
             forwardPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            cameraBuffer, instanceBuffer, _instances.Capacity));
+            cameraBuffer, instanceBuffer, state.Instances.Capacity));
 
-        if (_shadowDrawBindGroups.Length > 0) {
-            EnsureShadowDrawBindGroups(in frame, _shadowDrawBindGroups.Length);
+        if (state.ShadowDrawBindGroups.Length > 0) {
+            EnsureShadowDrawBindGroups(state, in frame, state.ShadowDrawBindGroups.Length);
         }
     }
 }

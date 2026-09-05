@@ -1,10 +1,8 @@
-using Sia.Graphics.Reactive;
-using Sia.Graphics.Rendering;
-using Sia.Reactive;
-
 namespace Sia.Engine.Rendering.Debug;
 
-public sealed class DebugRenderFeature : IRenderFeature<RenderFrameContext>
+public sealed class DebugRenderFeature :
+    IPrepareRenderFeature<RenderFrameContext>,
+    IRenderGraphContributor<RenderFrameContext>
 {
     public static RenderFeatureKey FeatureKey { get; } = new("debug");
 
@@ -23,9 +21,17 @@ public sealed class DebugRenderFeature : IRenderFeature<RenderFrameContext>
         Options = options ?? new DebugRenderFeatureOptions();
     }
 
-    public void Configure(
-        ref Hooks hooks,
-        WgpuRenderGraphRegistry registry,
-        in RenderFrameContext context) =>
-        hooks.UseDebugPass(registry, Renderer, in context, Options);
+    public void Prepare(in RenderFeatureContext<RenderFrameContext> context)
+    {
+        var frame = context.Frame.Frame;
+        Renderer.Prepare(in frame, context.Frame.Camera);
+    }
+
+    public void BuildRenderGraph(
+        ref RenderGraphBuildContext graph,
+        in RenderFeatureContext<RenderFrameContext> context)
+    {
+        var frame = context.Frame;
+        DebugRenderGraphHooks.UseDebugPass(ref graph, Renderer, in frame, Options);
+    }
 }

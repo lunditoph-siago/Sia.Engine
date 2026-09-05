@@ -57,7 +57,7 @@ public sealed class IblEnvironmentGpuStore
             return false;
         }
 
-        _prefilteredTexture = frame.World.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
+        _prefilteredTexture = frame.ResourceWorld.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc,
@@ -69,7 +69,7 @@ public sealed class IblEnvironmentGpuStore
             ViewFormatCount = 0,
             ViewFormats = null
         });
-        _prefilteredSamplingView = frame.World.CreateWgpuTextureView(_prefilteredTexture, new WGPUTextureViewDescriptor {
+        _prefilteredSamplingView = frame.ResourceWorld.CreateWgpuTextureView(_prefilteredTexture, new WGPUTextureViewDescriptor {
             NextInChain = null,
             Label = default,
             Format = WGPUTextureFormat.RGBA16Float,
@@ -81,7 +81,7 @@ public sealed class IblEnvironmentGpuStore
             Aspect = WGPUTextureAspect.All,
             Usage = WGPUTextureUsage.TextureBinding
         });
-        _prefilteredSampler = frame.World.CreateWgpuSampler(frame.Device, new WGPUSamplerDescriptor {
+        _prefilteredSampler = frame.ResourceWorld.CreateWgpuSampler(frame.Device, new WGPUSamplerDescriptor {
             NextInChain = null,
             Label = default,
             AddressModeU = WGPUAddressMode.ClampToEdge,
@@ -96,7 +96,7 @@ public sealed class IblEnvironmentGpuStore
             MaxAnisotropy = 1
         });
 
-        _brdfLutTexture = frame.World.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
+        _brdfLutTexture = frame.ResourceWorld.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc,
@@ -108,7 +108,7 @@ public sealed class IblEnvironmentGpuStore
             ViewFormatCount = 0,
             ViewFormats = null
         });
-        _brdfLutView = frame.World.CreateWgpuTextureView(_brdfLutTexture, new WGPUTextureViewDescriptor {
+        _brdfLutView = frame.ResourceWorld.CreateWgpuTextureView(_brdfLutTexture, new WGPUTextureViewDescriptor {
             NextInChain = null,
             Label = default,
             Format = WGPUTextureFormat.RG16Float,
@@ -120,7 +120,7 @@ public sealed class IblEnvironmentGpuStore
             Aspect = WGPUTextureAspect.All,
             Usage = WGPUTextureUsage.TextureBinding
         });
-        _brdfLutSampler = frame.World.CreateWgpuSampler(frame.Device, new WGPUSamplerDescriptor {
+        _brdfLutSampler = frame.ResourceWorld.CreateWgpuSampler(frame.Device, new WGPUSamplerDescriptor {
             NextInChain = null,
             Label = default,
             AddressModeU = WGPUAddressMode.ClampToEdge,
@@ -135,7 +135,7 @@ public sealed class IblEnvironmentGpuStore
             MaxAnisotropy = 1
         });
 
-        _shBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _shBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc,

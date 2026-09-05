@@ -21,7 +21,7 @@ public sealed class CameraUniforms
     public void Update(in GpuFrame frame, in CameraMatrices matrices)
     {
         if (!_buffer.IsValid) {
-            _buffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+            _buffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
                 NextInChain = null,
                 Label = default,
                 Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,

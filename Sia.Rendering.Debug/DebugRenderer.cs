@@ -14,6 +14,7 @@ public sealed class DebugRenderer
     private Entity _vertexBuffer;
     private Entity _bindGroup;
     private ulong _vertexBufferCapacity;
+    private int _preparedVertexCount;
 
     private DebugRenderer(DebugDrawList drawList, DebugPipeline pipeline)
     {
@@ -39,16 +40,14 @@ public sealed class DebugRenderer
         return new DebugRenderer(drawList ?? new DebugDrawList(), pipeline);
     }
 
-    public void Encode(
-        in GpuFrame frame,
-        Entity camera,
-        WgpuHandle<WGPURenderPassEncoder> renderPass)
+    public void Prepare(in GpuFrame frame, Entity camera)
     {
-        if (DrawList.VertexCount == 0) {
+        _preparedVertexCount = DrawList.VertexCount;
+        if (_preparedVertexCount == 0) {
             return;
         }
 
-        BindResourceWorld(frame.World);
+        BindResourceWorld(frame.ResourceWorld);
         EnsureCameraResources(in frame);
         EnsureVertexBuffer(in frame);
 
@@ -63,7 +62,13 @@ public sealed class DebugRenderer
             _vertexBuffer.GetWgpu<WGPUBuffer>(),
             0,
             DrawList.Vertices);
+    }
 
+    public void Encode(WgpuHandle<WGPURenderPassEncoder> renderPass)
+    {
+        if (_preparedVertexCount == 0) {
+            return;
+        }
         Wgpu.SetRenderPipeline(
             renderPass,
             _pipeline.RenderPipeline.GetWgpu<WGPURenderPipeline>());
@@ -75,8 +80,8 @@ public sealed class DebugRenderer
             renderPass,
             0,
             _vertexBuffer.GetWgpu<WGPUBuffer>(),
-            size: checked((ulong)DrawList.VertexCount * DebugVertex.Stride));
-        Wgpu.Draw(renderPass, (uint)DrawList.VertexCount);
+            size: checked((ulong)_preparedVertexCount * DebugVertex.Stride));
+        Wgpu.Draw(renderPass, (uint)_preparedVertexCount);
     }
 
     private void BindResourceWorld(World world)
@@ -97,7 +102,7 @@ public sealed class DebugRenderer
             return;
         }
 
-        _cameraBuffer = frame.World.CreateWgpuBuffer(
+        _cameraBuffer = frame.ResourceWorld.CreateWgpuBuffer(
             frame.Device,
             new WGPUBufferDescriptor {
                 NextInChain = null,
@@ -106,7 +111,7 @@ public sealed class DebugRenderer
                 Size = DebugCameraUniformData.Stride,
                 MappedAtCreation = 0,
             });
-        _bindGroup = frame.World.OwnWgpu(_pipeline.CreateBindGroup(
+        _bindGroup = frame.ResourceWorld.OwnWgpu(_pipeline.CreateBindGroup(
             frame.Device.GetWgpu<WGPUDevice>(),
             _cameraBuffer.GetWgpu<WGPUBuffer>()));
     }
@@ -128,7 +133,7 @@ public sealed class DebugRenderer
         if (_vertexBuffer.IsValid) {
             _vertexBuffer.Destroy();
         }
-        _vertexBuffer = frame.World.CreateWgpuBuffer(
+        _vertexBuffer = frame.ResourceWorld.CreateWgpuBuffer(
             frame.Device,
             new WGPUBufferDescriptor {
                 NextInChain = null,

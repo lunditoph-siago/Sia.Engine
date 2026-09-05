@@ -105,7 +105,7 @@ public sealed class ShadowGpuStore
         }
 
         if (!_configBuffer.IsValid) {
-            _configBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+            _configBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
                 NextInChain = null,
                 Label = default,
                 Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,
@@ -138,7 +138,7 @@ public sealed class ShadowGpuStore
         if (_layerBuffer.IsValid) {
             _layerBuffer.Destroy();
         }
-        _layerBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _layerBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst,

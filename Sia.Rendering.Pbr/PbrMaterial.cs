@@ -10,11 +10,7 @@ public record struct PbrMaterial(
     float Metallic,
     float Roughness,
     float3 EmissiveColor,
-    float EmissiveStrength,
-    int AlbedoTextureSlot = -1,
-    int NormalTextureSlot = -1,
-    int MetallicRoughnessTextureSlot = -1,
-    int EmissiveTextureSlot = -1)
+    float EmissiveStrength)
 {
     public static PbrMaterial Default => new(
         BaseColor: new float3(0.8f, 0.8f, 0.8f),
