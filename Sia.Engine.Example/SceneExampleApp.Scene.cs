@@ -5,6 +5,7 @@ using Sia.Engine.Lighting;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
+using Sia.Engine.Rendering.Unlit;
 using Sia.Math;
 using Sia.Reactors;
 using Sia.WebGPU;
@@ -55,6 +56,20 @@ internal sealed unsafe partial class SceneExampleApp
 
         BuildScene(meshRegistry);
 
+        if (_pipeline != ScenePipeline.Pbr) {
+            var pipeline = UnlitPipeline.Create(
+                _renderWorld.Entities,
+                _renderDevice,
+                _surfaceFormat,
+                WGPUTextureFormat.Depth32Float,
+                UnlitShaderSource.Load(),
+                _pipeline == ScenePipeline.Normals ? "normals" : "unlit");
+            _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
+                .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
+                .Build();
+            return;
+        }
+
         _depthPipeline = PbrDepthPrepassPipeline.Create(
             _renderGraphWorld!, _renderDevice, WGPUTextureFormat.Depth32Float);
         _forwardPipelineCache = new PipelineCache<RenderPipelineKey, ForwardPbrPipeline>();
@@ -88,6 +103,7 @@ internal sealed unsafe partial class SceneExampleApp
             new Bounds(groundMesh.Bounds),
             new WorldBounds(groundMesh.Bounds),
             new MeshComponent(groundHandle),
+            new UnlitMaterial(new float4(0.12f, 0.16f, 0.22f, 1.0f)),
             new PbrMaterial(
                 new float3(0.35f, 0.38f, 0.42f), Metallic: 0.0f, Roughness: 0.9f,
                 EmissiveColor: float3.zero, EmissiveStrength: 0.0f),
@@ -111,6 +127,11 @@ internal sealed unsafe partial class SceneExampleApp
                     new Bounds(sphereMesh.Bounds),
                     new WorldBounds(sphereMesh.Bounds),
                     new MeshComponent(sphereHandle),
+                    new UnlitMaterial(new float4(
+                        0.15f + 0.8f * metallic,
+                        0.15f + 0.8f * roughness,
+                        0.85f - 0.55f * metallic,
+                        1.0f)),
                     new PbrMaterial(
                         baseColor, Metallic: metallic, Roughness: System.MathF.Max(roughness, 0.045f),
                         EmissiveColor: float3.zero, EmissiveStrength: 0.0f),
@@ -136,6 +157,7 @@ internal sealed unsafe partial class SceneExampleApp
             new Bounds(occluderMesh.Bounds),
             new WorldBounds(occluderMesh.Bounds),
             new MeshComponent(occluderHandle),
+            new UnlitMaterial(new float4(1.0f, 0.55f, 0.12f, 1.0f)),
             new PbrMaterial(
                 new float3(0.8f, 0.8f, 0.8f), Metallic: 0.0f, Roughness: 0.7f,
                 EmissiveColor: float3.zero, EmissiveStrength: 0.0f),

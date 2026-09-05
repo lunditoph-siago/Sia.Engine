@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net11.0;net11.0-browser</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Sia.Rendering.Unlit</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sia.Rendering/Sia.Rendering.csproj" />
+    <EmbeddedResource Include="Shaders/*.wgsl" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
+    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+</Project>
