@@ -49,7 +49,10 @@ window.addEventListener('error', e => showError('[error] ' + (e.error?.stack ?? 
 window.addEventListener('unhandledrejection', e => showError('[unhandledrejection] ' + (e.reason?.stack ?? e.reason)));
 
 try {
-  const { runMain, Module, setModuleImports } = await dotnet.create();
+  const pipeline = new URLSearchParams(window.location.search).get('pipeline') ?? 'pbr';
+  const { runMain, Module, setModuleImports } = await dotnet
+    .withApplicationArguments('--pipeline', pipeline)
+    .create();
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);

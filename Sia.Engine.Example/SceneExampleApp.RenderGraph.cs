@@ -56,6 +56,7 @@ internal sealed unsafe partial class SceneExampleApp
 
         if (_renderGraphMount is not { } mount) {
             _renderGraphMount = _renderGraphWorld!.Mount(RenderGraph, props);
+            Console.WriteLine($"{_pipeline}: {_renderGraph!.PreparePlan().Graph.Passes.Count} render graph pass(es).");
             return;
         }
         if (mount.Props != props) {

@@ -26,12 +26,18 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private bool _glfwInitialized;
     private bool _surfaceConfigured;
     private bool _disposed;
+    private readonly ScenePipeline _pipeline;
+
+    public SceneExampleApp(ScenePipeline pipeline)
+    {
+        _pipeline = pipeline;
+    }
 
     public void Run()
     {
         Initialize();
 
-        Console.WriteLine("Sia.Graphics scene example - Esc to close.");
+        Console.WriteLine($"Sia.Engine {_pipeline} scene example - Esc to close.");
 
         var clock = Stopwatch.StartNew();
         var previousTime = clock.Elapsed.TotalSeconds;
@@ -66,7 +72,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             new WindowDescriptor(
                 _initialWidth,
                 _initialHeight,
-                "Sia.Graphics - Scene Example",
+                $"Sia.Engine - {_pipeline} Example",
                 Resizable: true),
             new GlfwWindowOptions(ClientApi.NoApi));
 
