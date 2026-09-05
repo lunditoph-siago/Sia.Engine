@@ -7,8 +7,10 @@ const PBR_PI: f32 = 3.14159265359;
 fn distribution_ggx(n_dot_h: f32, roughness: f32) -> f32 {
     let a = roughness * roughness;
     let a2 = a * a;
-    let denom = (n_dot_h * n_dot_h) * (a2 - 1.0) + 1.0;
-    return a2 / max(PBR_PI * denom * denom, 1e-6);
+    let clamped_n_dot_h = clamp(n_dot_h, 0.0, 1.0);
+    let n_dot_h_squared = clamped_n_dot_h * clamped_n_dot_h;
+    let denom = (1.0 - n_dot_h_squared) + n_dot_h_squared * a2;
+    return a2 / (PBR_PI * denom * denom);
 }
 
 fn geometry_smith_ggx(n_dot_v: f32, n_dot_l: f32, roughness: f32) -> f32 {
@@ -82,7 +84,7 @@ fn indirect_lighting(
     let prefiltered = sample_prefiltered_specular(
         prefiltered_env, prefiltered_sampler, reflect_dir, roughness, prefiltered_mip_count);
     let env_brdf = sample_brdf_lut(brdf_lut, brdf_lut_sampler, n_dot_v, roughness);
-    let specular = prefiltered * (f * env_brdf.x + vec3<f32>(env_brdf.y));
+    let specular = prefiltered * (f0 * env_brdf.x + vec3<f32>(env_brdf.y));
 
     return diffuse + specular;
 }
