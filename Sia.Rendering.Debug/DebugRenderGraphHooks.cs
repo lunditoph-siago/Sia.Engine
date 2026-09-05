@@ -1,5 +1,4 @@
 using Sia.Graphics.Reactive;
-using Sia.Reactive;
 using Sia.RenderGraph;
 
 namespace Sia.Engine.Rendering.Debug;
@@ -7,36 +6,24 @@ namespace Sia.Engine.Rendering.Debug;
 public static class DebugRenderGraphHooks
 {
     public static void UseDebugPass(
-        this ref Hooks hooks,
-        WgpuRenderGraphRegistry registry,
+        ref RenderGraphBuildContext graph,
         DebugRenderer renderer,
         in RenderFrameContext frameContext,
         DebugRenderFeatureOptions options)
     {
-        ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(options);
 
         var color = frameContext.ColorTarget;
         var depth = frameContext.DepthTarget;
-        var state = hooks.UseRef(() => new DebugPassState(color, depth));
-        if (state.Value.Color != frameContext.ColorTarget
-            || state.Value.Depth != frameContext.DepthTarget) {
-            state.Value = new DebugPassState(
-                frameContext.ColorTarget,
-                frameContext.DepthTarget);
-        }
-        state.Value.Update(renderer, in frameContext, options);
+        var state = graph.UseState(() => new DebugPassState(color, depth));
+        state.Update(renderer, color, depth, options);
 
-        hooks.UseRenderGraphPass(
-            registry,
+        graph.UsePass(
             options.Pass,
             "debug-overlay",
-            state.Value.Declare);
-        hooks.UseWgpuRenderGraphPassHandler(
-            registry,
-            options.Pass,
-            state.Value.Render);
+            state.Declare,
+            state.Render);
     }
 
     private sealed class DebugPassState(
@@ -44,20 +31,21 @@ public static class DebugRenderGraphHooks
         RenderGraphTextureKey depth)
     {
         private DebugRenderer? _renderer;
-        private RenderFrameContext _frameContext;
         private DebugRenderFeatureOptions? _options;
 
-        public RenderGraphTextureKey Color { get; } = color;
+        public RenderGraphTextureKey Color { get; private set; } = color;
 
-        public RenderGraphTextureKey Depth { get; } = depth;
+        public RenderGraphTextureKey Depth { get; private set; } = depth;
 
         public void Update(
             DebugRenderer renderer,
-            in RenderFrameContext frameContext,
+            RenderGraphTextureKey color,
+            RenderGraphTextureKey depth,
             DebugRenderFeatureOptions options)
         {
             _renderer = renderer;
-            _frameContext = frameContext;
+            Color = color;
+            Depth = depth;
             _options = options;
         }
 
@@ -77,8 +65,7 @@ public static class DebugRenderGraphHooks
                 new WgpuReactiveRenderGraphDepthStencilAttachment(
                     Depth,
                     options.DepthLoadOp));
-            var frame = _frameContext.Frame;
-            _renderer!.Encode(in frame, _frameContext.Camera, renderPass);
+            _renderer!.Encode(renderPass);
         }
     }
 }

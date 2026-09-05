@@ -44,7 +44,7 @@ public sealed class ClusterGridBuffers
 
         DestroyBuffers();
 
-        _configBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _configBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,
@@ -53,7 +53,7 @@ public sealed class ClusterGridBuffers
         });
 
         LightGridSize = System.Math.Max((ulong)clusterCount * 8, 8);
-        _lightGridBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _lightGridBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst,
@@ -63,7 +63,7 @@ public sealed class ClusterGridBuffers
 
         LightIndexListCapacity = System.Math.Max(
             (ulong)clusterCount * config.MaxLightIndicesPerCluster * sizeof(uint), sizeof(uint));
-        _lightIndexListBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _lightIndexListBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst,

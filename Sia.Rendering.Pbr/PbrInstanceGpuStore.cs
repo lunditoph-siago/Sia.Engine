@@ -42,7 +42,7 @@ public sealed class PbrInstanceGpuStore
         if (_buffer.IsValid) {
             _buffer.Destroy();
         }
-        _buffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _buffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst,

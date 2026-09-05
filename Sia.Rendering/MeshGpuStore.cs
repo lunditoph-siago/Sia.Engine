@@ -17,7 +17,7 @@ public sealed class MeshGpuStore : IAddon
         }
 
         var data = registry.Get(handle);
-        var vertexBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        var vertexBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst,
@@ -27,7 +27,7 @@ public sealed class MeshGpuStore : IAddon
         Wgpu.WriteBuffer<MeshVertex>(
             frame.Queue.GetWgpu<WGPUQueue>(), vertexBuffer.GetWgpu<WGPUBuffer>(), 0, data.Vertices);
 
-        var indexBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        var indexBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Index | WGPUBufferUsage.CopyDst,

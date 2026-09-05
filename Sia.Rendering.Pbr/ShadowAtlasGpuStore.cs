@@ -40,7 +40,7 @@ public sealed class ShadowAtlasGpuStore
             _texture.Destroy();
         }
 
-        _texture = frame.World.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
+        _texture = frame.ResourceWorld.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc,
@@ -57,7 +57,7 @@ public sealed class ShadowAtlasGpuStore
             ViewFormats = null
         });
 
-        _samplingView = frame.World.CreateWgpuTextureView(_texture, new WGPUTextureViewDescriptor {
+        _samplingView = frame.ResourceWorld.CreateWgpuTextureView(_texture, new WGPUTextureViewDescriptor {
             NextInChain = null,
             Label = default,
             Format = WGPUTextureFormat.Depth32Float,
@@ -70,7 +70,7 @@ public sealed class ShadowAtlasGpuStore
             Usage = WGPUTextureUsage.TextureBinding
         });
 
-        _sampler = frame.World.CreateWgpuSampler(frame.Device, new WGPUSamplerDescriptor {
+        _sampler = frame.ResourceWorld.CreateWgpuSampler(frame.Device, new WGPUSamplerDescriptor {
             NextInChain = null,
             Label = default,
             AddressModeU = WGPUAddressMode.ClampToEdge,
