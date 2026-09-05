@@ -1,3 +1,8 @@
+// ACES fitted tone mapping by Stephen Hill, adapted from Baking Lab.
+// Copyright (c) 2016 MJP
+// Source: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
+// MIT License: https://opensource.org/license/mit
+
 #import pbr::ibl::{ibl_fullscreen_ndc}
 
 @group(0) @binding(0) var<uniform> settings: vec4<f32>;

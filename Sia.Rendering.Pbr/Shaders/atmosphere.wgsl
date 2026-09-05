@@ -1,3 +1,8 @@
+// Adapted from Sebastien Hillaire's EGSR 2020 sky atmosphere reference implementation.
+// Copyright (c) 2020 Epic Games, Inc.
+// Source: https://github.com/sebh/UnrealEngineSkyAtmosphere
+// MIT License: https://opensource.org/license/mit
+
 #define_import_path pbr::atmosphere
 
 const ATM_PI: f32 = 3.14159265359;
