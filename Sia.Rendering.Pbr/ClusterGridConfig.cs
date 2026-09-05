@@ -12,5 +12,14 @@ public sealed class ClusterGridConfig : IAddon
     public uint ZSlices { get; set; } = 24;
     public uint MaxLightIndicesPerCluster { get; set; } = 64;
 
-    public uint ClusterCount => TilesX * TilesY * ZSlices;
+    public uint ClusterCount => checked(TilesX * TilesY * ZSlices);
+
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfZero(TilesX);
+        ArgumentOutOfRangeException.ThrowIfZero(TilesY);
+        ArgumentOutOfRangeException.ThrowIfZero(ZSlices);
+        ArgumentOutOfRangeException.ThrowIfZero(MaxLightIndicesPerCluster);
+        _ = checked(ClusterCount * MaxLightIndicesPerCluster);
+    }
 }

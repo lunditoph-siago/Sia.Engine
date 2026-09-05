@@ -16,6 +16,7 @@ public static class PbrShaderSource
         ResourcePrefix + "pbr_lighting.wgsl",
         ResourcePrefix + "shadows.wgsl",
         ResourcePrefix + "ibl.wgsl",
+        ResourcePrefix + "atmosphere.wgsl",
     ];
 
     public static string LoadDepthPrepass() => Load(ResourcePrefix + "depth_prepass.wgsl");
@@ -29,6 +30,12 @@ public static class PbrShaderSource
     public static string LoadIblPrefilterSpecular() => Load(ResourcePrefix + "ibl_prefilter_specular.wgsl");
 
     public static string LoadIblBrdfLut() => Load(ResourcePrefix + "ibl_brdf_lut.wgsl");
+
+    public static string LoadSkybox() => Load(ResourcePrefix + "skybox.wgsl");
+
+    public static string LoadToneMapping() => Load(ResourcePrefix + "tone_mapping.wgsl");
+
+    internal static string LoadAtmosphere(string name) => Load(ResourcePrefix + "atmosphere_" + name + ".wgsl");
 
     private static string Load(string entryResourceName)
     {

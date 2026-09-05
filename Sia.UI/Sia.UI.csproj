@@ -6,19 +6,12 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
     <PackageId>Sia.UI</PackageId>
-    <SiaGraphicsRepositoryPath>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\Sia.Graphics'))</SiaGraphicsRepositoryPath>
   </PropertyGroup>
 
-  <ItemGroup Condition="Exists('$(SiaGraphicsRepositoryPath)\Sia.Graphics\Sia.Graphics.csproj')">
-    <ProjectReference Include="$(SiaGraphicsRepositoryPath)\Sia.Graphics\Sia.Graphics.csproj" />
-    <ProjectReference Include="$(SiaGraphicsRepositoryPath)\Sia.RenderGraph\Sia.RenderGraph.csproj" />
-    <ProjectReference Include="$(SiaGraphicsRepositoryPath)\Sia.WebGPU\Sia.WebGPU.csproj" />
-  </ItemGroup>
-
-  <ItemGroup Condition="!Exists('$(SiaGraphicsRepositoryPath)\Sia.Graphics\Sia.Graphics.csproj')">
-    <PackageReference Include="Sia.Graphics" Version="0.0.18" />
-    <PackageReference Include="Sia.RenderGraph" Version="0.0.18" />
-    <PackageReference Include="Sia.WebGPU" Version="0.0.18" />
+  <ItemGroup>
+    <PackageReference Include="Sia.Graphics" Version="0.0.19" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.19" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.19" />
   </ItemGroup>
 
   <ItemGroup>

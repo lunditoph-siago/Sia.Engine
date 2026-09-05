@@ -12,6 +12,6 @@ public sealed record PbrExtractedView(
     PbrRenderInstance[] Instances,
     PbrDrawItem[] AllItems,
     PbrDrawItem[] VisibleItems,
-    float3 SkySunDirection,
-    float3 SkySunColor,
-    float4[]? IrradianceCoefficients);
+    ProceduralSky Sky,
+    float4[]? IrradianceCoefficients,
+    SkyAtmosphere? Atmosphere = null);

@@ -33,8 +33,9 @@ public static class Program
     private static ScenePipeline ParsePipeline(string[] args) => args switch {
         [] => ScenePipeline.Pbr,
         ["--pipeline", "pbr"] => ScenePipeline.Pbr,
+        ["--pipeline", "atmosphere"] => ScenePipeline.Atmosphere,
         ["--pipeline", "unlit"] => ScenePipeline.Unlit,
         ["--pipeline", "normals"] => ScenePipeline.Normals,
-        _ => throw new ArgumentException("Usage: --pipeline pbr|unlit|normals")
+        _ => throw new ArgumentException("Usage: --pipeline pbr|atmosphere|unlit|normals")
     };
 }
