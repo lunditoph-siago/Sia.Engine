@@ -7,8 +7,6 @@ struct ClusteredLight {
     spot_angles: vec4<f32>,
 };
 
-const MAX_LOCAL_LIGHTS: u32 = 64u;
-
 @group(0) @binding(0) var<uniform> config: ClusterConfig;
 @group(0) @binding(1) var<storage, read> lights: array<ClusteredLight>;
 @group(0) @binding(2) var<storage, read_write> light_grid: array<vec2<u32>>;
@@ -34,10 +32,10 @@ fn cull(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let ndc_min = vec2<f32>(
         f32(tx) / f32(config.tiles.x) * 2.0 - 1.0,
-        f32(ty) / f32(config.tiles.y) * 2.0 - 1.0);
+        1.0 - f32(ty + 1u) / f32(config.tiles.y) * 2.0);
     let ndc_max = vec2<f32>(
         f32(tx + 1u) / f32(config.tiles.x) * 2.0 - 1.0,
-        f32(ty + 1u) / f32(config.tiles.y) * 2.0 - 1.0);
+        1.0 - f32(ty) / f32(config.tiles.y) * 2.0);
 
     let ray_min = cluster_screen_to_view_ray(config, ndc_min);
     let ray_max = cluster_screen_to_view_ray(config, ndc_max);
@@ -53,28 +51,23 @@ fn cull(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let aabb_min = min(min(p0, p1), min(p2, p3));
     let aabb_max = max(max(p0, p1), max(p2, p3));
 
-    var matches: array<u32, MAX_LOCAL_LIGHTS>;
     var match_count = 0u;
     let light_count = u32(config.z_factors.z);
-
-    let max_lights_per_cluster = min(config.tiles.w, MAX_LOCAL_LIGHTS);
-    for (var i = 0u; i < light_count && match_count < max_lights_per_cluster; i = i + 1u) {
+    let offset = index * config.tiles.w;
+    let available = min(config.tiles.w, arrayLength(&light_index_list) - offset);
+    for (var i = 0u; i < light_count; i = i + 1u) {
         let light = lights[i];
         let view_position = (config.view * vec4<f32>(light.position_range.xyz, 1.0)).xyz;
         let radius = light.position_range.w;
         if (sphere_intersects_aabb(view_position, radius, aabb_min, aabb_max)) {
-            matches[match_count] = i;
+            if (match_count >= available) {
+                light_grid[index] = vec2<u32>(offset, 0xffffffffu);
+                return;
+            }
+            light_index_list[offset + match_count] = i;
             match_count = match_count + 1u;
         }
     }
 
-    let offset = index * config.tiles.w;
-    let capacity = arrayLength(&light_index_list);
-    let available = select(0u, capacity - offset, offset < capacity);
-    let stored_count = min(match_count, available);
-    for (var i = 0u; i < stored_count; i = i + 1u) {
-        light_index_list[offset + i] = matches[i];
-    }
-
-    light_grid[index] = vec2<u32>(offset, stored_count);
+    light_grid[index] = vec2<u32>(offset, match_count);
 }

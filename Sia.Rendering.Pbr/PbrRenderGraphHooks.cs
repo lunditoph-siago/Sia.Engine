@@ -8,7 +8,7 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-public static class PbrRenderGraphHooks
+public static partial class PbrRenderGraphHooks
 {
     private static readonly RenderGraphBufferKey _clusterConfigKey = new("pbr-cluster-config");
     private static readonly RenderGraphBufferKey _clusteredLightsKey = new("pbr-clustered-lights");
@@ -47,6 +47,10 @@ public static class PbrRenderGraphHooks
         PbrRenderer renderer,
         PbrViewState viewState)
     {
+        graph.UseImportedBuffer(AtmosphereGpuState.IrradianceKey,
+            new RenderGraphBufferDescriptor("ibl-sh", IblShGpu.Stride, RenderGraphBufferUsage.Uniform | RenderGraphBufferUsage.Storage));
+        graph.BindImportedBuffer(AtmosphereGpuState.IrradianceKey, viewState.Ibl.ShBuffer.GetWgpu<WGPUBuffer>());
+        AtmosphereGpuState.BuildGraph(ref graph, viewState);
         var prefilteredDescriptor = new RenderGraphTextureDescriptor(
             "ibl-prefiltered", RenderGraphTextureFormat.RGBA16Float,
             IblEnvironmentGpuStore.PrefilteredResolution, IblEnvironmentGpuStore.PrefilteredResolution,
@@ -76,7 +80,7 @@ public static class PbrRenderGraphHooks
 
         var lutPass = new RenderGraphPassKey("pbr-ibl-brdf-lut");
         var lutState = graph.UseState(() => new IblBrdfLutState());
-        lutState.Update(renderer);
+        lutState.Update(renderer, viewState);
         graph.UsePass(lutPass, "pbr-ibl-brdf-lut", lutState.Declare, lutState.Render);
     }
 
@@ -244,13 +248,14 @@ public static class PbrRenderGraphHooks
 
         public void Declare(RenderGraphPassDeclarationBuilder declaration) =>
             declaration
-                .Write(Color, RenderGraphTextureUsage.RenderAttachment)
-                .Write(Depth, RenderGraphTextureUsage.RenderAttachment)
+                .ReadWrite(Color, RenderGraphTextureUsage.RenderAttachment)
+                .ReadWrite(Depth, RenderGraphTextureUsage.RenderAttachment)
                 .Read(_clusterConfigKey, RenderGraphBufferUsage.Uniform)
                 .Read(_clusteredLightsKey, RenderGraphBufferUsage.Storage)
                 .Read(_lightGridKey, RenderGraphBufferUsage.Storage)
                 .Read(_lightIndexListKey, RenderGraphBufferUsage.Storage)
                 .Read(_shadowAtlasKey, RenderGraphTextureUsage.TextureBinding)
+                .Read(AtmosphereGpuState.IrradianceKey, RenderGraphBufferUsage.Uniform)
                 .Read(_iblPrefilteredKey, RenderGraphTextureUsage.TextureBinding)
                 .Read(_iblBrdfLutKey, RenderGraphTextureUsage.TextureBinding);
 
@@ -303,6 +308,7 @@ public static class PbrRenderGraphHooks
     {
         private PbrRenderer? _renderer;
         private PbrViewState? _viewState;
+        private ulong _renderedRevision;
 
         public string Name { get; } = $"pbr-ibl-prefilter-{face}-{mip}";
 
@@ -310,17 +316,28 @@ public static class PbrRenderGraphHooks
             PbrRenderer renderer,
             PbrViewState viewState)
         {
+            if (!ReferenceEquals(_viewState, viewState)) {
+                _renderedRevision = 0;
+            }
             _renderer = renderer;
             _viewState = viewState;
         }
 
-        public void Declare(RenderGraphPassDeclarationBuilder declaration) =>
+        public void Declare(RenderGraphPassDeclarationBuilder declaration)
+        {
             declaration.Write(
                 _iblPrefilteredKey, RenderGraphTextureUsage.RenderAttachment,
                 new RenderGraphTextureSubresourceRange((uint)mip, 1, (uint)face, 1));
+            if (_viewState!.ActiveAtmosphere is not null) {
+                AtmosphereGpuState.DeclareSkyRead(declaration);
+            }
+        }
 
         public void Render(WgpuReactiveRenderGraphPassContext context)
         {
+            if (_renderedRevision == _viewState!.EnvironmentRevision) {
+                return;
+            }
             var renderPass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphColorAttachment(
                     _iblPrefilteredKey, WGPULoadOp.Clear,
@@ -331,23 +348,37 @@ public static class PbrRenderGraphHooks
                 face,
                 mip,
                 renderPass);
+            _renderedRevision = _viewState.EnvironmentRevision;
         }
     }
 
     private sealed class IblBrdfLutState
     {
         private PbrRenderer? _renderer;
+        private PbrViewState? _viewState;
+        private bool _rendered;
 
-        public void Update(PbrRenderer renderer) => _renderer = renderer;
+        public void Update(PbrRenderer renderer, PbrViewState viewState)
+        {
+            if (!ReferenceEquals(_renderer, renderer) || !ReferenceEquals(_viewState, viewState)) {
+                _rendered = false;
+            }
+            _renderer = renderer;
+            _viewState = viewState;
+        }
 
         public void Declare(RenderGraphPassDeclarationBuilder declaration) =>
             declaration.Write(_iblBrdfLutKey, RenderGraphTextureUsage.RenderAttachment);
 
         public void Render(WgpuReactiveRenderGraphPassContext context)
         {
+            if (_rendered) {
+                return;
+            }
             var renderPass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphColorAttachment(_iblBrdfLutKey, WGPULoadOp.Clear, Cacheable: false));
             _renderer!.EncodeIblBrdfLut(renderPass);
+            _rendered = true;
         }
     }
 }

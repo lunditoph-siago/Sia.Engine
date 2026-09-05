@@ -8,16 +8,14 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-public sealed class PbrRenderer(
+public sealed partial class PbrRenderer(
     PbrDepthPrepassPipeline depthPipeline,
     ForwardPbrPipeline forwardPipeline,
     PbrClusterLightCullingPipeline cullingPipeline,
     PbrShadowDepthPipeline shadowDepthPipeline,
-    PbrIblPrecomputePipelines iblPipelines)
+    PbrIblPrecomputePipelines iblPipelines,
+    PbrOutputPipelines outputPipelines)
 {
-    private static readonly IEntityMatcher _directionalMatcher =
-        Matchers.Of<DirectionalLight, LightColor, GlobalTransform>();
-
     public PbrExtractedView ExtractFrame(
         PbrViewState state,
         in GpuFrame frame,
@@ -34,16 +32,13 @@ public sealed class PbrRenderer(
         state.Shadows.Refresh(frame.MainWorld, extractedShadowConfig, cameraEntity);
         state.Lights.Refresh(frame.MainWorld, state.Shadows);
 
-        var sunDirection = math.normalize(new float3(0.4f, 1.0f, 0.3f));
-        var sunColor = new float3(1.0f, 0.96f, 0.9f);
-        frame.MainWorld.Query(_directionalMatcher, entity => {
-            var lightColor = entity.Get<LightColor>();
-            sunDirection = -math.normalize(entity.Get<GlobalTransform>().Affine.RotationScale.c2);
-            sunColor = lightColor.Color * lightColor.Intensity;
-        });
-        var coefficients = state.IblBaked
-            ? null
-            : IrradianceSh.Project(direction => SkyColor(direction, sunDirection, sunColor));
+        var environment = frame.MainWorld.AcquireAddon<EnvironmentLighting>();
+        var sky = environment.Sky;
+        var atmosphere = environment.Atmosphere;
+        atmosphere?.Validate();
+        ArgumentNullException.ThrowIfNull(sky);
+        sky.Validate();
+        var coefficients = atmosphere is not null || state.PreparedSky == sky ? null : IrradianceSh.Project(sky.Evaluate);
         var allItems = cache.MeshHandles
             .Select(static (mesh, index) => new PbrDrawItem(mesh, index))
             .ToArray();
@@ -59,9 +54,9 @@ public sealed class PbrRenderer(
             cache.Data.ToArray(),
             allItems,
             visibleItems,
-            sunDirection,
-            sunColor,
-            coefficients);
+            sky,
+            coefficients,
+            atmosphere);
     }
 
     public void PrepareFrame(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted)
@@ -138,6 +133,16 @@ public sealed class PbrRenderer(
             EnsureIblPrefilterBindGroups(state, in frame);
             EnsureIblBindGroup(state, in frame);
         }
+        var wasAtmosphere = state.ActiveAtmosphere is not null;
+        state.ActiveAtmosphere = extracted.Atmosphere;
+        if (extracted.Atmosphere is { } atmosphere) {
+            state.Atmosphere ??= new AtmosphereGpuState(frame, state);
+            if (!state.Atmosphere.Prepare(frame, atmosphere, extracted.CameraMatrices, !wasAtmosphere)) {
+                return;
+            }
+        } else if (state.PreparedSky == extracted.Sky) {
+            return;
+        }
         var mipCount = IblEnvironmentGpuStore.PrefilteredMipCount;
         for (var face = 0; face < 6; face++) {
             for (var mip = 0; mip < mipCount; mip++) {
@@ -147,39 +152,17 @@ public sealed class PbrRenderer(
                     state.IblPrefilterParamsBuffers[face * mipCount + mip].GetWgpu<WGPUBuffer>(),
                     0,
                     [new IblPrefilterParamsGpu(
-                        new float4(roughness, mip == 0 ? 1 : 48, face, 0.0f),
-                        new float4(extracted.SkySunDirection, 0.0f),
-                        new float4(extracted.SkySunColor, 0.0f))]);
+                        new float4(roughness, mip == 0 ? 1 : 128, face, 0.0f),
+                        SkyUniformData.From(extracted.Sky))]);
             }
         }
-        if (!state.IblBaked && state.Ibl.IsValid) {
+        if (extracted.Atmosphere is null) {
             var coefficients = extracted.IrradianceCoefficients ??
-                throw new InvalidOperationException(
-                    "The extracted view does not contain irradiance coefficients.");
+                throw new InvalidOperationException("The extracted view does not contain irradiance coefficients.");
             state.Ibl.UploadSh(in frame, coefficients);
-            state.IblBaked = true;
         }
-    }
-
-    private const float _skyExposure = 0.25f;
-
-    private static float3 SkyColor(float3 dir, float3 sunDirection, float3 sunColor)
-    {
-        var horizon = new float3(0.55f, 0.6f, 0.68f);
-        var zenith = new float3(0.12f, 0.24f, 0.55f);
-        var ground = new float3(0.08f, 0.08f, 0.07f);
-        var up = System.Math.Clamp(dir.y, -1.0f, 1.0f);
-        var sky = math.lerp(horizon, zenith, System.Math.Clamp(up, 0.0f, 1.0f));
-        var baseColor = math.lerp(ground, sky, SmoothStep(-0.15f, 0.05f, up));
-        var sunAmount = MathF.Max(math.dot(dir, sunDirection), 0.0f);
-        var sunGlow = sunColor * MathF.Pow(sunAmount, 256.0f) * 8.0f;
-        return (baseColor + sunGlow) * _skyExposure;
-    }
-
-    private static float SmoothStep(float edge0, float edge1, float x)
-    {
-        var t = System.Math.Clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-        return t * t * (3.0f - 2.0f * t);
+        state.PreparedSky = extracted.Atmosphere is null ? extracted.Sky : null;
+        state.EnvironmentRevision++;
     }
 
     private static ClusterGridConfig Copy(ClusterGridConfig source) => new() {
@@ -205,6 +188,10 @@ public sealed class PbrRenderer(
         WgpuHandle<WGPURenderPassEncoder> renderPass)
     {
         var index = face * IblEnvironmentGpuStore.PrefilteredMipCount + mip;
+        if (state.ActiveAtmosphere is not null) {
+            state.Atmosphere!.EncodePrefilter(index, renderPass);
+            return;
+        }
         Wgpu.SetRenderPipeline(renderPass, iblPipelines.PrefilterPipeline.GetWgpu<WGPURenderPipeline>());
         Wgpu.SetBindGroup(renderPass, 0, state.IblPrefilterBindGroups[index].GetWgpu<WGPUBindGroup>());
         Wgpu.Draw(renderPass, vertexCount: 3);

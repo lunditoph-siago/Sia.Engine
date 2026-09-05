@@ -21,7 +21,7 @@
                       ReferenceOutputAssembly="false" />
     <PackageReference Include="Sia.GLFW" Version="0.0.4" />
     <PackageReference Include="Sia.GLFW.Native" Version="0.0.4" />
-    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.18" />
+    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.19" />
   </ItemGroup>
 
   <ItemGroup>

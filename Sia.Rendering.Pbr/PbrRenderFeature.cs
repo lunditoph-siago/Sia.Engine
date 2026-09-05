@@ -1,6 +1,8 @@
 using Sia.Engine.Camera;
 using Sia.Engine.Lighting;
 using Sia.Engine.Mesh;
+using Sia.RenderGraph;
+using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -50,6 +52,7 @@ public sealed class PbrRenderFeature :
         var extracted = context.View.Resources.GetRequired<PbrExtractedView>();
         Renderer.PrepareFrame(state, in frame, extracted);
         Renderer.PrepareLighting(state, in frame, extracted);
+        Renderer.PrepareOutput(state, in frame, extracted, Options.ExposureCompensation, Options.ToneMapping);
     }
 
     public void Queue(in RenderFeatureContext<RenderFrameContext> context)
@@ -72,6 +75,13 @@ public sealed class PbrRenderFeature :
         var shadowConfig = extracted.ShadowConfig;
         var phase = context.View.Phases.GetRequired<PbrDrawItem>(PbrRenderPhases.Opaque);
 
+        if (Options.HdrTarget == frameContext.ColorTarget) {
+            throw new InvalidOperationException("The HDR intermediate and output target must be distinct.");
+        }
+        graph.UseTexture(Options.HdrTarget, new RenderGraphTextureDescriptor(
+            "pbr-hdr", RenderGraphTextureFormat.RGBA16Float,
+            (uint)extracted.Viewport.Width, (uint)extracted.Viewport.Height));
+
         PbrRenderGraphHooks.UseClusterLightCullingPass(
             ref graph,
             Renderer,
@@ -82,6 +92,8 @@ public sealed class PbrRenderFeature :
             ref graph, Renderer, state, shadowConfig, extracted.AllItems);
         PbrRenderGraphHooks.UseIblPrecomputePasses(
             ref graph, Renderer, state);
+        PbrRenderGraphHooks.UseSkyboxPass(
+            ref graph, Renderer, state, Options.SkyboxPass, Options.HdrTarget);
         PbrRenderGraphHooks.UseDepthPrepass(
             ref graph,
             Renderer,
@@ -95,9 +107,12 @@ public sealed class PbrRenderFeature :
             state,
             phase,
             Options.ForwardPass,
-            frameContext.ColorTarget,
+            Options.HdrTarget,
             frameContext.DepthTarget,
-            frameContext.ColorLoadOp,
-            frameContext.ColorCacheable);
+            WGPULoadOp.Load);
+        var output = PbrRenderGraphHooks.UseAtmosphereComposite(
+            ref graph, state, extracted, Options, in frameContext);
+        PbrRenderGraphHooks.UseToneMappingPass(
+            ref graph, Renderer, state, Options.ToneMappingPass, output, in frameContext);
     }
 }

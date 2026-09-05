@@ -1,5 +1,6 @@
 using Sia;
 using Sia.Engine.Mesh;
+using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -39,5 +40,16 @@ public sealed class PbrViewState
 
     internal Entity IblBindGroup { get; set; }
 
-    internal bool IblBaked { get; set; }
+    internal ProceduralSky? PreparedSky { get; set; }
+
+    internal AtmosphereGpuState? Atmosphere { get; set; }
+    internal SkyAtmosphere? ActiveAtmosphere { get; set; }
+
+    internal ulong EnvironmentRevision { get; set; }
+
+    internal Entity SkyboxUniforms { get; set; }
+    internal Entity SkyboxBindGroup { get; set; }
+    internal Entity ToneMappingUniforms { get; set; }
+    internal Entity ToneMappingBindGroup { get; set; }
+    internal WgpuHandle<WGPUTextureView> ToneMappingSource { get; set; }
 }

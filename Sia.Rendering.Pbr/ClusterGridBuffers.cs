@@ -35,6 +35,7 @@ public sealed class ClusterGridBuffers
 
     public bool EnsureCapacity(in GpuFrame frame, ClusterGridConfig config)
     {
+        config.Validate();
         var clusterCount = config.ClusterCount;
         if (_configBuffer.IsValid
             && clusterCount == _configuredClusterCount
@@ -86,6 +87,13 @@ public sealed class ClusterGridBuffers
         uint framebufferWidth,
         uint framebufferHeight)
     {
+        config.Validate();
+        if (!float.IsFinite(near) || !float.IsFinite(far) || near <= 0 || far <= near) {
+            throw new ArgumentOutOfRangeException(nameof(near), "The clipping range must be finite and satisfy 0 < near < far.");
+        }
+        ArgumentOutOfRangeException.ThrowIfNegative(lightCount);
+        ArgumentOutOfRangeException.ThrowIfZero(framebufferWidth);
+        ArgumentOutOfRangeException.ThrowIfZero(framebufferHeight);
         var factorA = config.ZSlices / MathF.Log(far / near);
         var factorB = MathF.Log(near) * factorA;
 

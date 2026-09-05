@@ -47,6 +47,12 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(_initialWidth, _initialHeight);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
+        _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
+            Intensity = 0.35f
+        };
+        if (_pipeline == ScenePipeline.Atmosphere) {
+            _sceneWorld.AcquireAddon<EnvironmentLighting>().Atmosphere = new SkyAtmosphere();
+        }
 
         _sceneStage = SystemChain.Empty
             .Add<TransformSystem>()
@@ -56,7 +62,7 @@ internal sealed unsafe partial class SceneExampleApp
 
         BuildScene(meshRegistry);
 
-        if (_pipeline != ScenePipeline.Pbr) {
+        if (_pipeline is not (ScenePipeline.Pbr or ScenePipeline.Atmosphere)) {
             var pipeline = UnlitPipeline.Create(
                 _renderWorld.Entities,
                 _renderDevice,
@@ -77,16 +83,19 @@ internal sealed unsafe partial class SceneExampleApp
             _forwardPipelineCache,
             _renderGraphWorld!,
             _renderDevice,
-            _surfaceFormat,
+            PbrOutputPipelines.HdrFormat,
             WGPUTextureFormat.Depth32Float,
             ForwardPbrPipelineDescriptor.Default);
         _cullingPipeline = PbrClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice);
         _shadowDepthPipeline = PbrShadowDepthPipeline.Create(_renderGraphWorld!, _renderDevice);
         _iblPipelines = PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice);
         _sceneRenderer = new PbrRenderer(
-            _depthPipeline, _forwardPipeline, _cullingPipeline, _shadowDepthPipeline, _iblPipelines);
+            _depthPipeline, _forwardPipeline, _cullingPipeline, _shadowDepthPipeline, _iblPipelines,
+            PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer))
+            .Add(new PbrRenderFeature(_sceneRenderer, new PbrRenderFeatureOptions {
+                ExposureCompensation = _pipeline == ScenePipeline.Atmosphere ? -2 : 0
+            }))
             .Build();
     }
 
@@ -139,11 +148,15 @@ internal sealed unsafe partial class SceneExampleApp
             }
         }
 
-        var sunRotation = quaternion.LookRotation(math.normalize(new float3(0.4f, 1.0f, 0.3f)), new float3(0, 1, 0));
+        var atmosphere = world.AcquireAddon<EnvironmentLighting>().Atmosphere;
+        var sunDirection = atmosphere?.SunDirection ?? math.normalize(new float3(0.4f, 1.0f, 0.3f));
+        var sunRotation = quaternion.LookRotation(math.normalize(sunDirection), new float3(0, 1, 0));
+        var sunlight = atmosphere is null ? new LightColor(new float3(1.0f, 0.96f, 0.9f), 2.0f)
+            : new LightColor(atmosphere.EvaluateSunIrradiance(new float3(0, 1, 0)), 1);
         world.Create(HList.From(
             new DirectionalLight(),
             new ShadowCaster(),
-            new LightColor(new float3(1.0f, 0.96f, 0.9f), 0.6f),
+            sunlight,
             new Transform(float3.zero, sunRotation, new float3(1, 1, 1)),
             GlobalTransform.Identity,
             new Node<SceneGraph>(null)));
@@ -198,8 +211,9 @@ internal sealed unsafe partial class SceneExampleApp
     {
         _orbitAngle += deltaTime * _orbitSpeed;
 
-        var eye = new float3(0, _orbitHeight, _orbitRadius);
-        var rotation = quaternion.LookRotation(math.normalize(eye - float3.zero), new float3(0, 1, 0));
+        var eye = new float3(0, _pipeline == ScenePipeline.Atmosphere ? 3 : _orbitHeight, _orbitRadius);
+        var target = _pipeline == ScenePipeline.Atmosphere ? new float3(0, 2, 0) : float3.zero;
+        var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
         var world = _sceneWorld!;
         world.Execute(_camera, new Transform.SetPosition(eye));
