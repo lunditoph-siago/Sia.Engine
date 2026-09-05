@@ -8,34 +8,39 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public static class PbrShaderSource
 {
-    private const string ResourcePrefix = "Sia.Rendering.Pbr.Shaders.";
+    private const string k_ResourcePrefix = "Sia.Rendering.Pbr.Shaders.";
 
-    private static readonly string[] ModuleResourceNames = [
-        ResourcePrefix + "scene_common.wgsl",
-        ResourcePrefix + "clustered_forward.wgsl",
-        ResourcePrefix + "pbr_lighting.wgsl",
-        ResourcePrefix + "shadows.wgsl",
-        ResourcePrefix + "ibl.wgsl",
-        ResourcePrefix + "atmosphere.wgsl",
+    private static readonly string[] s_ModuleResourceNames = [
+        k_ResourcePrefix + "scene_common.wgsl",
+        k_ResourcePrefix + "clustered_forward.wgsl",
+        k_ResourcePrefix + "pbr_lighting.wgsl",
+        k_ResourcePrefix + "shadows.wgsl",
+        k_ResourcePrefix + "ibl.wgsl",
+        k_ResourcePrefix + "atmosphere.wgsl",
+        k_ResourcePrefix + "visibility_geometry.wgsl",
     ];
 
-    public static string LoadDepthPrepass() => Load(ResourcePrefix + "depth_prepass.wgsl");
+    public static string LoadDepthPrepass() => Load(k_ResourcePrefix + "depth_prepass.wgsl");
 
-    public static string LoadForwardPbr() => Load(ResourcePrefix + "forward_pbr.wgsl");
+    public static string LoadForwardPbr() => Load(k_ResourcePrefix + "forward_pbr.wgsl");
 
-    public static string LoadClusterLightCulling() => Load(ResourcePrefix + "cluster_light_culling.wgsl");
+    public static string LoadClusterLightCulling() => Load(k_ResourcePrefix + "cluster_light_culling.wgsl");
 
-    public static string LoadShadowDepth() => Load(ResourcePrefix + "shadow_depth.wgsl");
+    public static string LoadShadowDepth() => Load(k_ResourcePrefix + "shadow_depth.wgsl");
 
-    public static string LoadIblPrefilterSpecular() => Load(ResourcePrefix + "ibl_prefilter_specular.wgsl");
+    public static string LoadIblPrefilterSpecular() => Load(k_ResourcePrefix + "ibl_prefilter_specular.wgsl");
 
-    public static string LoadIblBrdfLut() => Load(ResourcePrefix + "ibl_brdf_lut.wgsl");
+    public static string LoadIblBrdfLut() => Load(k_ResourcePrefix + "ibl_brdf_lut.wgsl");
 
-    public static string LoadSkybox() => Load(ResourcePrefix + "skybox.wgsl");
+    public static string LoadSkybox() => Load(k_ResourcePrefix + "skybox.wgsl");
 
-    public static string LoadToneMapping() => Load(ResourcePrefix + "tone_mapping.wgsl");
+    public static string LoadToneMapping() => Load(k_ResourcePrefix + "tone_mapping.wgsl");
 
-    internal static string LoadAtmosphere(string name) => Load(ResourcePrefix + "atmosphere_" + name + ".wgsl");
+    internal static string LoadVisibilityRaster() => Load(k_ResourcePrefix + "visibility_raster.wgsl");
+
+    internal static string LoadVisibilityResolve() => Load(k_ResourcePrefix + "visibility_resolve.wgsl");
+
+    internal static string LoadAtmosphere(string name) => Load(k_ResourcePrefix + "atmosphere_" + name + ".wgsl");
 
     private static string Load(string entryResourceName)
     {
@@ -54,7 +59,7 @@ public static class PbrShaderSource
     private static Dictionary<string, string> BuildModuleRegistry()
     {
         var registry = new Dictionary<string, string>();
-        foreach (var resourceName in ModuleResourceNames) {
+        foreach (var resourceName in s_ModuleResourceNames) {
             var content = ReadResource(resourceName);
             var directives = WgslDirectiveParser.Parse(content);
             if (directives.ImportPath is { } importPath) {
