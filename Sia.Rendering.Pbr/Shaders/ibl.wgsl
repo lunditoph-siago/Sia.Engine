@@ -9,18 +9,21 @@ const IBL_SH_Y1: f32 = 0.488603;
 const IBL_SH_Y2MN: f32 = 1.092548;
 const IBL_SH_Y20: f32 = 0.315392;
 const IBL_SH_Y22: f32 = 0.546274;
-const IBL_SKY_EXPOSURE: f32 = 0.25;
+struct Sky {
+    horizon: vec4<f32>,
+    zenith: vec4<f32>,
+    ground: vec4<f32>,
+    sun_direction: vec4<f32>,
+    sun_radiance: vec4<f32>,
+};
 
-fn sky_color(dir: vec3<f32>, sun_dir: vec3<f32>, sun_color: vec3<f32>) -> vec3<f32> {
-    let horizon = vec3<f32>(0.55, 0.6, 0.68);
-    let zenith = vec3<f32>(0.12, 0.24, 0.55);
-    let ground = vec3<f32>(0.08, 0.08, 0.07);
+fn sky_color(dir: vec3<f32>, environment: Sky) -> vec3<f32> {
     let up = clamp(dir.y, -1.0, 1.0);
-    let sky = mix(horizon, zenith, clamp(up, 0.0, 1.0));
-    let base = mix(ground, sky, smoothstep(-0.15, 0.05, up));
-    let sun_amount = max(dot(dir, sun_dir), 0.0);
-    let sun_glow = sun_color * pow(sun_amount, 256.0) * 8.0;
-    return (base + sun_glow) * IBL_SKY_EXPOSURE;
+    let sky = mix(environment.horizon.rgb, environment.zenith.rgb, clamp(up, 0.0, 1.0));
+    let base = mix(environment.ground.rgb, sky, smoothstep(-0.15, 0.05, up));
+    let sun_amount = max(dot(dir, environment.sun_direction.xyz), 0.0);
+    let sun_glow = environment.sun_radiance.rgb * pow(sun_amount, environment.zenith.w);
+    return (base + sun_glow) * environment.horizon.w;
 }
 
 fn evaluate_sh_irradiance(sh: array<vec4<f32>, 9>, n: vec3<f32>) -> vec3<f32> {

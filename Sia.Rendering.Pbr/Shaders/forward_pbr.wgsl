@@ -43,7 +43,7 @@ struct IblSh {
 @group(2) @binding(3) var ibl_brdf_lut: texture_2d<f32>;
 @group(2) @binding(4) var ibl_brdf_lut_sampler: sampler;
 
-const IBL_PREFILTERED_MIP_COUNT: f32 = 7.0;
+const IBL_PREFILTERED_MIP_COUNT: f32 = 8.0;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,

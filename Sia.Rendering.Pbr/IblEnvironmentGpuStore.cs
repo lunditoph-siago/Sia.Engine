@@ -23,7 +23,7 @@ public readonly record struct IblShGpu(
 public sealed class IblEnvironmentGpuStore
 {
     public const uint PrefilteredResolution = 128;
-    public const int PrefilteredMipCount = 7;
+    public const int PrefilteredMipCount = 8;
     public const uint BrdfLutResolution = 128;
 
     private Entity _prefilteredTexture;
@@ -138,7 +138,7 @@ public sealed class IblEnvironmentGpuStore
         _shBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
-            Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc,
+            Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc,
             Size = IblShGpu.Stride,
             MappedAtCreation = 0
         });

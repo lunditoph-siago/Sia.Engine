@@ -9,9 +9,9 @@ using Sia.WebGPU;
 namespace Sia.Engine.Rendering.Pbr;
 
 [StructLayout(LayoutKind.Sequential)]
-public readonly record struct IblPrefilterParamsGpu(float4 Params, float4 SunDir, float4 SunColor)
+public readonly record struct IblPrefilterParamsGpu(float4 Params, SkyUniformData Sky)
 {
-    public const int Stride = 48;
+    public const int Stride = 16 + SkyUniformData.Stride;
 }
 
 internal static unsafe class IblPrefilterBindGroupLayout
@@ -114,7 +114,7 @@ public sealed unsafe class PbrIblPrecomputePipelines
         return Wgpu.CreatePipelineLayout(device, in descriptor);
     }
 
-    private static WgpuHandle<WGPURenderPipeline> CreateFullscreenPipeline(
+    internal static WgpuHandle<WGPURenderPipeline> CreateFullscreenPipeline(
         WgpuHandle<WGPUDevice> device,
         WgpuHandle<WGPUShaderModule> shaderModule,
         WgpuHandle<WGPUPipelineLayout> pipelineLayout,

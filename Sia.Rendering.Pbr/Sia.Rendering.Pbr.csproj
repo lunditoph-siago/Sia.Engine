@@ -22,5 +22,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Shaders/*.wgsl" />
+    <None Remove="THIRD-PARTY-NOTICES.txt" />
+    <None Include="THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

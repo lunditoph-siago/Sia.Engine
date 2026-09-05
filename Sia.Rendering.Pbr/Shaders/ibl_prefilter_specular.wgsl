@@ -1,9 +1,8 @@
-#import pbr::ibl::{sky_color, ibl_fullscreen_ndc, hammersley, importance_sample_ggx, cube_face_direction}
+#import pbr::ibl::{Sky, sky_color, ibl_fullscreen_ndc, hammersley, importance_sample_ggx, cube_face_direction}
 
 struct IblPrefilterParams {
     params: vec4<f32>,
-    sun_dir: vec4<f32>,
-    sun_color: vec4<f32>,
+    sky: Sky,
 };
 
 @group(0) @binding(0) var<uniform> prefilter: IblPrefilterParams;
@@ -28,7 +27,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let roughness = prefilter.params.x;
     let sample_count = max(u32(prefilter.params.y), 1u);
 
-    let n = cube_face_direction(face, input.ndc);
+    let n = cube_face_direction(face, input.ndc * vec2<f32>(1.0, -1.0));
     let v = n;
 
     var accumulated = vec3<f32>(0.0);
@@ -39,13 +38,13 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
         let l = normalize(2.0 * dot(v, h) * h - v);
         let n_dot_l = dot(n, l);
         if (n_dot_l > 0.0) {
-            accumulated += sky_color(l, prefilter.sun_dir.xyz, prefilter.sun_color.xyz) * n_dot_l;
+            accumulated += sky_color(l, prefilter.sky) * n_dot_l;
             total_weight += n_dot_l;
         }
     }
 
     if (total_weight <= 0.0) {
-        return vec4<f32>(sky_color(n, prefilter.sun_dir.xyz, prefilter.sun_color.xyz), 1.0);
+        return vec4<f32>(sky_color(n, prefilter.sky), 1.0);
     }
     return vec4<f32>(accumulated / total_weight, 1.0);
 }
