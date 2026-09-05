@@ -14,7 +14,7 @@ internal sealed partial class SceneExampleApp
     public async Task RunAsync()
     {
         await InitializeAsync();
-        Console.WriteLine("Sia.Engine browser scene example - Esc to close.");
+        Console.WriteLine($"Sia.Engine browser {_pipeline} example - Esc to close.");
         await RunAnimationFrameLoopAsync();
     }
 
@@ -46,7 +46,7 @@ internal sealed partial class SceneExampleApp
             new WindowDescriptor(
                 initialSize.Width,
                 initialSize.Height,
-                "Sia.Engine - Scene Example",
+                $"Sia.Engine - {_pipeline} Example",
                 Resizable: true),
             new GlfwWindowOptions(ClientApi.NoApi));
         _instance = Wgpu.CreateInstance();
