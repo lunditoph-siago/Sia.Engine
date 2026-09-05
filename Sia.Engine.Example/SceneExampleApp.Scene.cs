@@ -62,6 +62,11 @@ internal sealed unsafe partial class SceneExampleApp
 
         BuildScene(meshRegistry);
 
+        if (_pipeline is ScenePipeline.Visibility or ScenePipeline.VisibilityNormals or ScenePipeline.VisibilityUV) {
+            InitializeVisibility();
+            return;
+        }
+
         if (_pipeline is not (ScenePipeline.Pbr or ScenePipeline.Atmosphere)) {
             var pipeline = UnlitPipeline.Create(
                 _renderWorld.Entities,

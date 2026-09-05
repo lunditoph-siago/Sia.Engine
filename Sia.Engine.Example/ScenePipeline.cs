@@ -6,4 +6,7 @@ internal enum ScenePipeline
     Atmosphere,
     Unlit,
     Normals,
+    Visibility,
+    VisibilityNormals,
+    VisibilityUV,
 }
