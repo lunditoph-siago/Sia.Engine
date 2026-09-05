@@ -104,10 +104,14 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let cell = cluster_index(cluster_config, tile, slice);
     let cell_info = light_grid[cell];
     let offset = cell_info.x;
-    let count = cell_info.y;
+    let overflow = cell_info.y == 0xffffffffu;
+    let count = select(cell_info.y, u32(cluster_config.z_factors.z), overflow);
 
     for (var i = 0u; i < count; i = i + 1u) {
-        let light_index = light_index_list[offset + i];
+        var light_index = i;
+        if (!overflow) {
+            light_index = light_index_list[offset + i];
+        }
         let light = clustered_lights[light_index];
         let to_light = light.position_range.xyz - input.world_position;
         let distance = length(to_light);
