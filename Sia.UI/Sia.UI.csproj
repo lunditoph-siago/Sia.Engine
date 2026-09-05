@@ -16,9 +16,9 @@
   </ItemGroup>
 
   <ItemGroup Condition="!Exists('$(SiaGraphicsRepositoryPath)\Sia.Graphics\Sia.Graphics.csproj')">
-    <PackageReference Include="Sia.Graphics" Version="0.0.17" />
-    <PackageReference Include="Sia.RenderGraph" Version="0.0.17" />
-    <PackageReference Include="Sia.WebGPU" Version="0.0.17" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.18" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.18" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.18" />
   </ItemGroup>
 
   <ItemGroup>

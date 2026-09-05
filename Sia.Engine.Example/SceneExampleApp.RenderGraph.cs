@@ -1,7 +1,6 @@
 using Sia;
 using Sia.Engine.Rendering;
 using Sia.Graphics.Reactive;
-using Sia.Graphics.Rendering;
 using Sia.Reactive;
 using Sia.RenderGraph;
 using Sia.WebGPU;
@@ -13,6 +12,7 @@ internal sealed unsafe partial class SceneExampleApp
 {
     private static readonly RenderGraphTextureKey _surfaceKey = new("surface");
     private static readonly RenderGraphTextureKey _depthKey = new("depth");
+    private static readonly RenderViewKey _mainViewKey = new("main");
     private World? _renderGraphWorld;
     private WgpuRenderGraphRegistry? _renderGraph;
     private ReactiveMount<RenderGraphProps>? _renderGraphMount;
@@ -29,9 +29,29 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateRenderGraph(WgpuHandle<WGPUTexture> surfaceTexture)
     {
-        var frame = new GpuFrame(_sceneWorld!, _renderDevice, _renderQueue);
+        var frame = new GpuFrame(
+            _sceneWorld!,
+            _renderWorld!.Entities,
+            _renderDevice,
+            _renderQueue);
+        var frameContext = new RenderFrameContext(
+            frame,
+            _camera,
+            _surfaceKey,
+            _depthKey,
+            ColorCacheable: false);
+        var renderWorld = _renderWorld!;
+        var view = renderWorld.GetOrCreateView(_mainViewKey);
+        renderWorld.BeginFrame();
+        var featureContext = new RenderFeatureContext<RenderFrameContext>(
+            renderWorld,
+            view,
+            frameContext);
+        _renderPipeline!.Extract(in featureContext);
+        _renderPipeline.Prepare(in featureContext);
+        _renderPipeline.Queue(in featureContext);
         var props = new RenderGraphProps(
-            _renderGraph!, _renderPipeline!, frame, _camera,
+            _renderGraph!, _renderPipeline, featureContext,
             _framebufferWidth, _framebufferHeight, _surfaceFormat, surfaceTexture);
 
         if (_renderGraphMount is not { } mount) {
@@ -47,30 +67,24 @@ internal sealed unsafe partial class SceneExampleApp
 
     private static ReactiveNode RenderGraph(in RenderGraphProps props, ref Hooks hooks)
     {
-        var registry = props.Registry;
+        var graph = new RenderGraphBuildContext(ref hooks, props.Registry);
 
         var surfaceDescriptor = new RenderGraphTextureDescriptor(
             "surface", (RenderGraphTextureFormat)(int)props.SurfaceFormat,
             (uint)props.FramebufferWidth, (uint)props.FramebufferHeight,
             usage: RenderGraphTextureUsage.RenderAttachment);
-        hooks.UseImportedRenderGraphTexture(registry, _surfaceKey, surfaceDescriptor);
-        hooks.UseImportedRenderGraphTextureBinding(registry, _surfaceKey, props.SurfaceTexture);
+        graph.UseImportedTexture(_surfaceKey, surfaceDescriptor);
+        graph.BindImportedTexture(_surfaceKey, props.SurfaceTexture);
 
-        hooks.UseRenderGraphTexture(
-            registry, _depthKey,
+        graph.UseTexture(
+            _depthKey,
             new RenderGraphTextureDescriptor(
                 "depth", RenderGraphTextureFormat.Depth32Float,
                 (uint)props.FramebufferWidth, (uint)props.FramebufferHeight,
                 usage: RenderGraphTextureUsage.RenderAttachment));
 
-        var frame = props.Frame;
-        var context = new RenderFrameContext(
-            frame,
-            props.Camera,
-            _surfaceKey,
-            _depthKey,
-            ColorCacheable: false);
-        props.Pipeline.Configure(ref hooks, registry, in context);
+        var context = props.Context;
+        props.Pipeline.BuildRenderGraph(ref graph, in context);
 
         return SiaReactive.None;
     }
@@ -89,8 +103,7 @@ internal sealed unsafe partial class SceneExampleApp
     private readonly record struct RenderGraphProps(
         WgpuRenderGraphRegistry Registry,
         RenderFeaturePipeline<RenderFrameContext> Pipeline,
-        GpuFrame Frame,
-        Entity Camera,
+        RenderFeatureContext<RenderFrameContext> Context,
         int FramebufferWidth,
         int FramebufferHeight,
         WGPUTextureFormat SurfaceFormat,

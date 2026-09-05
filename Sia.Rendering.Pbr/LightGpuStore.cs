@@ -95,7 +95,7 @@ public sealed class LightGpuStore
         }
 
         if (!_directionalBuffer.IsValid) {
-            _directionalBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+            _directionalBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
                 NextInChain = null,
                 Label = default,
                 Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,
@@ -132,7 +132,7 @@ public sealed class LightGpuStore
         if (_clusteredBuffer.IsValid) {
             _clusteredBuffer.Destroy();
         }
-        _clusteredBuffer = frame.World.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
+        _clusteredBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
             NextInChain = null,
             Label = default,
             Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst,

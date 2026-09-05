@@ -5,7 +5,6 @@ using Sia.Engine.Lighting;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
-using Sia.Graphics.Rendering;
 using Sia.Math;
 using Sia.Reactors;
 using Sia.WebGPU;
@@ -26,10 +25,12 @@ internal sealed unsafe partial class SceneExampleApp
     private SystemStage? _sceneStage;
     private PbrDepthPrepassPipeline? _depthPipeline;
     private ForwardPbrPipeline? _forwardPipeline;
+    private PipelineCache<RenderPipelineKey, ForwardPbrPipeline>? _forwardPipelineCache;
     private PbrClusterLightCullingPipeline? _cullingPipeline;
     private PbrShadowDepthPipeline? _shadowDepthPipeline;
     private PbrIblPrecomputePipelines? _iblPipelines;
     private PbrRenderer? _sceneRenderer;
+    private RenderWorld? _renderWorld;
     private RenderFeaturePipeline<RenderFrameContext>? _renderPipeline;
     private Entity _camera;
     private float _orbitAngle;
@@ -37,9 +38,10 @@ internal sealed unsafe partial class SceneExampleApp
     private void InitializeScene()
     {
         _sceneWorld = new World();
+        _renderWorld = new RenderWorld();
 
-        var meshRegistry = _sceneWorld.AcquireAddon<MeshRegistry>();
-        _sceneWorld.AcquireAddon<MeshGpuStore>();
+        var meshRegistry = _renderWorld.Entities.AcquireAddon<MeshRegistry>();
+        _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
         _sceneWorld.AcquireAddon<PbrRenderCache>();
         _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(_initialWidth, _initialHeight);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
@@ -55,8 +57,14 @@ internal sealed unsafe partial class SceneExampleApp
 
         _depthPipeline = PbrDepthPrepassPipeline.Create(
             _renderGraphWorld!, _renderDevice, WGPUTextureFormat.Depth32Float);
-        _forwardPipeline = ForwardPbrPipeline.Create(
-            _renderGraphWorld!, _renderDevice, _surfaceFormat, WGPUTextureFormat.Depth32Float);
+        _forwardPipelineCache = new PipelineCache<RenderPipelineKey, ForwardPbrPipeline>();
+        _forwardPipeline = ForwardPbrPipeline.GetOrCreate(
+            _forwardPipelineCache,
+            _renderGraphWorld!,
+            _renderDevice,
+            _surfaceFormat,
+            WGPUTextureFormat.Depth32Float,
+            ForwardPbrPipelineDescriptor.Default);
         _cullingPipeline = PbrClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice);
         _shadowDepthPipeline = PbrShadowDepthPipeline.Create(_renderGraphWorld!, _renderDevice);
         _iblPipelines = PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice);
@@ -192,8 +200,12 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneStage = null;
         _sceneWorld?.Dispose();
         _sceneWorld = null;
+        _renderWorld?.Dispose();
+        _renderWorld = null;
         _depthPipeline = null;
         _forwardPipeline = null;
+        _forwardPipelineCache?.Dispose();
+        _forwardPipelineCache = null;
         _cullingPipeline = null;
         _shadowDepthPipeline = null;
         _sceneRenderer = null;
