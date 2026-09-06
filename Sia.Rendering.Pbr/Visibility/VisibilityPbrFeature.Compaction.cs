@@ -27,6 +27,14 @@ public sealed partial class VisibilityPbrFeature
 
     private static uint CompactionGroups(uint count) => (uint)System.Math.Max(1ul, ((ulong)count + 255) / 256);
 
+    private static uint CompactionCapacity(uint count)
+    {
+        var groups = CompactionGroups(count);
+        var words = groups;
+        while (groups > 1) { groups = CompactionGroups(groups); words = checked(words + groups); }
+        return words;
+    }
+
     private CompactionViewGpu CreateCompactionView(LodGpu lod, Entity state, Entity heap, Entity indirect,
         WGPULimits limits, List<Entity> acquired)
     {
