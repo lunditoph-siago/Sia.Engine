@@ -21,13 +21,13 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
         textureStore(hdr, pixel, vec4<f32>(0.015, 0.02, 0.03, 1.0));
         return;
     }
-    let instance_index = (id - 1u) / triangle_count;
-    if (instance_index >= arrayLength(&visibility_instances)) {
+    if (id > triangle_count) {
         textureStore(hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0));
         return;
     }
-    let triangle = (id - 1u) % triangle_count;
-    let instance = visibility_instances[instance_index];
+    let work = visibility_work[id - 1u];
+    let triangle = work.x;
+    let instance = visibility_instances[work.y];
     let a = visibility_vertex(triangle, 0u);
     let b = visibility_vertex(triangle, 1u);
     let c = visibility_vertex(triangle, 2u);
