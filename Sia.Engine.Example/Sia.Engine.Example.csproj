@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Assets/terrain.siapatch" LogicalName="Sia.Engine.Example.terrain.siapatch" />
     <Compile Remove="obj_browser\**" />
     <EmbeddedResource Remove="obj_browser\**" />
     <None Remove="obj_browser\**" />

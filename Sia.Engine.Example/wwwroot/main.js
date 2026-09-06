@@ -49,9 +49,12 @@ window.addEventListener('error', e => showError('[error] ' + (e.error?.stack ?? 
 window.addEventListener('unhandledrejection', e => showError('[unhandledrejection] ' + (e.reason?.stack ?? e.reason)));
 
 try {
-  const pipeline = new URLSearchParams(window.location.search).get('pipeline') ?? 'pbr';
+  const parameters = new URLSearchParams(window.location.search);
+  const pipeline = parameters.get('pipeline') ?? 'pbr';
+  const args = ['--pipeline', pipeline];
+  if (parameters.has('asset')) args.push('--asset', new URL(parameters.get('asset'), window.location.href).href);
   const { runMain, Module, setModuleImports } = await dotnet
-    .withApplicationArguments('--pipeline', pipeline)
+    .withApplicationArguments(...args)
     .create();
   Module.canvas = canvas;
   Module.print = console.log;
