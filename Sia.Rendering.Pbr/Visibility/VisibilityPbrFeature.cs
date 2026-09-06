@@ -72,12 +72,12 @@ public sealed partial class VisibilityPbrFeature :
 
     public static VisibilityPbrFeature CreateGpuLod(in GpuFrame frame, MeshPatchTree tree,
         ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded) =>
-        CreateLod(in frame, tree, instances, albedo, lod, outputFormat, mode, true);
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false) =>
+        CreateLod(in frame, tree, instances, albedo, lod, outputFormat, mode, true, enableGpuTiming);
 
     private static VisibilityPbrFeature CreateLod(in GpuFrame frame, MeshPatchTree tree,
         ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, bool gpuSelection)
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, bool gpuSelection, bool enableGpuTiming = false)
     {
         ArgumentNullException.ThrowIfNull(tree);
         if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
@@ -85,12 +85,13 @@ public sealed partial class VisibilityPbrFeature :
             throw new ArgumentOutOfRangeException(nameof(lod));
         }
         var (geometry, meshlets) = tree.CopyGeometry();
-        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod, gpuSelection);
+        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod, gpuSelection, enableGpuTiming);
     }
 
     private static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod, bool gpuSelection = false)
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
+        bool gpuSelection = false, bool enableGpuTiming = false)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(albedo);
@@ -130,6 +131,9 @@ public sealed partial class VisibilityPbrFeature :
             transforms[i] = transform;
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
+        if (enableGpuTiming && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.TimestampQuery) == 0) {
+            throw new ArgumentException("GPU timing requires the timestamp-query device feature.", nameof(enableGpuTiming));
+        }
         var queue = frame.Queue.GetWgpu<WGPUQueue>();
         var limits = Wgpu.GetLimits(device);
         var workSize = System.Math.Max(1u, capacity) * 16ul;
@@ -197,7 +201,7 @@ public sealed partial class VisibilityPbrFeature :
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
-            var gpuLod = gpuSelection ? CreateLodGpu(world, device, queue, tree!, (uint)instances.Length, lod, limits, acquired) : (LodGpu?)null;
+            var gpuLod = gpuSelection ? CreateLodGpu(world, device, queue, tree!, (uint)instances.Length, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
             return new(in frame, buffers, texture, view, sampler, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod);
         }

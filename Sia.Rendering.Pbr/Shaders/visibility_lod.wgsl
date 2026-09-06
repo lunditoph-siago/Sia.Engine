@@ -8,7 +8,7 @@ struct Instance {
 }
 struct Patch { minimum_error: vec4<f32>, maximum: vec4<f32>, children: vec4<u32>, geometry: vec4<u32> }
 struct Parameters { counts: vec4<u32>, budget: vec4<u32> }
-struct Status { draw: vec4<u32>, selection: vec4<u32>, post_draw: vec4<u32>, culling: vec4<u32> }
+struct Status { draw: vec4<u32>, selection: vec4<u32>, post_draw: vec4<u32>, culling: vec4<u32>, traversal: vec4<u32> }
 struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: array<vec4<u32>, 32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> parameters: Parameters;
@@ -21,6 +21,7 @@ struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: ar
 @group(1) @binding(0) var<uniform> hierarchy: Hierarchy;
 @group(1) @binding(1) var<storage, read> hzb: array<f32>;
 var<private> heap_size: u32;
+var<private> heap_peak: u32;
 
 fn finite(value: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(value) & vec4<u32>(0x7f800000u)) != vec4<u32>(0x7f800000u));
@@ -86,6 +87,7 @@ fn push(index: u32) {
     if (patches[index % parameters.counts.x].children.y == 0u || states[index].x <= parameters.budget.w) { return; }
     var position = heap_size;
     heap_size++;
+    heap_peak = max(heap_peak, heap_size);
     while (position > 0u) {
         let parent = (position - 1u) / 2u;
         if (!precedes(index, heap[parent])) { break; }
@@ -118,6 +120,9 @@ fn pop() -> u32 {
 @compute @workgroup_size(1)
 fn select_cut() {
     heap_size = 0u;
+    heap_peak = 0u;
+    var candidates = 0u;
+    var refinements = 0u;
     var totals = vec3<u32>(0u);
     for (var instance = 0u; instance < parameters.counts.z; instance++) {
         for (var root = 0u; root < parameters.counts.y; root++) {
@@ -131,11 +136,13 @@ fn select_cut() {
     var limited = unreachable;
     while (!unreachable && heap_size > 0u) {
         let index = pop();
+        candidates++;
         let node = patches[index % parameters.counts.x];
         let next = totals - vec3<u32>(1u, node.geometry.x, node.geometry.z)
             + vec3<u32>(node.children.y, node.children.z, node.children.w);
         if (any(next > parameters.budget.xyz)) { limited = true; continue; }
         totals = next;
+        refinements++;
         states[index].y = 0u;
         let base = (index / parameters.counts.x) * parameters.counts.x;
         for (var child = node.children.x; child < node.children.x + node.children.y; child++) {
@@ -153,6 +160,7 @@ fn select_cut() {
     }
     status.draw = vec4<u32>(offset * 3u, 1u, 0u, 0u);
     status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), maximum_error);
+    status.traversal = vec4<u32>(parameters.counts.x * parameters.counts.z, candidates, refinements, heap_peak);
 }
 
 @compute @workgroup_size(64)
