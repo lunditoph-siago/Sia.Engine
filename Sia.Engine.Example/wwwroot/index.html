@@ -43,16 +43,21 @@
   </style>
 </head>
 <body>
-  <canvas id="canvas" width="1280" height="720"></canvas>
+  <canvas id="canvas" width="1280" height="720" tabindex="0" aria-label="Interactive rendering viewport"></canvas>
   <nav aria-label="Rendering pipeline">
     <a href="?pipeline=pbr">PBR</a>
     <a href="?pipeline=unlit">Unlit</a>
     <a href="?pipeline=normals">World normals</a>
     <a href="?pipeline=visibility">Visibility</a>
     <a href="?pipeline=visibility-lod">Patch LOD</a>
-    <a href="?pipeline=visibility-lod&amp;scene=bunny">Stanford Bunny</a>
+    <a href="?pipeline=visibility-lod&amp;scene=bunny">Bunny wall</a>
     <a href="?pipeline=visibility-lod&amp;scene=plane">Vertical plane</a>
   </nav>
+  <aside id="inspection" hidden style="position:fixed;bottom:64px;left:12px;padding:12px 16px;background:#17202ee6;color:white;border-radius:8px;font:13px system-ui;pointer-events:none">
+    <div id="inspection-status"></div>
+    <div>W / S or &uarr; / &darr;: near / far &middot; Space: pause tour &middot; M: change view &middot; R: return near</div>
+    <div>Triangles: one color per drawn triangle, dark edges. M toggles ordinary shading.</div>
+  </aside>
   <a id="bunny-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/"
      style="position:fixed;bottom:12px;left:12px;color:white;background:#17202ee6;padding:8px;font:12px system-ui">
     Stanford Bunny &middot; Stanford University Computer Graphics Laboratory

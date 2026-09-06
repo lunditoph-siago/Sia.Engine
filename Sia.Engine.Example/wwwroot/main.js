@@ -1,6 +1,11 @@
 import { dotnet } from './_framework/dotnet.js';
 
 const canvas = document.getElementById('canvas');
+canvas.addEventListener('pointerdown', () => canvas.focus());
+
+function setInspectionStatus(status) {
+  document.getElementById('inspection-status').textContent = status;
+}
 
 function getCanvasWidth() {
   return Math.max(1, Math.round(window.innerWidth));
@@ -53,6 +58,11 @@ try {
   const pipeline = parameters.get('pipeline') ?? 'pbr';
   const args = ['--pipeline', pipeline];
   if (parameters.has('scene')) args.push('--scene', parameters.get('scene'));
+  if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
+  if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
+  if (pipeline === 'visibility-lod' && parameters.get('scene') === 'bunny') {
+    document.getElementById('inspection').hidden = false;
+  }
   if (pipeline === 'visibility-lod' && parameters.get('scene') === 'bunny' && !parameters.has('asset')) {
     document.getElementById('bunny-credit').hidden = false;
   }
@@ -63,7 +73,8 @@ try {
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight });
+  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, setInspectionStatus });
+  canvas.focus();
   await runMain();
 } catch (error) {
   console.error('[startup]', error);

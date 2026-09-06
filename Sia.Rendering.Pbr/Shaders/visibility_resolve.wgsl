@@ -10,6 +10,15 @@ fn safe_normalize(value: vec3<f32>) -> vec3<f32> {
     return value * inverseSqrt(max(dot(value, value), 1e-20));
 }
 
+fn structure_color(index: u32) -> vec3<f32> {
+    var hash = index + 1u;
+    hash = (hash ^ (hash >> 16u)) * 0x7feb352du;
+    hash = (hash ^ (hash >> 15u)) * 0x846ca68bu;
+    hash = hash ^ (hash >> 16u);
+    return vec3<f32>(0.2) + vec3<f32>(f32(hash & 255u), f32((hash >> 8u) & 255u),
+        f32((hash >> 16u) & 255u)) * (0.8 / 255.0);
+}
+
 @compute @workgroup_size(8, 8)
 fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let size = visibility_camera.size_counts.xy;
@@ -53,6 +62,18 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let bary = weights / denominator;
     let dx = vec3<f32>(cofactor_a.x, cofactor_b.x, cofactor_c.x) * (2.0 / f32(size.x));
     let dy = vec3<f32>(cofactor_a.y, cofactor_b.y, cofactor_c.y) * (-2.0 / f32(size.y));
+    let mode = visibility_camera.size_counts.w;
+    if (mode == 4u) {
+        let gradient_x = (dx - bary * dot(dx, vec3<f32>(1.0))) / denominator;
+        let gradient_y = (dy - bary * dot(dy, vec3<f32>(1.0))) / denominator;
+        let edge_distance = abs(bary) / max(sqrt(gradient_x * gradient_x + gradient_y * gradient_y), vec3<f32>(1e-20));
+        let interior = smoothstep(0.35, 1.1, min(edge_distance.x, min(edge_distance.y, edge_distance.z)));
+        let normal = safe_normalize(cross(world_b.xyz - world_a.xyz, world_c.xyz - world_a.xyz));
+        let facing = 0.65 + 0.35 * abs(dot(normal, safe_normalize(visibility_camera.eye.xyz - world_a.xyz)));
+        let color = structure_color(triangle) * facing;
+        textureStore(hdr, pixel, vec4<f32>(mix(color * 0.2, color, interior), 1.0));
+        return;
+    }
     let uv = a.uv.xy * bary.x + b.uv.xy * bary.y + c.uv.xy * bary.z;
     let uv_dx = (a.uv.xy * dx.x + b.uv.xy * dx.y + c.uv.xy * dx.z
         - uv * dot(dx, vec3<f32>(1.0))) / denominator;
@@ -62,7 +83,6 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let local_normal = a.normal.xyz * bary.x + b.normal.xyz * bary.y + c.normal.xyz * bary.z;
     let normal = safe_normalize((instance.normal_transform * vec4<f32>(local_normal, 0.0)).xyz);
     let position = world_a.xyz * bary.x + world_b.xyz * bary.y + world_c.xyz * bary.z;
-    let mode = visibility_camera.size_counts.w;
     var color = base_color;
     if (mode == 0u) {
         color = direct_lighting(normal, safe_normalize(visibility_camera.eye.xyz - position),
