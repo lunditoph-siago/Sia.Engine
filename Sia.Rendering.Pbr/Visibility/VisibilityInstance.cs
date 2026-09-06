@@ -9,7 +9,8 @@ public enum VisibilityDebugMode
     Shaded,
     Normals,
     UV,
-    Albedo
+    Albedo,
+    Triangles
 }
 
 public sealed record VisibilityAlbedo(uint Width, uint Height, ReadOnlyMemory<byte>[] MipLevels);
