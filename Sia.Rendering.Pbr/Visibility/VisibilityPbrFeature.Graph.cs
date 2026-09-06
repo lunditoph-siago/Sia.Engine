@@ -1,4 +1,5 @@
 using Sia;
+using Sia.Engine.Mesh;
 using Sia.Graphics.Reactive;
 using Sia.Math;
 using Sia.RenderGraph;
@@ -14,6 +15,7 @@ public sealed partial class VisibilityPbrFeature
     ];
     private static readonly RenderGraphBufferKey s_CameraKey = new("visibility-camera");
     private static readonly RenderGraphBufferKey s_IndirectKey = new("visibility-indirect");
+    private static readonly RenderGraphBufferKey s_WorkKey = new("visibility-work");
     private static readonly RenderGraphBufferKey s_OutputKey = new("visibility-output-params");
     private static readonly RenderGraphTextureKey s_AlbedoKey = new("visibility-albedo");
 
@@ -29,7 +31,8 @@ public sealed partial class VisibilityPbrFeature
             view.Width, view.Height));
         ImportBuffer(ref graph, s_CameraKey, view.Uniform, RenderGraphBufferUsage.Uniform);
         ImportBuffer(ref graph, s_OutputKey, view.OutputUniform, RenderGraphBufferUsage.Uniform);
-        ImportBuffer(ref graph, s_IndirectKey, _indirect, RenderGraphBufferUsage.Indirect);
+        ImportBuffer(ref graph, s_IndirectKey, view.Indirect, RenderGraphBufferUsage.Indirect);
+        ImportBuffer(ref graph, s_WorkKey, view.WorkBuffer, RenderGraphBufferUsage.Storage);
         for (var i = 0; i < _geometry.Length; i++) {
             ImportBuffer(ref graph, s_GeometryKeys[i], _geometry[i], RenderGraphBufferUsage.Storage);
         }
@@ -59,11 +62,15 @@ public sealed partial class VisibilityPbrFeature
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
-            var entries = new WGPUBindGroupEntry[6];
+            var workItems = new uint4[checked((int)TriangleCapacity)];
+            var workBuffer = Upload<uint4>(_world, device, queue, workItems, WGPUBufferUsage.Storage, limits, acquired);
+            var indirect = Upload<uint>(_world, device, queue, [0, 1, 0, 0], WGPUBufferUsage.Indirect, limits, acquired);
+            var entries = new WGPUBindGroupEntry[7];
             entries[0] = BufferEntry(0, uniform);
             for (var i = 0; i < _geometry.Length; i++) { entries[i + 1] = BufferEntry((uint)i + 1, _geometry[i]); }
+            entries[6] = BufferEntry(6, workBuffer);
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
-            return new(this, uniform, outputUniform, group);
+            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems);
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -100,12 +107,19 @@ public sealed partial class VisibilityPbrFeature
         }
     }
 
-    private sealed class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group)
+    private sealed class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group,
+        Entity workBuffer, Entity indirect, uint4[] workItems)
     {
         public VisibilityPbrFeature Owner { get; } = owner;
         public Entity Uniform { get; } = uniform;
         public Entity OutputUniform { get; } = outputUniform;
         public Entity Group { get; } = group;
+        public Entity WorkBuffer { get; } = workBuffer;
+        public Entity Indirect { get; } = indirect;
+        public uint4[] WorkItems { get; } = workItems;
+        public uint WorkCount { get; set; }
+        public bool WorkInitialized { get; set; }
+        public MeshPatchSelection? Selection { get; set; }
         public RenderFrameContext Frame { get; set; }
         public uint Width { get; set; }
         public uint Height { get; set; }
@@ -118,6 +132,7 @@ public sealed partial class VisibilityPbrFeature
         private static void ReadGeometry(RenderGraphPassDeclarationBuilder declaration)
         {
             declaration.Read(s_CameraKey, RenderGraphBufferUsage.Uniform);
+            declaration.Read(s_WorkKey, RenderGraphBufferUsage.Storage);
             foreach (var key in s_GeometryKeys) { declaration.Read(key, RenderGraphBufferUsage.Storage); }
         }
 
@@ -136,7 +151,7 @@ public sealed partial class VisibilityPbrFeature
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, WGPULoadOp.Clear));
             Wgpu.SetRenderPipeline(pass, Owner._raster.GetWgpu<WGPURenderPipeline>());
             Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-            Wgpu.DrawIndirect(pass, Owner._indirect.GetWgpu<WGPUBuffer>(), 0);
+            Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), 0);
         }
 
         public void DeclareResolve(RenderGraphPassDeclarationBuilder declaration)

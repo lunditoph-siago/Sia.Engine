@@ -62,6 +62,11 @@ internal sealed unsafe partial class SceneExampleApp
 
         BuildScene(meshRegistry);
 
+        if (_pipeline == ScenePipeline.VisibilityLod) {
+            InitializePatchLod();
+            return;
+        }
+
         if (_pipeline is ScenePipeline.Visibility or ScenePipeline.VisibilityNormals or ScenePipeline.VisibilityUV) {
             InitializeVisibility();
             return;
@@ -217,6 +222,10 @@ internal sealed unsafe partial class SceneExampleApp
         _orbitAngle += deltaTime * _orbitSpeed;
 
         var eye = new float3(0, _pipeline == ScenePipeline.Atmosphere ? 3 : _orbitHeight, _orbitRadius);
+        if (_pipeline == ScenePipeline.VisibilityLod) {
+            var distance = 22 + 12 * MathF.Sin(_orbitAngle);
+            eye = new float3(0, distance * 0.65f, distance);
+        }
         var target = _pipeline == ScenePipeline.Atmosphere ? new float3(0, 2, 0) : float3.zero;
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
