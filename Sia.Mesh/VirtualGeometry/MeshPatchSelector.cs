@@ -9,7 +9,8 @@ public static class MeshPatchSelector
     {
         ArgumentNullException.ThrowIfNull(tree);
         if (width == 0 || height == 0 || !float.IsFinite(targetPixelError) || targetPixelError < 0
-            || budget.MaxPatches < 0 || budget.MaxMeshlets < 0 || budget.MaxTriangles < 0 || budget.MaxRefinementCandidates < 0) {
+            || budget.MaxPatches < 0 || budget.MaxMeshlets < 0 || budget.MaxTriangles < 0
+            || budget.MaxRefinementCandidates < 0 || budget.MaxRefinementNodes < 0) {
             throw new ArgumentOutOfRangeException(nameof(budget), "Selection requires a viewport, a finite nonnegative error target, and nonnegative budgets.");
         }
         foreach (var matrix in objectToClip) {
@@ -39,6 +40,7 @@ public static class MeshPatchSelector
         var unreachable = patches > budget.MaxPatches || meshlets > budget.MaxMeshlets || triangles > budget.MaxTriangles;
         var limited = unreachable;
         var examined = 0;
+        var remainingNodes = budget.MaxRefinementNodes;
         while (!unreachable && candidates.Count > 0) {
             if (examined == budget.MaxRefinementCandidates) { limited = true; break; }
             var index = candidates.Dequeue();
@@ -46,6 +48,7 @@ public static class MeshPatchSelector
             var patch = index % nodes.Length;
             var instance = index / nodes.Length;
             var node = nodes[patch];
+            if (node.ChildCount > remainingNodes) { limited = true; continue; }
             long childMeshlets = 0;
             long childTriangles = 0;
             for (var c = node.ChildOffset; c < node.ChildOffset + node.ChildCount; c++) {
@@ -60,6 +63,7 @@ public static class MeshPatchSelector
                 continue;
             }
             selected[index] = false;
+            remainingNodes -= node.ChildCount;
             patches = nextPatches;
             meshlets = nextMeshlets;
             triangles = nextTriangles;
@@ -85,7 +89,7 @@ public static class MeshPatchSelector
 
     private static float ProjectError(in MeshPatchNode node, in float4x4 matrix, uint width, uint height)
     {
-        if (node.EstimatedSpatialError == 0) { return 0; }
+        if (node.EstimatedSpatialError == 0 || OutsideFrustum(node.Bounds, matrix)) { return 0; }
         double minW = double.PositiveInfinity;
         double minZ = double.PositiveInfinity;
         double maxX = 0, maxY = 0;
@@ -107,6 +111,28 @@ public static class MeshPatchSelector
         var dx = error * (Length(matrix.c0.x, matrix.c1.x, matrix.c2.x) + maxX * Length(matrix.c0.w, matrix.c1.w, matrix.c2.w));
         var dy = error * (Length(matrix.c0.y, matrix.c1.y, matrix.c2.y) + maxY * Length(matrix.c0.w, matrix.c1.w, matrix.c2.w));
         return (float)(0.5 * System.Math.Max(width * dx, height * dy) / (minW - wError));
+    }
+
+    private static bool OutsideFrustum(in Aabb bounds, in float4x4 matrix)
+    {
+        var outside = 63;
+        for (var corner = 0; corner < 8; corner++) {
+            var point = new float4((corner & 1) == 0 ? bounds.Min.x : bounds.Max.x,
+                (corner & 2) == 0 ? bounds.Min.y : bounds.Max.y,
+                (corner & 4) == 0 ? bounds.Min.z : bounds.Max.z, 1);
+            var clip = math.mul(matrix, point);
+            if (!Finite(clip)) { return false; }
+            var magnitude = MathF.Max(MathF.Max(MathF.Abs(clip.x), MathF.Abs(clip.y)), MathF.Max(MathF.Abs(clip.z), MathF.Abs(clip.w)));
+            if (magnitude < 1.17549435e-38f || magnitude > 8.50705917e37f) { return false; }
+            clip /= magnitude;
+            if (clip.x + clip.w >= -1e-5f) { outside &= ~1; }
+            if (clip.w - clip.x >= -1e-5f) { outside &= ~2; }
+            if (clip.y + clip.w >= -1e-5f) { outside &= ~4; }
+            if (clip.w - clip.y >= -1e-5f) { outside &= ~8; }
+            if (clip.z >= -1e-5f) { outside &= ~16; }
+            if (clip.w - clip.z >= -1e-5f) { outside &= ~32; }
+        }
+        return outside != 0;
     }
 
     private static double Length(double x, double y, double z) => System.Math.Sqrt(x * x + y * y + z * z);

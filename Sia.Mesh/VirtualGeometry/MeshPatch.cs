@@ -12,11 +12,18 @@ public readonly record struct MeshPatchNode(
 public readonly record struct MeshPatchBudget(int MaxPatches, int MaxMeshlets, int MaxTriangles)
 {
     private readonly int? _maxRefinementCandidates;
+    private readonly int? _maxRefinementNodes;
 
     public int MaxRefinementCandidates
     {
         get => _maxRefinementCandidates ?? int.MaxValue;
         init => _maxRefinementCandidates = value == int.MaxValue ? null : value;
+    }
+
+    public int MaxRefinementNodes
+    {
+        get => _maxRefinementNodes ?? int.MaxValue;
+        init => _maxRefinementNodes = value == int.MaxValue ? null : value;
     }
 }
 

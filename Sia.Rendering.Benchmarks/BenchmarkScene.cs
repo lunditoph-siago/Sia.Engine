@@ -28,6 +28,7 @@ internal sealed class BenchmarkScene : IDisposable
     private readonly uint _width, _height;
     private readonly ulong _readbackSize;
     private readonly int _refinementBudget;
+    private readonly ulong _projectionBudget;
     private RenderFeatureContext<RenderFrameContext> _context;
     private ReactiveMount<GraphProps>? _mount;
 
@@ -39,6 +40,7 @@ internal sealed class BenchmarkScene : IDisposable
     {
         _gpu = gpu; _width = width; _height = height;
         _refinementBudget = budget.MaxRefinementCandidates;
+        _projectionBudget = (ulong)tree.RootCount * (uint)instances.Length + (uint)budget.MaxRefinementNodes;
         try {
             _frame = new(_main, _render.Entities,
                 _render.Entities.OwnWgpu(gpu.Device, static (ref WgpuHandle<WGPUDevice> _) => { }),
@@ -87,7 +89,8 @@ internal sealed class BenchmarkScene : IDisposable
         _gpu.CheckErrors();
         if (status[0] % 3 != 0 || status[8] % 3 != 0 || status[1] != 1 || status[9] != 1 || status[10] != status[0]
             || ((ulong)status[0] + status[8]) / 3 > status[12] || status[12] > _feature.TriangleCapacity
-            || status[18] > status[17] || status[17] > status[16] || status[19] > status[16] || status[17] > _refinementBudget) {
+            || status[18] > status[17] || status[17] > status[16] || status[19] > status[16]
+            || status[17] > _refinementBudget || status[16] > _projectionBudget) {
             throw new InvalidOperationException("GPU statistics violate the visibility work-list contract.");
         }
         Dictionary<string, double>? durations = null;

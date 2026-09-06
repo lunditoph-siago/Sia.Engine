@@ -22,6 +22,7 @@ struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: ar
 @group(1) @binding(1) var<storage, read> hzb: array<f32>;
 var<private> heap_size: u32;
 var<private> heap_peak: u32;
+var<workgroup> frontier: vec3<u32>;
 
 fn finite(value: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(value) & vec4<u32>(0x7f800000u)) != vec4<u32>(0x7f800000u));
@@ -75,8 +76,15 @@ fn projected_error(node: Patch, source_matrix: mat4x4<f32>) -> u32 {
 fn project(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
     if (index >= parameters.counts.x * parameters.counts.z) { return; }
+    states[index] = vec4<u32>(0u);
+    if (index % parameters.counts.x < parameters.counts.y) { states[index] = project_node(index); }
+}
+
+fn project_node(index: u32) -> vec4<u32> {
+    let node = patches[index % parameters.counts.x];
     let matrix = camera.view_projection * instances[index / parameters.counts.x].transform;
-    states[index] = vec4<u32>(projected_error(patches[index % parameters.counts.x], matrix), 0u, 0u, 0u);
+    if (outside_frustum(node, matrix)) { return vec4<u32>(0u, 1u, 0u, 1u); }
+    return vec4<u32>(projected_error(node, matrix), 1u, 0u, 0u);
 }
 
 fn precedes(a: u32, b: u32) -> bool {
@@ -117,45 +125,66 @@ fn pop() -> u32 {
     return result;
 }
 
-@compute @workgroup_size(1)
-fn select_cut() {
-    heap_size = 0u;
-    heap_peak = 0u;
+@compute @workgroup_size(64)
+fn select_cut(@builtin(local_invocation_index) lane: u32) {
     var candidates = 0u;
     var refinements = 0u;
+    var refined_nodes = 0u;
     var totals = vec3<u32>(0u);
-    for (var instance = 0u; instance < parameters.counts.z; instance++) {
-        for (var root = 0u; root < parameters.counts.y; root++) {
-            let index = instance * parameters.counts.x + root;
-            states[index].y = 1u;
-            totals += vec3<u32>(1u, patches[root].geometry.x, patches[root].geometry.z);
-            push(index);
+    var unreachable = false;
+    var limited = false;
+    if (lane == 0u) {
+        heap_size = 0u;
+        heap_peak = 0u;
+        for (var instance = 0u; instance < parameters.counts.z; instance++) {
+            for (var root = 0u; root < parameters.counts.y; root++) {
+                let index = instance * parameters.counts.x + root;
+                totals += vec3<u32>(1u, patches[root].geometry.x, patches[root].geometry.z);
+                push(index);
+            }
+        }
+        unreachable = any(totals > parameters.budget.xyz);
+        limited = unreachable;
+    }
+    loop {
+        if (lane == 0u) {
+            frontier = vec3<u32>(0u);
+            while (!unreachable && heap_size > 0u) {
+                if (candidates == parameters.traversal.x) { limited = true; break; }
+                let index = pop();
+                candidates++;
+                let node = patches[index % parameters.counts.x];
+                let next = totals - vec3<u32>(1u, node.geometry.x, node.geometry.z)
+                    + vec3<u32>(node.children.y, node.children.z, node.children.w);
+                if (any(next > parameters.budget.xyz) || node.children.y > parameters.traversal.y - refined_nodes) {
+                    limited = true;
+                    continue;
+                }
+                totals = next;
+                refinements++;
+                refined_nodes += node.children.y;
+                frontier = vec3<u32>(index, (index / parameters.counts.x) * parameters.counts.x + node.children.x, node.children.y);
+                break;
+            }
+        }
+        let next = workgroupUniformLoad(&frontier);
+        if (next.z == 0u) { break; }
+        for (var child = lane; child < next.z; child += 64u) {
+            states[next.y + child] = project_node(next.y + child);
+        }
+        storageBarrier();
+        if (lane == 0u) {
+            states[next.x].y = 0u;
+            for (var child = 0u; child < next.z; child++) { push(next.y + child); }
         }
     }
-    let unreachable = any(totals > parameters.budget.xyz);
-    var limited = unreachable;
-    while (!unreachable && heap_size > 0u) {
-        if (candidates == parameters.traversal.x) { limited = true; break; }
-        let index = pop();
-        candidates++;
-        let node = patches[index % parameters.counts.x];
-        let next = totals - vec3<u32>(1u, node.geometry.x, node.geometry.z)
-            + vec3<u32>(node.children.y, node.children.z, node.children.w);
-        if (any(next > parameters.budget.xyz)) { limited = true; continue; }
-        totals = next;
-        refinements++;
-        states[index].y = 0u;
-        let base = (index / parameters.counts.x) * parameters.counts.x;
-        for (var child = node.children.x; child < node.children.x + node.children.y; child++) {
-            states[base + child].y = 1u;
-            push(base + child);
-        }
+    if (lane == 0u) {
+        status.draw = vec4<u32>(totals.z * 3u, 1u, 0u, 0u);
+        status.post_draw = vec4<u32>(0u, 1u, 0u, 0u);
+        status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), 0u);
+        status.culling = vec4<u32>(totals.z, 0u, 0u, 0u);
+        status.traversal = vec4<u32>(parameters.counts.y * parameters.counts.z + refined_nodes, candidates, refinements, heap_peak);
     }
-    status.draw = vec4<u32>(totals.z * 3u, 1u, 0u, 0u);
-    status.post_draw = vec4<u32>(0u, 1u, 0u, 0u);
-    status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), 0u);
-    status.culling = vec4<u32>(totals.z, 0u, 0u, 0u);
-    status.traversal = vec4<u32>(parameters.counts.x * parameters.counts.z, candidates, refinements, heap_peak);
 }
 
 @compute @workgroup_size(64)
@@ -178,7 +207,7 @@ fn outside_frustum(node: Patch, matrix: mat4x4<f32>) -> bool {
         var clip = matrix * vec4<f32>(point, 1.0);
         if (!finite(clip)) { return false; }
         let magnitude = max(max(abs(clip.x), abs(clip.y)), max(abs(clip.z), abs(clip.w)));
-        if (magnitude == 0.0) { return false; }
+        if (magnitude < 1.17549435e-38 || magnitude > 8.50705917e37) { return false; }
         clip /= magnitude;
         outside_xy &= vec4<f32>(clip.x + clip.w, clip.w - clip.x, clip.y + clip.w, clip.w - clip.y) < vec4<f32>(-1e-5);
         outside_z &= vec2<f32>(clip.z, clip.w - clip.z) < vec2<f32>(-1e-5);
@@ -228,10 +257,9 @@ fn occluded(node: Patch, matrix: mat4x4<f32>) -> bool {
 fn cull_main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
     if (index >= parameters.counts.x * parameters.counts.z) { return; }
-    if (states[index].y == 0u) { return; }
+    if (states[index].y == 0u || states[index].w == 1u) { return; }
     let node = patches[index % parameters.counts.x];
     let transform = instances[index / parameters.counts.x].transform;
-    if (outside_frustum(node, camera.view_projection * transform)) { states[index].w = 1u; return; }
     if (hierarchy.size.w != 0u) {
         if (occluded(node, hierarchy.previous_projection * transform)) { states[index].w = 2u; }
     }

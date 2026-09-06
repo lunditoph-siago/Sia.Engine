@@ -10,9 +10,10 @@ var warmup = 10;
 var frames = 30;
 var timing = true;
 var refinementBudget = int.MaxValue;
+var refinementNodes = int.MaxValue;
 for (var i = 0; i < args.Length; i++) {
     if (args[i] == "--no-timing") { timing = false; continue; }
-    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale|instances, --output PATH, --warmup N, --frames N, --refinement-budget N, or --no-timing."); }
+    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale|instances, --output PATH, --warmup N, --frames N, --refinement-budget N, --refinement-nodes N, or --no-timing."); }
     var name = args[i++];
     switch (name) {
         case "--suite": suite = args[i]; break;
@@ -20,10 +21,11 @@ for (var i = 0; i < args.Length; i++) {
         case "--warmup": warmup = int.Parse(args[i]); break;
         case "--frames": frames = int.Parse(args[i]); break;
         case "--refinement-budget": refinementBudget = int.Parse(args[i]); break;
+        case "--refinement-nodes": refinementNodes = int.Parse(args[i]); break;
         default: throw new ArgumentException("Unknown option: " + name);
     }
 }
-if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1 || refinementBudget < 0) {
+if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1 || refinementBudget < 0 || refinementNodes < 0) {
     throw new ArgumentException("Invalid suite, frame counts, or refinement budget.");
 }
 #if DEBUG
@@ -45,7 +47,8 @@ foreach (var size in sizes) {
         foreach (var scenario in scenarios) {
             var instances = Assets.Instances(scenario);
             var minimumResidentTriangleBytes = checked((ulong)sourceTriangles * 16);
-            var input = new CaseInput(size, sourceTriangles, instances.Length, scenario, resolution.Width, resolution.Height, 18000, refinementBudget);
+            var input = new CaseInput(size, sourceTriangles, instances.Length, scenario, resolution.Width, resolution.Height,
+                18000, refinementBudget, refinementNodes);
             if (minimumResidentTriangleBytes > gpu.Limits.MaxStorageBufferBindingSize || minimumResidentTriangleBytes > gpu.Limits.MaxBufferSize) {
                 results.Add(new(input, "capacity-rejected", $"Resident triangle records alone require at least {minimumResidentTriangleBytes} bytes before parent representations; device limits are {gpu.Limits.MaxStorageBufferBindingSize} storage binding / {gpu.Limits.MaxBufferSize} buffer bytes.", null, null, null));
                 Console.WriteLine($"{sourceTriangles} triangles / {scenario}: capacity-rejected ({minimumResidentTriangleBytes} minimum resident triangle bytes)");
@@ -62,7 +65,9 @@ foreach (var size in sizes) {
                 tree.Nodes.Span[..tree.RootCount].ToArray().Sum(n => n.TriangleCount), tree.Nodes.ToArray().Sum(n => (long)n.TriangleCount));
             try {
                 using var scene = new BenchmarkScene(gpu, tree, instances, resolution.Width, resolution.Height,
-                    new(int.MaxValue, int.MaxValue, input.TriangleBudget) { MaxRefinementCandidates = input.RefinementBudget });
+                    new(int.MaxValue, int.MaxValue, input.TriangleBudget) {
+                        MaxRefinementCandidates = input.RefinementBudget, MaxRefinementNodes = input.RefinementNodes
+                    });
                 var projection = Assets.Projection(scenario);
                 for (var frame = 0; frame < warmup; frame++) { scene.Render(projection); }
                 var samples = new FrameSample[frames];
@@ -102,7 +107,7 @@ File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptio
 Console.WriteLine(path);
 
 internal sealed record CaseInput(int GridSize, int SourceTriangles, int InstanceCount, string Scenario, uint Width, uint Height,
-    int TriangleBudget, int RefinementBudget);
+    int TriangleBudget, int RefinementBudget, int RefinementNodes);
 internal sealed record AssetResult(double BuildSeconds, int Nodes, int Roots, int RootTriangles, long ResidentTriangles);
 internal sealed record CapacityResult(ulong WorkCapacityBytes, ulong BufferCapacityBytes, int GraphPassCount);
 internal sealed record CaseResult(CaseInput Input, string Status, string? Reason, AssetResult? Asset, CapacityResult? Capacity, FrameSample[]? Samples);
