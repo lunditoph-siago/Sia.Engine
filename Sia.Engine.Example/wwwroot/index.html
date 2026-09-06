@@ -28,6 +28,8 @@
       top: 12px;
       left: 12px;
       display: flex;
+      flex-wrap: wrap;
+      right: 12px;
       gap: 16px;
       padding: 12px 16px;
       background: #17202ee6;
@@ -48,6 +50,12 @@
     <a href="?pipeline=normals">World normals</a>
     <a href="?pipeline=visibility">Visibility</a>
     <a href="?pipeline=visibility-lod">Patch LOD</a>
+    <a href="?pipeline=visibility-lod&amp;scene=bunny">Stanford Bunny</a>
+    <a href="?pipeline=visibility-lod&amp;scene=plane">Vertical plane</a>
   </nav>
+  <a id="bunny-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/"
+     style="position:fixed;bottom:12px;left:12px;color:white;background:#17202ee6;padding:8px;font:12px system-ui">
+    Stanford Bunny &middot; Stanford University Computer Graphics Laboratory
+  </a>
 </body>
 </html>
