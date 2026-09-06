@@ -9,7 +9,16 @@ public readonly record struct MeshPatchNode(
     int ChildOffset, int ChildCount, int MeshletOffset, int MeshletCount,
     int TriangleOffset, int TriangleCount);
 
-public readonly record struct MeshPatchBudget(int MaxPatches, int MaxMeshlets, int MaxTriangles);
+public readonly record struct MeshPatchBudget(int MaxPatches, int MaxMeshlets, int MaxTriangles)
+{
+    private readonly int? _maxRefinementCandidates;
+
+    public int MaxRefinementCandidates
+    {
+        get => _maxRefinementCandidates ?? int.MaxValue;
+        init => _maxRefinementCandidates = value == int.MaxValue ? null : value;
+    }
+}
 
 public readonly record struct SelectedMeshPatch(int Instance, int Patch);
 
