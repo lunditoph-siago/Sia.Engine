@@ -27,19 +27,11 @@ public sealed partial class VisibilityPbrFeature
 
     private static uint CompactionGroups(uint count) => (uint)System.Math.Max(1ul, ((ulong)count + 255) / 256);
 
-    private static uint CompactionCapacity(uint count)
-    {
-        var groups = CompactionGroups(count);
-        var words = groups;
-        while (groups > 1) { groups = CompactionGroups(groups); words = checked(words + groups); }
-        return words;
-    }
-
     private CompactionViewGpu CreateCompactionView(LodGpu lod, Entity state, Entity heap, Entity indirect,
         WGPULimits limits, List<Entity> acquired)
     {
         var gpu = lod.Compaction;
-        var levels = new List<(uint Offset, uint Count)> { (0, CompactionGroups(lod.Count)) };
+        var levels = new List<(uint Offset, uint Count)> { (0, CompactionGroups(lod.Capacity)) };
         while (levels[^1].Count > 1) {
             var last = levels[^1];
             levels.Add((checked(last.Offset + last.Count), CompactionGroups(last.Count)));
@@ -50,22 +42,21 @@ public sealed partial class VisibilityPbrFeature
         var middle = new List<CompactionStepGpu>();
         for (var i = 0; i < levels.Count - 1; i++) {
             var level = levels[i];
-            middle.Add(new(gpu.Scan, Group(new uint4(level.Offset, level.Count, levels[i + 1].Offset, 0), false), CompactionGroups(level.Count)));
+            middle.Add(new(gpu.Scan, Group(new uint4(level.Offset, level.Count, levels[i + 1].Offset, 0), false), (uint)(36 + i * 12)));
         }
         for (var i = levels.Count - 3; i >= 0; i--) {
             var level = levels[i];
-            middle.Add(new(gpu.Add, Group(new uint4(level.Offset, level.Count, levels[i + 1].Offset, 0), false), CompactionGroups(level.Count)));
+            middle.Add(new(gpu.Add, Group(new uint4(level.Offset, level.Count, levels[i + 1].Offset, 0), false), (uint)(36 + i * 12)));
         }
-        var groups = CompactionGroups(lod.Count);
         return new(parameters.ToArray(),
-            [new(gpu.Local, main, groups), .. middle, new(gpu.Finish, main, groups)],
-            [new(gpu.Local, post, groups), .. middle, new(gpu.Finish, post, groups)]);
+            [new(gpu.Local, main, 24), .. middle, new(gpu.Finish, main, 24)],
+            [new(gpu.Local, post, 24), .. middle, new(gpu.Finish, post, 24)]);
 
         Entity Group(uint4 range, bool isPost)
         {
             range.w = levels[^1].Offset;
             var parameter = Upload<uint4>(_world, _device.GetWgpu<WGPUDevice>(), _queue.GetWgpu<WGPUQueue>(),
-                [new uint4(lod.Count, (uint)_patchTree!.Nodes.Length, lod.DispatchDimension, isPost ? 1u : 0u), range],
+                [new uint4(lod.Capacity, (uint)_patchTree!.Nodes.Length, lod.DispatchDimension, isPost ? 1u : 0u), range],
                 WGPUBufferUsage.Uniform, limits, acquired);
             parameters.Add(parameter);
             return Own(_world, BindGroup(gpu.Layout, [BufferEntry(0, parameter), BufferEntry(1, lod.Patches),
@@ -74,7 +65,7 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private readonly record struct CompactionGpu(Entity Layout, Entity Local, Entity Scan, Entity Add, Entity Finish);
-    private readonly record struct CompactionStepGpu(Entity Pipeline, Entity Group, uint Count);
+    private readonly record struct CompactionStepGpu(Entity Pipeline, Entity Group, uint DispatchOffset);
     private readonly record struct CompactionViewGpu(Entity[] Parameters, CompactionStepGpu[] Main, CompactionStepGpu[] Post);
 
     private sealed partial class ViewState
@@ -83,6 +74,7 @@ public sealed partial class VisibilityPbrFeature
         {
             declaration.Read(s_PatchKey, RenderGraphBufferUsage.Storage)
                 .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage).ReadWrite(s_LodHeapKey, RenderGraphBufferUsage.Storage)
+                .Read(s_LodDispatchKey, RenderGraphBufferUsage.Indirect)
                 .ReadWrite(s_IndirectKey, RenderGraphBufferUsage.Storage);
             for (var i = 0; i < Lod!.Value.Compaction.Parameters.Length; i++) {
                 declaration.Read(new RenderGraphBufferKey("visibility-compact-params-" + i), RenderGraphBufferUsage.Uniform);
@@ -94,17 +86,15 @@ public sealed partial class VisibilityPbrFeature
 
         private void Compact(WgpuReactiveRenderGraphPassContext context, CompactionStepGpu[] steps)
         {
-            var dimension = Owner._gpuLod!.Value.DispatchDimension;
-            for (var i = 0; i < steps.Length; i++) {
-                var step = steps[i];
-                var pass = BeginCompute(context, i == 0, i == steps.Length - 1);
-                try {
+            var pass = BeginCompute(context);
+            try {
+                foreach (var step in steps) {
                     Wgpu.SetComputePipeline(pass, step.Pipeline.GetWgpu<WGPUComputePipeline>());
                     Wgpu.SetBindGroup(pass, 0, step.Group.GetWgpu<WGPUBindGroup>());
-                    Wgpu.DispatchWorkgroups(pass, System.Math.Min(step.Count, dimension), (step.Count + dimension - 1) / dimension);
+                    Wgpu.DispatchWorkgroupsIndirect(pass, Lod!.Value.Dispatch.GetWgpu<WGPUBuffer>(), step.DispatchOffset);
                 }
-                finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
             }
+            finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
         }
     }
 }
