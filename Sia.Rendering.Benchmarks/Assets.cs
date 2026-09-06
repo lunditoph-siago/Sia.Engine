@@ -33,6 +33,8 @@ internal static class Assets
     }
 
     public static VisibilityInstance[] Instances(string scenario) => scenario switch {
+        "instanced" => Enumerable.Range(0, 1025).Select(i => new VisibilityInstance(
+            float4x4.Translate(new float3(i == 0 ? 0 : 3, 0, 0)), PbrMaterial.Default)).ToArray(),
         "occluded" => Enumerable.Range(0, 4).Select(i => new VisibilityInstance(
             float4x4.Translate(new float3(0, 0, i * 0.08f)), PbrMaterial.Default)).ToArray(),
         "offscreen" => Enumerable.Range(0, 4).Select(i => new VisibilityInstance(

@@ -8,6 +8,15 @@ public readonly record struct VisibilityLodSettings(float TargetPixelError, Mesh
 
 public sealed partial class VisibilityPbrFeature
 {
+    private static uint WorkCapacity(MeshPatchTree? tree, uint triangles, uint instances, MeshPatchBudget budget)
+    {
+        if (tree is null) { return checked(triangles * instances); }
+        ulong roots = 0;
+        foreach (var root in tree.Nodes.Span[..tree.RootCount]) { roots += (uint)root.TriangleCount; }
+        var finest = (ulong)tree.FinestTriangleCount * instances;
+        return checked((uint)System.Math.Min(finest, System.Math.Max(roots * instances, (uint)budget.MaxTriangles)));
+    }
+
     public MeshPatchSelection? GetLodSelection(RenderView view)
     {
         var state = view.PersistentResources.GetRequired<ViewState>();
