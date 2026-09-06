@@ -83,6 +83,9 @@ internal sealed partial class SceneExampleApp
     [JSImport("getCanvasHeight", "main.js")]
     private static partial int GetCanvasHeight();
 
+    [JSImport("setInspectionStatus", "main.js")]
+    private static partial void SetInspectionStatus(string status);
+
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
         try {

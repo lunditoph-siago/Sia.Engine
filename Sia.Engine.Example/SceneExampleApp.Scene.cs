@@ -228,11 +228,10 @@ internal sealed unsafe partial class SceneExampleApp
         }
         var target = _pipeline == ScenePipeline.Atmosphere ? new float3(0, 2, 0) : float3.zero;
         if (_pipeline == ScenePipeline.VisibilityLod && _patchScene != PatchScene.Terrain) {
+            if (_patchScene == PatchScene.Bunny) { UpdatePatchInspection(deltaTime); }
             target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
-            var half = (_patchBounds.Max - _patchBounds.Min) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
-            var radius = System.Math.Max(0.001f, System.Math.Max(half.y, half.x / aspect));
-            eye = target + new float3(0, 0, half.z + radius * 1.05f / MathF.Tan(MathF.PI / 6));
+            eye = PatchEye(aspect, target);
         }
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 

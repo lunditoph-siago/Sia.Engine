@@ -26,7 +26,16 @@ public sealed partial class VisibilityPbrFeature :
     private readonly Entity _raster;
     private readonly Entity _resolve;
     private readonly OutputGpu _output;
-    private readonly VisibilityDebugMode _mode;
+    private VisibilityDebugMode _mode;
+
+    public VisibilityDebugMode DebugMode
+    {
+        get => _mode;
+        set {
+            if (!Enum.IsDefined(value)) { throw new ArgumentOutOfRangeException(nameof(value)); }
+            _mode = value;
+        }
+    }
 
     public RenderFeatureKey Key { get; } = new("visibility-pbr");
     public uint TriangleCount { get; }
