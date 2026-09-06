@@ -35,15 +35,14 @@ public sealed partial class VisibilityPbrFeature
             return (uint)stage * 2;
         }
 
-        private unsafe WgpuHandle<WGPUComputePassEncoder> BeginCompute(WgpuReactiveRenderGraphPassContext context,
-            bool first = true, bool last = true)
+        private unsafe WgpuHandle<WGPUComputePassEncoder> BeginCompute(WgpuReactiveRenderGraphPassContext context)
         {
-            if (Timing is not { } timing || (!first && !last)) { return context.GetOrBeginComputePass(); }
+            if (Timing is not { } timing) { return context.GetOrBeginComputePass(); }
             var index = TimingIndex(context);
             var timestamps = new WGPUPassTimestampWrites {
                 QuerySet = (WGPUQuerySet*)timing.Queries.GetWgpu<WGPUQuerySet>().DangerousGetHandle(),
-                BeginningOfPassWriteIndex = first ? index : uint.MaxValue,
-                EndOfPassWriteIndex = last ? index + 1 : uint.MaxValue
+                BeginningOfPassWriteIndex = index,
+                EndOfPassWriteIndex = index + 1
             };
             var descriptor = WGPUComputePassDescriptor.Default;
             descriptor.TimestampWrites = &timestamps;
