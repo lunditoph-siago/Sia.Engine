@@ -40,6 +40,10 @@ public static class PbrShaderSource
 
     internal static string LoadVisibilityResolve() => Load(k_ResourcePrefix + "visibility_resolve.wgsl");
 
+    internal static string LoadVisibilityLod() => Load(k_ResourcePrefix + "visibility_lod.wgsl");
+
+    internal static string LoadVisibilityHzb() => Load(k_ResourcePrefix + "visibility_hzb.wgsl");
+
     internal static string LoadAtmosphere(string name) => Load(k_ResourcePrefix + "atmosphere_" + name + ".wgsl");
 
     private static string Load(string entryResourceName)

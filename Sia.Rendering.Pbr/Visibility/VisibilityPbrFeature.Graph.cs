@@ -31,8 +31,9 @@ public sealed partial class VisibilityPbrFeature
             view.Width, view.Height));
         ImportBuffer(ref graph, s_CameraKey, view.Uniform, RenderGraphBufferUsage.Uniform);
         ImportBuffer(ref graph, s_OutputKey, view.OutputUniform, RenderGraphBufferUsage.Uniform);
-        ImportBuffer(ref graph, s_IndirectKey, view.Indirect, RenderGraphBufferUsage.Indirect);
-        ImportBuffer(ref graph, s_WorkKey, view.WorkBuffer, RenderGraphBufferUsage.Storage);
+        ImportBuffer(ref graph, s_IndirectKey, view.Indirect, RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource
+            | (_gpuLod is null ? 0 : RenderGraphBufferUsage.Storage));
+        ImportBuffer(ref graph, s_WorkKey, view.WorkBuffer, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.CopySource);
         for (var i = 0; i < _geometry.Length; i++) {
             ImportBuffer(ref graph, s_GeometryKeys[i], _geometry[i], RenderGraphBufferUsage.Storage);
         }
@@ -40,7 +41,9 @@ public sealed partial class VisibilityPbrFeature
         graph.UseImportedTexture(s_AlbedoKey, new RenderGraphTextureDescriptor("visibility-albedo", RenderGraphTextureFormat.RGBA8Unorm,
             albedo.Size.Width, albedo.Size.Height, mipLevelCount: albedo.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
         graph.BindImportedTexture(s_AlbedoKey, _albedoTexture.GetWgpu<WGPUTexture>());
+        if (_gpuLod is { } lod) { BuildLodGraph(ref graph, view, lod); }
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
+        if (_gpuLod is not null) { BuildPostOcclusionGraph(ref graph, view); }
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
         graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output);
     }
@@ -62,15 +65,18 @@ public sealed partial class VisibilityPbrFeature
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
-            var workItems = new uint4[checked((int)TriangleCapacity)];
-            var workBuffer = Upload<uint4>(_world, device, queue, workItems, WGPUBufferUsage.Storage, limits, acquired);
-            var indirect = Upload<uint>(_world, device, queue, [0, 1, 0, 0], WGPUBufferUsage.Indirect, limits, acquired);
+            var workItems = _gpuLod is null ? new uint4[checked((int)TriangleCapacity)] : [];
+            var workBuffer = Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 16ul,
+                WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
+            var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[16],
+                WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
             var entries = new WGPUBindGroupEntry[7];
             entries[0] = BufferEntry(0, uniform);
             for (var i = 0; i < _geometry.Length; i++) { entries[i + 1] = BufferEntry((uint)i + 1, _geometry[i]); }
             entries[6] = BufferEntry(6, workBuffer);
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
-            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems);
+            var lodView = _gpuLod is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
+            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView);
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -107,8 +113,8 @@ public sealed partial class VisibilityPbrFeature
         }
     }
 
-    private sealed class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group,
-        Entity workBuffer, Entity indirect, uint4[] workItems)
+    private sealed partial class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group,
+        Entity workBuffer, Entity indirect, uint4[] workItems, LodViewGpu? lodView)
     {
         public VisibilityPbrFeature Owner { get; } = owner;
         public Entity Uniform { get; } = uniform;
@@ -117,6 +123,7 @@ public sealed partial class VisibilityPbrFeature
         public Entity WorkBuffer { get; } = workBuffer;
         public Entity Indirect { get; } = indirect;
         public uint4[] WorkItems { get; } = workItems;
+        public LodViewGpu? Lod { get; } = lodView;
         public uint WorkCount { get; set; }
         public bool WorkInitialized { get; set; }
         public MeshPatchSelection? Selection { get; set; }
@@ -144,14 +151,16 @@ public sealed partial class VisibilityPbrFeature
                 .Write(Frame.DepthTarget, RenderGraphTextureUsage.RenderAttachment);
         }
 
-        public void Raster(WgpuReactiveRenderGraphPassContext context)
+        public void Raster(WgpuReactiveRenderGraphPassContext context) => Raster(context, false);
+
+        private void Raster(WgpuReactiveRenderGraphPassContext context, bool post)
         {
             var pass = context.GetOrBeginRenderPass(
-                new WgpuReactiveRenderGraphColorAttachment(Owner.VisibilityTarget, WGPULoadOp.Clear),
-                new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, WGPULoadOp.Clear));
+                new WgpuReactiveRenderGraphColorAttachment(Owner.VisibilityTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear),
+                new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear));
             Wgpu.SetRenderPipeline(pass, Owner._raster.GetWgpu<WGPURenderPipeline>());
             Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-            Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), 0);
+            Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), post ? 32ul : 0ul);
         }
 
         public void DeclareResolve(RenderGraphPassDeclarationBuilder declaration)
