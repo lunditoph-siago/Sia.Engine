@@ -2,7 +2,7 @@ using Sia.Math;
 
 namespace Sia.Engine.Mesh;
 
-public sealed class MeshPatchTree
+public sealed partial class MeshPatchTree
 {
     private readonly MeshData _geometry;
     private readonly MeshletData _meshlets;
@@ -135,34 +135,42 @@ public sealed class MeshPatchTree
     }
 
     private static Dictionary<(int, int), int> Boundary(MeshData mesh, Dictionary<VertexIdentity, int> identities)
+        => Boundary(mesh.Indices, VertexIds(mesh.Vertices, identities));
+
+    private static int[] VertexIds(ReadOnlySpan<MeshVertex> vertices, Dictionary<VertexIdentity, int> identities)
     {
-        var ids = new int[mesh.Vertices.Length];
+        var ids = new int[vertices.Length];
         for (var i = 0; i < ids.Length; i++) {
-            var v = mesh.Vertices[i];
+            var v = vertices[i];
             if (!float.IsFinite(v.Normal.x) || !float.IsFinite(v.Normal.y) || !float.IsFinite(v.Normal.z)
                 || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y)) {
-                throw new ArgumentException("Patch attributes must be finite.", nameof(mesh));
+                throw new ArgumentException("Patch attributes must be finite.", nameof(vertices));
             }
             var identity = new VertexIdentity(v.Position.x, v.Position.y, v.Position.z,
                 v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y);
             if (!identities.TryGetValue(identity, out ids[i])) { identities.Add(identity, ids[i] = identities.Count); }
         }
+        return ids;
+    }
+
+    private static Dictionary<(int, int), int> Boundary(ReadOnlySpan<uint> indices, ReadOnlySpan<int> ids)
+    {
         var boundary = new Dictionary<(int, int), int>();
         var uses = new Dictionary<(int, int), int>();
-        for (var t = 0; t < mesh.Indices.Length; t += 3) {
+        for (var t = 0; t < indices.Length; t += 3) {
             for (var c = 0; c < 3; c++) {
-                var a = ids[mesh.Indices[t + c]];
-                var b = ids[mesh.Indices[t + (c + 1) % 3]];
+                var a = ids[(int)indices[t + c]];
+                var b = ids[(int)indices[t + (c + 1) % 3]];
                 if (a == b) { continue; }
                 var edge = a < b ? (a, b) : (b, a);
                 AddEdge(boundary, edge, a < b ? 1 : -1);
                 var count = uses.GetValueOrDefault(edge) + 1;
-                if (count > 2) { throw new ArgumentException("Patch geometry contains a nonmanifold edge.", nameof(mesh)); }
+                if (count > 2) { throw new ArgumentException("Patch geometry contains a nonmanifold edge.", nameof(indices)); }
                 uses[edge] = count;
             }
         }
         if (boundary.Values.Any(count => System.Math.Abs(count) != 1)) {
-            throw new ArgumentException("Patch geometry contains inconsistent edge winding.", nameof(mesh));
+            throw new ArgumentException("Patch geometry contains inconsistent edge winding.", nameof(indices));
         }
         return boundary;
     }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering.Benchmarks;
@@ -12,9 +13,28 @@ var timing = true;
 var refinementBudget = int.MaxValue;
 var refinementNodes = int.MaxValue;
 var inFlightFrames = 1;
+string? assetPath = null;
+string? cookPath = null;
+var fixture = "grid";
+var gridSize = 64;
+var buildSettings = MeshPatchBuildSettings.Default;
+if (args.Contains("--help")) {
+    Console.WriteLine("""
+        Cook without creating a GPU device:
+          --cook PATH --fixture grid|terrain --size N
+          [--leaf-triangles N --children N --ratio F --normal-weight F --uv-weight F]
+        Existing files are never overwritten. The output includes build diagnostics and timings.
+        Benchmark a cooked asset:
+          --asset PATH [--suite smoke|instances --warmup N --frames N --output PATH]
+        Benchmark a generated fixture:
+          --suite smoke|scale|instances [--fixture grid|terrain --size N]
+        Rendering options: --refinement-budget N --refinement-nodes N --in-flight N --no-timing
+        """);
+    return;
+}
 for (var i = 0; i < args.Length; i++) {
     if (args[i] == "--no-timing") { timing = false; continue; }
-    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale|instances, --output PATH, --warmup N, --frames N, --refinement-budget N, --refinement-nodes N, --in-flight N, or --no-timing."); }
+    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale|instances, --asset PATH, --cook PATH, --fixture grid|terrain, --size N, --output PATH, --warmup N, --frames N, --refinement-budget N, --refinement-nodes N, --in-flight N, or --no-timing."); }
     var name = args[i++];
     switch (name) {
         case "--suite": suite = args[i]; break;
@@ -24,32 +44,91 @@ for (var i = 0; i < args.Length; i++) {
         case "--refinement-budget": refinementBudget = int.Parse(args[i]); break;
         case "--refinement-nodes": refinementNodes = int.Parse(args[i]); break;
         case "--in-flight": inFlightFrames = int.Parse(args[i]); break;
+        case "--asset": assetPath = args[i]; break;
+        case "--cook": cookPath = args[i]; break;
+        case "--fixture": fixture = args[i]; break;
+        case "--size": gridSize = int.Parse(args[i]); break;
+        case "--leaf-triangles": buildSettings = buildSettings with { MaxLeafTriangles = int.Parse(args[i]) }; break;
+        case "--children": buildSettings = buildSettings with { MaxChildren = int.Parse(args[i]) }; break;
+        case "--ratio": buildSettings = buildSettings with { ParentTriangleRatio = float.Parse(args[i], CultureInfo.InvariantCulture) }; break;
+        case "--normal-weight": buildSettings = buildSettings with { NormalWeight = float.Parse(args[i], CultureInfo.InvariantCulture) }; break;
+        case "--uv-weight": buildSettings = buildSettings with { UVWeight = float.Parse(args[i], CultureInfo.InvariantCulture) }; break;
         default: throw new ArgumentException("Unknown option: " + name);
     }
 }
 if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1 || refinementBudget < 0 || refinementNodes < 0 || inFlightFrames is < 1 or > 64) {
     throw new ArgumentException("Invalid suite, frame counts, or refinement budget.");
 }
+if (gridSize < 1 || fixture is not ("grid" or "terrain") || (assetPath is not null && (cookPath is not null || suite == "scale"))) {
+    throw new ArgumentException("Invalid asset/fixture options. --asset cannot be combined with --cook or --suite scale.");
+}
+if (assetPath is not null && args.Any(option => option is "--fixture" or "--size" or "--leaf-triangles" or "--children"
+    or "--ratio" or "--normal-weight" or "--uv-weight")) {
+    throw new ArgumentException("Cooked assets already contain their geometry and build settings; fixture/build options require generated input.");
+}
 #if DEBUG
 throw new InvalidOperationException("Run this benchmark with --configuration Release.");
 #endif
+if (cookPath is not null) {
+    var source = fixture == "terrain" ? Assets.Terrain(gridSize) : Assets.Grid(gridSize);
+    var watch = Stopwatch.StartNew();
+    var cooked = MeshPatchAsset.Cook(source, buildSettings);
+    var cookMilliseconds = watch.Elapsed.TotalMilliseconds;
+    watch.Restart();
+    var bytes = cooked.Encode();
+    var encodeMilliseconds = watch.Elapsed.TotalMilliseconds;
+    watch.Restart();
+    MeshPatchAsset.Decode(bytes);
+    var validateMilliseconds = watch.Elapsed.TotalMilliseconds;
+    var destination = Path.GetFullPath(cookPath);
+    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+    var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+    var ownsTemporary = false;
+    try {
+        using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+            ownsTemporary = true;
+            file.Write(bytes);
+        }
+        File.Move(temporary, destination, overwrite: false);
+    }
+    finally { if (ownsTemporary) { File.Delete(temporary); } }
+    Console.WriteLine(JsonSerializer.Serialize(new {
+        Asset = destination, Fixture = fixture, GridSize = gridSize, Bytes = bytes.Length,
+        MeshPatchAsset.FormatVersion, cooked.BuilderVersion, cooked.SourceHash, cooked.Settings,
+        cooked.Build.SourceTriangleCount, cooked.Build.RemovedDegenerateTriangleCount,
+        cooked.Build.SimplificationCount, cooked.Build.TargetMissCount, cooked.Build.UnreducedGroupCount,
+        Nodes = cooked.Build.Tree.Nodes.Length, cooked.Build.Tree.RootCount,
+        CookMilliseconds = cookMilliseconds, EncodeMilliseconds = encodeMilliseconds, ValidateMilliseconds = validateMilliseconds
+    }, new JsonSerializerOptions { WriteIndented = true }));
+    return;
+}
+MeshPatchAsset? loaded = null;
+double readMilliseconds = 0, decodeMilliseconds = 0;
+if (assetPath is not null) {
+    var watch = Stopwatch.StartNew();
+    var bytes = await File.ReadAllBytesAsync(assetPath);
+    readMilliseconds = watch.Elapsed.TotalMilliseconds;
+    watch.Restart();
+    loaded = MeshPatchAsset.Decode(bytes);
+    decodeMilliseconds = watch.Elapsed.TotalMilliseconds;
+}
 using var gpu = await GpuDevice.CreateAsync(timing);
 Console.WriteLine($"{gpu.Description.Device}; {gpu.Description.Backend}; GPU timing: {gpu.TimingEnabled}");
 var results = new List<CaseResult>();
-int[] sizes = suite == "scale" ? [724, 2237, 5000] : [64];
+int[] sizes = loaded is not null ? [0] : suite == "scale" ? [724, 2237, 5000] : [gridSize];
 string[] scenarios = suite switch {
     "scale" => ["near", "far"], "instances" => ["instanced"],
     _ => ["near", "far", "occluded", "offscreen", "nonuniform"]
 };
 foreach (var size in sizes) {
-    var sourceTriangles = checked(size * size * 2);
-    MeshPatchBuildResult? build = null;
+    var sourceTriangles = loaded?.Build.SourceTriangleCount ?? checked(size * size * 2);
+    MeshPatchBuildResult? build = loaded?.Build;
     double buildSeconds = 0;
     foreach (var resolution in new (uint Width, uint Height)[] { (640, 360), (1280, 720) }) {
         foreach (var scenario in scenarios) {
             var instances = Assets.Instances(scenario);
-            var minimumResidentTriangleBytes = checked((ulong)sourceTriangles * 16);
-            var input = new CaseInput(size, sourceTriangles, instances.Length, scenario, resolution.Width, resolution.Height,
+            var minimumResidentTriangleBytes = checked((ulong)(loaded?.Build.Tree.FinestTriangleCount ?? sourceTriangles) * 16);
+            var input = new CaseInput(loaded is null ? size : null, sourceTriangles, instances.Length, scenario, resolution.Width, resolution.Height,
                 18000, refinementBudget, refinementNodes);
             if (minimumResidentTriangleBytes > gpu.Limits.MaxStorageBufferBindingSize || minimumResidentTriangleBytes > gpu.Limits.MaxBufferSize) {
                 results.Add(new(input, "capacity-rejected", $"Resident triangle records alone require at least {minimumResidentTriangleBytes} bytes before parent representations; device limits are {gpu.Limits.MaxStorageBufferBindingSize} storage binding / {gpu.Limits.MaxBufferSize} buffer bytes.", null, null, null));
@@ -58,19 +137,25 @@ foreach (var size in sizes) {
             }
             if (build is null) {
                 var watch = Stopwatch.StartNew();
-                build = MeshPatchBuilder.Build(Assets.Grid(size));
+                build = MeshPatchBuilder.Build(fixture == "terrain" ? Assets.Terrain(size) : Assets.Grid(size), buildSettings);
                 buildSeconds = watch.Elapsed.TotalSeconds;
                 Console.WriteLine($"Cooked {sourceTriangles} triangles in {buildSeconds:F3} s; {build.Value.Tree.Nodes.Length} nodes.");
             }
             var tree = build.Value.Tree;
-            var asset = new AssetResult(buildSeconds, tree.Nodes.Length, tree.RootCount,
-                tree.Nodes.Span[..tree.RootCount].ToArray().Sum(n => n.TriangleCount), tree.Nodes.ToArray().Sum(n => (long)n.TriangleCount));
+            var asset = new AssetResult(loaded is null ? buildSeconds : null, tree.Nodes.Length, tree.RootCount,
+                tree.Nodes.Span[..tree.RootCount].ToArray().Sum(n => n.TriangleCount), tree.Nodes.ToArray().Sum(n => (long)n.TriangleCount),
+                assetPath, loaded?.SourceHash, loaded?.Settings ?? buildSettings, loaded?.BuilderVersion, readMilliseconds, decodeMilliseconds);
             try {
+                var startup = Stopwatch.StartNew();
                 using var scene = new BenchmarkScene(gpu, tree, instances, resolution.Width, resolution.Height,
                     new(int.MaxValue, int.MaxValue, input.TriangleBudget) {
                         MaxRefinementCandidates = input.RefinementBudget, MaxRefinementNodes = input.RefinementNodes
                     }, inFlightFrames);
                 var projection = Assets.Projection(scenario);
+                var setupMilliseconds = startup.Elapsed.TotalMilliseconds;
+                startup.Restart();
+                await foreach (var _ in scene.RenderAsync([projection])) { }
+                var firstFrameMilliseconds = startup.Elapsed.TotalMilliseconds;
                 await foreach (var _ in scene.RenderAsync(Enumerable.Repeat(projection, warmup))) { }
                 var samples = new FrameSample[frames];
                 var elapsed = Stopwatch.StartNew();
@@ -79,7 +164,8 @@ foreach (var size in sizes) {
                 elapsed.Stop();
                 var capacity = new CapacityResult(scene.WorkCapacityBytes, scene.BufferCapacityBytes, scene.GraphPassCount);
                 results.Add(new(input, "measured", null, asset, capacity, samples,
-                    new(elapsed.Elapsed.TotalMilliseconds, frames / elapsed.Elapsed.TotalSeconds, scene.PeakInFlight, scene.ReadbackCapacityBytes)));
+                    new(elapsed.Elapsed.TotalMilliseconds, frames / elapsed.Elapsed.TotalSeconds, scene.PeakInFlight, scene.ReadbackCapacityBytes),
+                    new(setupMilliseconds, firstFrameMilliseconds)));
                 var median = Distribution.From(samples.Select(s => s.GpuMilliseconds?.Values.Sum() ?? double.NaN));
                 var gpuTime = median is null ? "unavailable" : $"{median.MedianMilliseconds:F3} ms";
                 Console.WriteLine($"{sourceTriangles} / {resolution.Width}x{resolution.Height} / {scenario}: {samples[^1].Counters.MainTriangles + samples[^1].Counters.PostTriangles} emitted; GPU stage sum median {gpuTime}.");
@@ -91,12 +177,13 @@ foreach (var size in sizes) {
     }
 }
 var report = new {
-    SchemaVersion = 2, CreatedUtc = DateTimeOffset.UtcNow, Suite = suite, WarmupFrames = warmup, MeasuredFrames = frames, InFlightFrames = inFlightFrames,
+    SchemaVersion = 3, CreatedUtc = DateTimeOffset.UtcNow, Suite = suite, Fixture = loaded is null ? fixture : null,
+    WarmupFrames = warmup, MeasuredFrames = frames, InFlightFrames = inFlightFrames,
     BuildConfiguration = "Release", Runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
     Adapter = gpu.Description, TimingRequested = timing, gpu.TimingEnabled,
     Limits = new { gpu.Limits.MaxBufferSize, gpu.Limits.MaxStorageBufferBindingSize, gpu.Limits.MaxComputeWorkgroupsPerDimension },
     TimingStages = VisibilityPbrFeature.GpuTimingStages.ToArray(),
-    Method = "Bounded frame stream; depth one serializes submissions. Warmup is drained and excluded. Pipeline elapsed time includes submission through final result consumption; FramesPerSecond is measured stream throughput. EndToEndMilliseconds runs from frame preparation to result readback. GPU stage sums are neither throughput nor total frame latency. WaitAndReadMilliseconds measures waiting when consuming the oldest pending result. ViewportPixelsPerEmittedTriangle is a viewport/work ratio, not measured coverage. BufferCapacityBytes includes graph buffers and every readback slot, excluding textures, driver allocations and query-set storage. Each measured frame has one graph submission, two geometry indirect draws and one output draw.",
+    Method = "Bounded frame stream; depth one serializes submissions. A separate first frame is drained before warmup; both are excluded from measured samples. SceneSetupAndUploadMilliseconds includes CPU resource setup and upload enqueue, not GPU upload completion. FirstFrameAndReadbackMilliseconds includes graph creation and completion. BuildSeconds is unavailable when loading cooked input; ReadMilliseconds and DecodeAndValidateMilliseconds are CPU startup costs. Warmup is drained and excluded. Pipeline elapsed time includes submission through final result consumption; FramesPerSecond is measured stream throughput. EndToEndMilliseconds runs from frame preparation to result readback. GPU stage sums are neither throughput nor total frame latency. WaitAndReadMilliseconds measures waiting when consuming the oldest pending result. ViewportPixelsPerEmittedTriangle is a viewport/work ratio, not measured coverage. BufferCapacityBytes includes graph buffers and every readback slot, excluding textures, driver allocations and query-set storage. Each measured frame has one graph submission, two geometry indirect draws and one output draw.",
     Summaries = results.Select(result => new {
         result.Input, result.Status,
         GpuStageSum = result.Samples is { } samples ? Distribution.From(samples.Select(s => s.GpuMilliseconds?.Values.Sum() ?? double.NaN)) : null,
@@ -114,11 +201,14 @@ Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(path);
 
-internal sealed record CaseInput(int GridSize, int SourceTriangles, int InstanceCount, string Scenario, uint Width, uint Height,
+internal sealed record CaseInput(int? GridSize, int SourceTriangles, int InstanceCount, string Scenario, uint Width, uint Height,
     int TriangleBudget, int RefinementBudget, int RefinementNodes);
-internal sealed record AssetResult(double BuildSeconds, int Nodes, int Roots, int RootTriangles, long ResidentTriangles);
+internal sealed record AssetResult(double? BuildSeconds, int Nodes, int Roots, int RootTriangles, long ResidentTriangles,
+    string? Path, string? SourceHash, MeshPatchBuildSettings Settings, int? BuilderVersion, double ReadMilliseconds, double DecodeAndValidateMilliseconds);
 internal sealed record CapacityResult(ulong WorkCapacityBytes, ulong BufferCapacityBytes, int GraphPassCount);
-internal sealed record CaseResult(CaseInput Input, string Status, string? Reason, AssetResult? Asset, CapacityResult? Capacity, FrameSample[]? Samples, PipelineResult? Pipeline = null);
+internal sealed record CaseResult(CaseInput Input, string Status, string? Reason, AssetResult? Asset, CapacityResult? Capacity, FrameSample[]? Samples,
+    PipelineResult? Pipeline = null, StartupResult? Startup = null);
+internal sealed record StartupResult(double SceneSetupAndUploadMilliseconds, double FirstFrameAndReadbackMilliseconds);
 internal sealed record PipelineResult(double ElapsedMilliseconds, double FramesPerSecond, int PeakInFlight, ulong ReadbackCapacityBytes);
 internal sealed record Distribution(double MedianMilliseconds, double P95Milliseconds, double MaximumMilliseconds)
 {
