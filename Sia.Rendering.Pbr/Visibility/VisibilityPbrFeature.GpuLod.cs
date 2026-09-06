@@ -17,7 +17,7 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_LodHeapKey = new("visibility-lod-heap");
 
     private static LodGpu CreateLodGpu(World world, WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue,
-        MeshPatchTree tree, uint instances, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired)
+        MeshPatchTree tree, uint instances, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired, bool enableTiming)
     {
         var count = checked((uint)tree.Nodes.Length * instances);
         if (count > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
@@ -49,7 +49,7 @@ public sealed partial class VisibilityPbrFeature
             BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 176, WGPUShaderStage.Compute),
             BufferLayout(4, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute),
             BufferLayout(5, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
-            BufferLayout(6, WGPUBufferBindingType.Storage, 64, WGPUShaderStage.Compute),
+            BufferLayout(6, WGPUBufferBindingType.Storage, 80, WGPUShaderStage.Compute),
             BufferLayout(7, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute)
         ], acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityLod(), "visibility-lod"), acquired);
@@ -59,7 +59,7 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, shader, pipelineLayout, "project", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "select_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
-            count, limits.MaxComputeWorkgroupsPerDimension, occlusion);
+            count, limits.MaxComputeWorkgroupsPerDimension, occlusion, enableTiming);
     }
 
     private static unsafe Entity ComputePipeline(World world, WgpuHandle<WGPUDevice> device, Entity shader,
@@ -132,7 +132,7 @@ public sealed partial class VisibilityPbrFeature
         {
             var dimension = Owner._gpuLod!.Value.DispatchDimension;
             count = System.Math.Max(1u, count);
-            var pass = context.GetOrBeginComputePass();
+            var pass = BeginCompute(context);
             try {
                 Wgpu.SetComputePipeline(pass, pipeline.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, Lod!.Value.Group.GetWgpu<WGPUBindGroup>());
@@ -150,7 +150,7 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget);
 
     private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity Project, Entity Select,
-        Entity Emit, uint Count, uint DispatchDimension, OcclusionGpu Occlusion);
+        Entity Emit, uint Count, uint DispatchDimension, OcclusionGpu Occlusion, bool EnableTiming);
 
     private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Group);
 }

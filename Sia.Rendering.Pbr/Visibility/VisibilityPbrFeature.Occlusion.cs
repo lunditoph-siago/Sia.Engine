@@ -207,7 +207,7 @@ public sealed partial class VisibilityPbrFeature
                 _hzbDepth = depth;
             }
             for (var level = 0; level < _hzbGroups.Length; level++) {
-                var pass = context.GetOrBeginComputePass();
+                var pass = BeginCompute(context, level == 0, level == _hzbGroups.Length - 1);
                 try {
                     Wgpu.SetComputePipeline(pass, (level == 0 ? gpu.Seed : gpu.Reduce).GetWgpu<WGPUComputePipeline>());
                     Wgpu.SetBindGroup(pass, 0, _hzbGroups[level].GetWgpu<WGPUBindGroup>());
