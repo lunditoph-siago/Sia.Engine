@@ -115,6 +115,7 @@ public sealed partial class VisibilityPbrFeature
         .Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform)
         .Read(s_HzbParamsKey, RenderGraphBufferUsage.Uniform).Read(s_HzbKey, RenderGraphBufferUsage.Storage)
         .Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_GeometryKeys[4], RenderGraphBufferUsage.Storage)
+        .Read(s_LodDispatchKey, RenderGraphBufferUsage.Indirect).Read(s_IndirectKey, RenderGraphBufferUsage.Storage)
         .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage);
 
     private static void BuildPostOcclusionGraph(ref RenderGraphBuildContext graph, ViewState view)
@@ -128,7 +129,9 @@ public sealed partial class VisibilityPbrFeature
         graph.UseComputePass(new("visibility-compact-post"), "visibility-compact-post", view.DeclareCompact, view.CompactPost);
         graph.UseComputePass(new("visibility-emit-post"), "visibility-emit-post", declaration => declaration
             .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
-            .Read(s_LodStateKey, RenderGraphBufferUsage.Storage).ReadWrite(s_WorkKey, RenderGraphBufferUsage.Storage), view.EmitPost);
+            .Read(s_LodStateKey, RenderGraphBufferUsage.Storage).Read(s_IndirectKey, RenderGraphBufferUsage.Storage)
+            .Read(s_LodDispatchKey, RenderGraphBufferUsage.Indirect)
+            .ReadWrite(s_WorkKey, RenderGraphBufferUsage.Storage), view.EmitPost);
         graph.UsePass(new("visibility-raster-post"), "visibility-raster-post", view.DeclarePostRaster, view.PostRaster);
         graph.UseComputePass(new("visibility-hzb-final"), "visibility-hzb-final", view.DeclareHzb, view.BuildFinalHzb);
         graph.ExportBuffer(s_HzbKey, RenderGraphBufferUsage.Storage);
@@ -144,13 +147,13 @@ public sealed partial class VisibilityPbrFeature
         private WgpuHandle<WGPUTextureView> _hzbDepth;
 
         public void CullMain(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CullMain, (Owner._gpuLod.Value.Count + 63) / 64, Hzb!.Value.Group);
+            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CullMain, 0, Hzb!.Value.Group, 0);
 
         public void CullPost(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CullPost, (Owner._gpuLod.Value.Count + 63) / 64, Hzb!.Value.Group);
+            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CullPost, 0, Hzb!.Value.Group, 0);
 
         public void EmitPost(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.EmitPost, Owner._gpuLod.Value.Count);
+            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.EmitPost, 0, indirectOffset: 12);
 
         public void DeclarePostRaster(RenderGraphPassDeclarationBuilder declaration)
         {
@@ -198,15 +201,15 @@ public sealed partial class VisibilityPbrFeature
                 _hzbGroups = acquired.ToArray();
                 _hzbDepth = depth;
             }
-            for (var level = 0; level < _hzbGroups.Length; level++) {
-                var pass = BeginCompute(context, level == 0, level == _hzbGroups.Length - 1);
-                try {
+            var pass = BeginCompute(context);
+            try {
+                for (var level = 0; level < _hzbGroups.Length; level++) {
                     Wgpu.SetComputePipeline(pass, (level == 0 ? gpu.Seed : gpu.Reduce).GetWgpu<WGPUComputePipeline>());
                     Wgpu.SetBindGroup(pass, 0, _hzbGroups[level].GetWgpu<WGPUBindGroup>());
                     Wgpu.DispatchWorkgroups(pass, (hzb.Levels[level].x + 7) / 8, (hzb.Levels[level].y + 7) / 8);
                 }
-                finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
             }
+            finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
         }
 
         public void BuildFinalHzb(WgpuReactiveRenderGraphPassContext context)

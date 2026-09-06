@@ -26,10 +26,10 @@ fn local_prefix(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocati
     if (block >= max(1u, (parameters.counts.x + 255u) / 256u)) { return; }
     let index = block * 256u + lane;
     var value = vec4<u32>(0u);
-    if (index < parameters.counts.x) {
+    if (index < atomicLoad(&status[16])) {
         let state = states[index];
         if (state.y != 0u) {
-            let triangles = patches[index % parameters.counts.y].geometry.z;
+            let triangles = patches[(state.y - 1u) % parameters.counts.y].geometry.z;
             if (parameters.counts.w == 0u) {
                 value = vec4<u32>(select(0u, triangles, state.w == 0u), u32(state.w == 1u), u32(state.w == 2u), state.x);
             } else {
@@ -38,7 +38,7 @@ fn local_prefix(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocati
         }
     }
     let total = prefix(value, lane);
-    if (index < parameters.counts.x && value.x != 0u) { states[index].z = total.x - value.x; }
+    if (value.x != 0u) { states[index].z = total.x - value.x; }
     if (lane == 255u) {
         scratch[block] = total.x;
         if (parameters.counts.w == 0u) {
@@ -55,16 +55,27 @@ fn scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
     if (block >= (parameters.range.y + 255u) / 256u) { return; }
     let index = block * 256u + lane;
     var value = 0u;
-    if (index < parameters.range.y) { value = scratch[parameters.range.x + index]; }
+    let count = level_count();
+    if (index < count) { value = scratch[parameters.range.x + index]; }
     let total = prefix(vec4<u32>(value, 0u, 0u, 0u), lane).x;
-    if (index < parameters.range.y) { scratch[parameters.range.x + index] = total - value; }
+    if (index < count) { scratch[parameters.range.x + index] = total - value; }
     if (lane == 255u) { scratch[parameters.range.z + block] = total; }
+}
+
+fn level_count() -> u32 {
+    var count = atomicLoad(&status[16]);
+    var capacity = parameters.counts.x;
+    while (capacity > parameters.range.y) {
+        capacity = (capacity + 255u) / 256u;
+        count = (count + 255u) / 256u;
+    }
+    return max(1u, count);
 }
 
 @compute @workgroup_size(256)
 fn add_prefix(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.z + group.x) * 256u + lane;
-    if (index < parameters.range.y) {
+    if (index < level_count()) {
         scratch[parameters.range.x + index] += scratch[parameters.range.z + index / 256u];
     }
 }
@@ -75,7 +86,7 @@ fn finish(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_ind
     let index = block * 256u + lane;
     var start = 0u;
     if (parameters.counts.w != 0u) { start = atomicLoad(&status[0]) / 3u; }
-    if (index < parameters.counts.x) {
+    if (index < atomicLoad(&status[16])) {
         let state = states[index];
         if (state.y != 0u && state.w == select(0u, 4u, parameters.counts.w != 0u)) {
             var offset = start;
