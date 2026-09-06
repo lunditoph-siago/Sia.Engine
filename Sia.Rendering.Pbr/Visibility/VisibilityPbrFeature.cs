@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Sia;
 using Sia.Engine.Camera;
+using Sia.Engine.Mesh;
 using Sia.Math;
 using Sia.WebGPU;
 
@@ -13,7 +14,9 @@ public sealed partial class VisibilityPbrFeature :
     private readonly Entity _device;
     private readonly Entity _queue;
     private readonly Entity[] _geometry;
-    private readonly Entity _indirect;
+    private readonly MeshPatchTree? _patchTree;
+    private readonly float4x4[] _transforms;
+    private readonly VisibilityLodSettings _lod;
     private readonly Entity _albedoView;
     private readonly Entity _albedoTexture;
     private readonly Entity _sampler;
@@ -27,17 +30,20 @@ public sealed partial class VisibilityPbrFeature :
     public RenderFeatureKey Key { get; } = new("visibility-pbr");
     public uint TriangleCount { get; }
     public uint InstanceCount { get; }
-    public ulong RasterizedTriangleCount => (ulong)TriangleCount * InstanceCount;
+    public uint TriangleCapacity { get; }
 
-    private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry, Entity indirect,
+    private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
         Entity albedoTexture, Entity albedoView, Entity sampler, Entity geometryLayout, Entity resolveLayout,
-        Entity raster, Entity resolve, OutputGpu output, uint triangles, uint instances, VisibilityDebugMode mode)
+        Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
+        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode)
     {
         _world = frame.ResourceWorld;
         _device = frame.Device;
         _queue = frame.Queue;
         _geometry = geometry;
-        _indirect = indirect;
+        _patchTree = patchTree;
+        _transforms = transforms;
+        _lod = lod;
         _albedoView = albedoView;
         _albedoTexture = albedoTexture;
         _sampler = sampler;
@@ -47,13 +53,32 @@ public sealed partial class VisibilityPbrFeature :
         _resolve = resolve;
         _output = output;
         TriangleCount = triangles;
-        InstanceCount = instances;
+        InstanceCount = (uint)transforms.Length;
+        TriangleCapacity = capacity;
         _mode = mode;
     }
 
-    public static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
+    public static VisibilityPbrFeature Create(in GpuFrame frame,
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo,
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded) =>
+        Create(in frame, geometry, instances, albedo, outputFormat, mode, null, default);
+
+    public static VisibilityPbrFeature CreateLod(in GpuFrame frame, MeshPatchTree tree,
+        ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
+            || lod.Budget.MaxMeshlets < 0 || lod.Budget.MaxTriangles < 0) {
+            throw new ArgumentOutOfRangeException(nameof(lod));
+        }
+        var (geometry, meshlets) = tree.CopyGeometry();
+        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod);
+    }
+
+    private static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
+        MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo,
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(albedo);
@@ -64,9 +89,10 @@ public sealed partial class VisibilityPbrFeature :
             throw new ArgumentOutOfRangeException(nameof(outputFormat));
         }
         var triangles = checked((uint)geometry.Triangles.Length);
-        _ = checked(triangles * 3u);
-        _ = checked(triangles * (uint)instances.Length);
+        var capacity = checked((uint)(tree?.FinestTriangleCount ?? geometry.Triangles.Length) * (uint)instances.Length);
+        _ = checked(capacity * 3u);
         var gpuInstances = new InstanceGpu[instances.Length];
+        var transforms = new float4x4[instances.Length];
         for (var i = 0; i < instances.Length; i++) {
             var transform = instances[i].Transform;
             var material = instances[i].Material;
@@ -89,10 +115,15 @@ public sealed partial class VisibilityPbrFeature :
             gpuInstances[i] = new(transform, normalTransform,
                 new float4(material.BaseColor, 1), new float4(material.Metallic, MathF.Max(material.Roughness, 0.045f), 0, 0),
                 new float4(emissive, 0));
+            transforms[i] = transform;
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
         var queue = frame.Queue.GetWgpu<WGPUQueue>();
         var limits = Wgpu.GetLimits(device);
+        var workSize = System.Math.Max(1u, capacity) * 16ul;
+        if (workSize > limits.MaxBufferSize || workSize > limits.MaxStorageBufferBindingSize) {
+            throw new ArgumentException("The complete finest cut exceeds the device work-list capacity.", nameof(instances));
+        }
         if (albedo.Width == 0 || albedo.Height == 0 || albedo.Width > limits.MaxTextureDimension2D
             || albedo.Height > limits.MaxTextureDimension2D || albedo.MipLevels.Length == 0) {
             throw new ArgumentException("Albedo dimensions/mips exceed the device limits.", nameof(albedo));
@@ -117,8 +148,6 @@ public sealed partial class VisibilityPbrFeature :
                 Upload(world, device, queue, geometry.Triangles.Span, WGPUBufferUsage.Storage, limits, acquired),
                 Upload<InstanceGpu>(world, device, queue, gpuInstances, WGPUBufferUsage.Storage, limits, acquired)
             };
-            var indirect = Upload<uint>(world, device, queue,
-                [triangles * 3u, (uint)instances.Length, 0, 0], WGPUBufferUsage.Indirect, limits, acquired);
             var textureDescriptor = WGPUTextureDescriptor.Default;
             textureDescriptor.Dimension = WGPUTextureDimension._2D;
             textureDescriptor.Size = new WGPUExtent3D { Width = albedo.Width, Height = albedo.Height, DepthOrArrayLayers = 1 };
@@ -156,8 +185,8 @@ public sealed partial class VisibilityPbrFeature :
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
-            return new(in frame, buffers, indirect, texture, view, sampler, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, (uint)instances.Length, mode);
+            return new(in frame, buffers, texture, view, sampler, geometryLayout, resolveLayout,
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode);
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -181,8 +210,9 @@ public sealed partial class VisibilityPbrFeature :
         view.Height = (uint)viewport.Height;
         view.Frame = context.Frame;
         var camera = context.Frame.Camera.Get<CameraMatrices>();
+        UpdateWork(view, camera.ViewProj);
         var uniform = new CameraGpu(camera.ViewProj, new float4(camera.WorldPosition, 1),
-            new uint4(view.Width, view.Height, TriangleCount, (uint)_mode),
+            new uint4(view.Width, view.Height, view.WorkCount, (uint)_mode),
             new float4(math.normalize(new float3(0.4f, 0.8f, 0.6f)), 0), new float4(4, 4, 4, 0));
         Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0, [uniform]);
     }

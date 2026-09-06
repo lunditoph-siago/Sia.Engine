@@ -44,7 +44,8 @@ public sealed partial class VisibilityPbrFeature
             BufferLayout(2, WGPUBufferBindingType.ReadOnlyStorage, 16),
             BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 4),
             BufferLayout(4, WGPUBufferBindingType.ReadOnlyStorage, 16),
-            BufferLayout(5, WGPUBufferBindingType.ReadOnlyStorage, 176)
+            BufferLayout(5, WGPUBufferBindingType.ReadOnlyStorage, 176),
+            BufferLayout(6, WGPUBufferBindingType.ReadOnlyStorage, 16)
         ], acquired);
 
     private static Entity CreateResolveLayout(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired)

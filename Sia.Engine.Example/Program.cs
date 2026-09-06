@@ -37,8 +37,9 @@ public static class Program
         ["--pipeline", "unlit"] => ScenePipeline.Unlit,
         ["--pipeline", "normals"] => ScenePipeline.Normals,
         ["--pipeline", "visibility"] => ScenePipeline.Visibility,
+        ["--pipeline", "visibility-lod"] => ScenePipeline.VisibilityLod,
         ["--pipeline", "visibility-normals"] => ScenePipeline.VisibilityNormals,
         ["--pipeline", "visibility-uv"] => ScenePipeline.VisibilityUV,
-        _ => throw new ArgumentException("Usage: --pipeline pbr|atmosphere|unlit|normals|visibility|visibility-normals|visibility-uv")
+        _ => throw new ArgumentException("Usage: --pipeline pbr|atmosphere|unlit|normals|visibility|visibility-lod|visibility-normals|visibility-uv")
     };
 }

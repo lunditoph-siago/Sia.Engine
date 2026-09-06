@@ -21,6 +21,7 @@ struct VisibilityInstance {
 @group(0) @binding(3) var<storage, read> visibility_indices: array<u32>;
 @group(0) @binding(4) var<storage, read> visibility_triangles: array<vec4<u32>>;
 @group(0) @binding(5) var<storage, read> visibility_instances: array<VisibilityInstance>;
+@group(0) @binding(6) var<storage, read> visibility_work: array<vec4<u32>>;
 
 fn visibility_vertex(triangle: u32, corner: u32) -> VisibilityVertex {
     let reference = visibility_triangles[triangle];

@@ -34,7 +34,7 @@ internal sealed partial class SceneExampleApp
             instances.ToArray(), CreateVisibilityChecker(), _surfaceFormat, mode);
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(feature).Build();
         Console.WriteLine($"Visibility: {clusters.Meshlets.Length} meshlets, {feature.InstanceCount} instances, "
-            + $"{feature.RasterizedTriangleCount} triangles, one indirect geometry draw.");
+            + $"{feature.TriangleCapacity} triangles, one indirect geometry draw.");
     }
 
     private static VisibilityAlbedo CreateVisibilityChecker()
