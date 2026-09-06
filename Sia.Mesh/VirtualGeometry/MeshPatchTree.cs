@@ -109,7 +109,13 @@ public sealed class MeshPatchTree
             if (node.TriangleCount > triangles || !EqualBoundary(boundaries[i], combined)) {
                 throw new ArgumentException("Parent geometry must preserve the children's oriented boundary attributes and must not increase triangle count.", nameof(roots));
             }
-            error += node.EstimatedSpatialError;
+            var accumulatedError = (double)error + node.EstimatedSpatialError;
+            var roundedError = (float)accumulatedError;
+            if (roundedError < accumulatedError || (error > 0 && node.EstimatedSpatialError > 0
+                && roundedError == MathF.Max(error, node.EstimatedSpatialError))) {
+                roundedError = MathF.BitIncrement(roundedError);
+            }
+            error = roundedError;
             if (!float.IsFinite(error)) { throw new ArgumentException("Accumulated patch error overflows.", nameof(roots)); }
             nodes[i] = node with { Bounds = new(min, max), EstimatedSpatialError = error };
         }
