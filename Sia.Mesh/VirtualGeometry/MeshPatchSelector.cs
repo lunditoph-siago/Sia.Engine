@@ -9,7 +9,7 @@ public static class MeshPatchSelector
     {
         ArgumentNullException.ThrowIfNull(tree);
         if (width == 0 || height == 0 || !float.IsFinite(targetPixelError) || targetPixelError < 0
-            || budget.MaxPatches < 0 || budget.MaxMeshlets < 0 || budget.MaxTriangles < 0) {
+            || budget.MaxPatches < 0 || budget.MaxMeshlets < 0 || budget.MaxTriangles < 0 || budget.MaxRefinementCandidates < 0) {
             throw new ArgumentOutOfRangeException(nameof(budget), "Selection requires a viewport, a finite nonnegative error target, and nonnegative budgets.");
         }
         foreach (var matrix in objectToClip) {
@@ -38,7 +38,11 @@ public static class MeshPatchSelector
         }
         var unreachable = patches > budget.MaxPatches || meshlets > budget.MaxMeshlets || triangles > budget.MaxTriangles;
         var limited = unreachable;
-        while (!unreachable && candidates.TryDequeue(out var index, out _)) {
+        var examined = 0;
+        while (!unreachable && candidates.Count > 0) {
+            if (examined == budget.MaxRefinementCandidates) { limited = true; break; }
+            var index = candidates.Dequeue();
+            examined++;
             var patch = index % nodes.Length;
             var instance = index / nodes.Length;
             var node = nodes[patch];

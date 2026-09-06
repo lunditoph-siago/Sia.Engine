@@ -81,7 +81,7 @@ public sealed partial class VisibilityPbrFeature :
     {
         ArgumentNullException.ThrowIfNull(tree);
         if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
-            || lod.Budget.MaxMeshlets < 0 || lod.Budget.MaxTriangles < 0) {
+            || lod.Budget.MaxMeshlets < 0 || lod.Budget.MaxTriangles < 0 || lod.Budget.MaxRefinementCandidates < 0) {
             throw new ArgumentOutOfRangeException(nameof(lod));
         }
         var (geometry, meshlets) = tree.CopyGeometry();

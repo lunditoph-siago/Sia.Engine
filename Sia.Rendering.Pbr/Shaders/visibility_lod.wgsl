@@ -7,7 +7,7 @@ struct Instance {
     color: vec4<f32>, material: vec4<f32>, emissive: vec4<f32>,
 }
 struct Patch { minimum_error: vec4<f32>, maximum: vec4<f32>, children: vec4<u32>, geometry: vec4<u32> }
-struct Parameters { counts: vec4<u32>, budget: vec4<u32> }
+struct Parameters { counts: vec4<u32>, budget: vec4<u32>, traversal: vec4<u32> }
 struct Status { draw: vec4<u32>, selection: vec4<u32>, post_draw: vec4<u32>, culling: vec4<u32>, traversal: vec4<u32> }
 struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: array<vec4<u32>, 32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -135,6 +135,7 @@ fn select_cut() {
     let unreachable = any(totals > parameters.budget.xyz);
     var limited = unreachable;
     while (!unreachable && heap_size > 0u) {
+        if (candidates == parameters.traversal.x) { limited = true; break; }
         let index = pop();
         candidates++;
         let node = patches[index % parameters.counts.x];
@@ -150,16 +151,10 @@ fn select_cut() {
             push(base + child);
         }
     }
-    var offset = 0u;
-    var maximum_error = 0u;
-    for (var index = 0u; index < parameters.counts.x * parameters.counts.z; index++) {
-        if (states[index].y == 0u) { continue; }
-        states[index].z = offset;
-        offset += patches[index % parameters.counts.x].geometry.z;
-        maximum_error = max(maximum_error, states[index].x);
-    }
-    status.draw = vec4<u32>(offset * 3u, 1u, 0u, 0u);
-    status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), maximum_error);
+    status.draw = vec4<u32>(totals.z * 3u, 1u, 0u, 0u);
+    status.post_draw = vec4<u32>(0u, 1u, 0u, 0u);
+    status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), 0u);
+    status.culling = vec4<u32>(totals.z, 0u, 0u, 0u);
     status.traversal = vec4<u32>(parameters.counts.x * parameters.counts.z, candidates, refinements, heap_peak);
 }
 
@@ -242,21 +237,6 @@ fn cull_main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     }
 }
 
-@compute @workgroup_size(1)
-fn compact_main() {
-    status.culling = vec4<u32>(status.draw.x / 3u, 0u, 0u, 0u);
-    var offset = 0u;
-    for (var index = 0u; index < parameters.counts.x * parameters.counts.z; index++) {
-        if (states[index].y == 0u) { continue; }
-        if (states[index].w == 1u) { status.culling.y++; continue; }
-        if (states[index].w == 2u) { status.culling.z++; continue; }
-        states[index].z = offset;
-        offset += patches[index % parameters.counts.x].geometry.z;
-    }
-    status.draw = vec4<u32>(offset * 3u, 1u, 0u, 0u);
-    status.post_draw = vec4<u32>(0u, 1u, offset * 3u, 0u);
-}
-
 @compute @workgroup_size(64)
 fn cull_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
@@ -264,19 +244,6 @@ fn cull_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     if (states[index].y == 0u || states[index].w != 2u) { return; }
     let matrix = camera.view_projection * instances[index / parameters.counts.x].transform;
     states[index].w = select(4u, 3u, occluded(patches[index % parameters.counts.x], matrix));
-}
-
-@compute @workgroup_size(1)
-fn compact_post() {
-    let start = status.draw.x / 3u;
-    var offset = start;
-    for (var index = 0u; index < parameters.counts.x * parameters.counts.z; index++) {
-        if (states[index].y == 0u || states[index].w != 4u) { continue; }
-        states[index].z = offset;
-        offset += patches[index % parameters.counts.x].geometry.z;
-        status.culling.w++;
-    }
-    status.post_draw = vec4<u32>((offset - start) * 3u, 1u, start * 3u, 0u);
 }
 
 @compute @workgroup_size(64)
