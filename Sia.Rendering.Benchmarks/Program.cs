@@ -11,7 +11,7 @@ var frames = 30;
 var timing = true;
 for (var i = 0; i < args.Length; i++) {
     if (args[i] == "--no-timing") { timing = false; continue; }
-    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale, --output PATH, --warmup N, --frames N, or --no-timing."); }
+    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale|instances, --output PATH, --warmup N, --frames N, or --no-timing."); }
     var name = args[i++];
     switch (name) {
         case "--suite": suite = args[i]; break;
@@ -21,7 +21,7 @@ for (var i = 0; i < args.Length; i++) {
         default: throw new ArgumentException("Unknown option: " + name);
     }
 }
-if (suite is not ("smoke" or "scale") || warmup < 0 || frames < 1) { throw new ArgumentException("Invalid suite or frame counts."); }
+if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1) { throw new ArgumentException("Invalid suite or frame counts."); }
 #if DEBUG
 throw new InvalidOperationException("Run this benchmark with --configuration Release.");
 #endif
@@ -29,7 +29,10 @@ using var gpu = new GpuDevice(timing);
 Console.WriteLine($"{gpu.Description.Device}; {gpu.Description.Backend}; GPU timing: {gpu.TimingEnabled}");
 var results = new List<CaseResult>();
 int[] sizes = suite == "scale" ? [724, 2237, 5000] : [64];
-string[] scenarios = suite == "scale" ? ["near", "far"] : ["near", "far", "occluded", "offscreen", "nonuniform"];
+string[] scenarios = suite switch {
+    "scale" => ["near", "far"], "instances" => ["instanced"],
+    _ => ["near", "far", "occluded", "offscreen", "nonuniform"]
+};
 foreach (var size in sizes) {
     var sourceTriangles = checked(size * size * 2);
     MeshPatchBuildResult? build = null;
@@ -37,11 +40,11 @@ foreach (var size in sizes) {
     foreach (var resolution in new (uint Width, uint Height)[] { (640, 360), (1280, 720) }) {
         foreach (var scenario in scenarios) {
             var instances = Assets.Instances(scenario);
-            var minimumWorkBytes = checked((ulong)sourceTriangles * (ulong)instances.Length * 16);
+            var minimumResidentTriangleBytes = checked((ulong)sourceTriangles * 16);
             var input = new CaseInput(size, sourceTriangles, instances.Length, scenario, resolution.Width, resolution.Height, 18000);
-            if (minimumWorkBytes > gpu.Limits.MaxStorageBufferBindingSize || minimumWorkBytes > gpu.Limits.MaxBufferSize) {
-                results.Add(new(input, "capacity-rejected", $"Finest work list requires {minimumWorkBytes} bytes; device limits are {gpu.Limits.MaxStorageBufferBindingSize} storage binding / {gpu.Limits.MaxBufferSize} buffer bytes.", null, null, null));
-                Console.WriteLine($"{sourceTriangles} triangles / {scenario}: capacity-rejected ({minimumWorkBytes} work bytes)");
+            if (minimumResidentTriangleBytes > gpu.Limits.MaxStorageBufferBindingSize || minimumResidentTriangleBytes > gpu.Limits.MaxBufferSize) {
+                results.Add(new(input, "capacity-rejected", $"Resident triangle records alone require at least {minimumResidentTriangleBytes} bytes before parent representations; device limits are {gpu.Limits.MaxStorageBufferBindingSize} storage binding / {gpu.Limits.MaxBufferSize} buffer bytes.", null, null, null));
+                Console.WriteLine($"{sourceTriangles} triangles / {scenario}: capacity-rejected ({minimumResidentTriangleBytes} minimum resident triangle bytes)");
                 continue;
             }
             if (build is null) {

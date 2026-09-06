@@ -102,7 +102,7 @@ public sealed partial class VisibilityPbrFeature :
             throw new ArgumentOutOfRangeException(nameof(outputFormat));
         }
         var triangles = checked((uint)geometry.Triangles.Length);
-        var capacity = checked((uint)(tree?.FinestTriangleCount ?? geometry.Triangles.Length) * (uint)instances.Length);
+        var capacity = WorkCapacity(tree, triangles, (uint)instances.Length, lod.Budget);
         _ = checked(capacity * 3u);
         var gpuInstances = new InstanceGpu[instances.Length];
         var transforms = new float4x4[instances.Length];
@@ -138,7 +138,7 @@ public sealed partial class VisibilityPbrFeature :
         var limits = Wgpu.GetLimits(device);
         var workSize = System.Math.Max(1u, capacity) * 16ul;
         if (workSize > limits.MaxBufferSize || workSize > limits.MaxStorageBufferBindingSize) {
-            throw new ArgumentException("The complete finest cut exceeds the device work-list capacity.", nameof(instances));
+            throw new ArgumentException("The required visibility work list exceeds the device capacity.", nameof(instances));
         }
         if (albedo.Width == 0 || albedo.Height == 0 || albedo.Width > limits.MaxTextureDimension2D
             || albedo.Height > limits.MaxTextureDimension2D || albedo.MipLevels.Length == 0) {
