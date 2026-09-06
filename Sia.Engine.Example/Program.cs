@@ -10,9 +10,9 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         try {
-            var (pipeline, assetPath, scene, debugMode, distance) = ParseOptions(args);
-            var asset = pipeline == ScenePipeline.VisibilityLod ? await LoadPatchAssetAsync(assetPath, scene) : null;
-            using var app = new SceneExampleApp(pipeline, asset, scene, debugMode, distance);
+            var (pipeline, debugMode, distance) = ParseOptions(args);
+            var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
+            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance);
 #if BROWSER
             await app.RunAsync();
 #else
@@ -26,29 +26,15 @@ public static class Program
         }
     }
 
-    private static async Task<MeshPatchAsset> LoadPatchAssetAsync(string? path, PatchScene scene)
+    private static async Task<MeshPatchAsset> LoadBunnyAsync()
     {
         var timer = Stopwatch.StartNew();
-        byte[] bytes;
-        if (path is null) {
-            var name = scene.ToString().ToLowerInvariant();
-            using var stream = typeof(Program).Assembly.GetManifestResourceStream($"Sia.Engine.Example.{name}.siapatch")
-                ?? throw new FileNotFoundException($"The bundled {name} patch asset is missing.");
-            if (scene == PatchScene.Bunny) {
-                Console.WriteLine("Stanford Bunny: Stanford University Computer Graphics Laboratory; https://graphics.stanford.edu/data/3Dscanrep/");
-            }
-            using var memory = new MemoryStream();
-            await stream.CopyToAsync(memory);
-            bytes = memory.ToArray();
-        }
-        else {
-#if BROWSER
-            using var client = new HttpClient();
-            bytes = await client.GetByteArrayAsync(path);
-#else
-            bytes = await File.ReadAllBytesAsync(path);
-#endif
-        }
+        using var stream = typeof(Program).Assembly.GetManifestResourceStream("Sia.Engine.Example.bunny.siapatch")
+            ?? throw new FileNotFoundException("The bundled Bunny asset is missing.");
+        Console.WriteLine("Stanford Bunny: Stanford University Computer Graphics Laboratory; https://graphics.stanford.edu/data/3Dscanrep/");
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+        var bytes = memory.ToArray();
         var readMilliseconds = timer.Elapsed.TotalMilliseconds;
         timer.Restart();
         var asset = MeshPatchAsset.Decode(bytes);
@@ -56,26 +42,18 @@ public static class Program
         return asset;
     }
 
-    private static (ScenePipeline Pipeline, string? Asset, PatchScene Scene, VisibilityDebugMode? DebugMode, float? Distance) ParseOptions(string[] args)
+    private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance) ParseOptions(string[] args)
     {
         var pipeline = ScenePipeline.Pbr;
-        string? asset = null;
-        var scene = PatchScene.Terrain;
         VisibilityDebugMode? debugMode = null;
         float? distance = null;
         for (var i = 0; i < args.Length; i += 2) {
             if (i + 1 == args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
-            else if (args[i] == "--asset") { asset = args[i + 1]; }
-            else if (args[i] == "--scene") { scene = args[i + 1] switch {
-                "terrain" => PatchScene.Terrain, "bunny" => PatchScene.Bunny, "plane" => PatchScene.Plane,
-                _ => throw new ArgumentException("Expected --scene terrain|bunny|plane.")
-            }; }
             else if (args[i] == "--debug") { debugMode = args[i + 1] switch {
                 "shaded" => VisibilityDebugMode.Shaded,
-                "triangles" => VisibilityDebugMode.Triangles, "normals" => VisibilityDebugMode.Normals,
-                "uv" => VisibilityDebugMode.UV, "albedo" => VisibilityDebugMode.Albedo,
-                _ => throw new ArgumentException("Expected --debug shaded|triangles|normals|uv|albedo.")
+                "triangles" => VisibilityDebugMode.Triangles,
+                _ => throw new ArgumentException("Expected --debug shaded|triangles.")
             }; }
             else if (args[i] == "--distance") {
                 if (!float.TryParse(args[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
@@ -86,25 +64,16 @@ public static class Program
             }
             else { throw new ArgumentException("Unknown option: " + args[i]); }
         }
-        if ((asset is not null || args.Contains("--scene") || debugMode is not null || distance is not null)
-            && pipeline != ScenePipeline.VisibilityLod) {
-            throw new ArgumentException("--asset, --scene, --debug and --distance require --pipeline visibility-lod.");
+        if ((debugMode is not null || distance is not null) && pipeline != ScenePipeline.Bunny) {
+            throw new ArgumentException("--debug and --distance require --pipeline bunny.");
         }
-        if (distance is not null && scene != PatchScene.Bunny) {
-            throw new ArgumentException("--distance requires --scene bunny.");
-        }
-        return (pipeline, asset, scene, debugMode, distance);
+        return (pipeline, debugMode, distance);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {
         "pbr" => ScenePipeline.Pbr,
-        "atmosphere" => ScenePipeline.Atmosphere,
         "unlit" => ScenePipeline.Unlit,
-        "normals" => ScenePipeline.Normals,
-        "visibility" => ScenePipeline.Visibility,
-        "visibility-lod" => ScenePipeline.VisibilityLod,
-        "visibility-normals" => ScenePipeline.VisibilityNormals,
-        "visibility-uv" => ScenePipeline.VisibilityUV,
-        _ => throw new ArgumentException("Usage: --pipeline pbr|atmosphere|unlit|normals|visibility|visibility-lod|visibility-normals|visibility-uv")
+        "bunny" => ScenePipeline.Bunny,
+        _ => throw new ArgumentException("Usage: --pipeline bunny|pbr|unlit")
     };
 }
