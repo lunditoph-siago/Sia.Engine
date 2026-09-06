@@ -4,6 +4,7 @@ using System.Text.Json;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering.Benchmarks;
 using Sia.Engine.Rendering.Pbr;
+using Sia.Math;
 
 var suite = "smoke";
 var output = "visibility-benchmark.json";
@@ -15,26 +16,34 @@ var refinementNodes = int.MaxValue;
 var inFlightFrames = 1;
 string? assetPath = null;
 string? cookPath = null;
+string? sourcePath = null;
+var compress = false;
+var view = "clip";
 var fixture = "grid";
 var gridSize = 64;
 var buildSettings = MeshPatchBuildSettings.Default;
 if (args.Contains("--help")) {
     Console.WriteLine("""
         Cook without creating a GPU device:
-          --cook PATH --fixture grid|terrain --size N
+          --cook PATH --fixture grid|terrain|plane --size N
           [--leaf-triangles N --children N --ratio F --normal-weight F --uv-weight F]
+          --cook PATH --source MESH.ply [--compress]
+        PLY input: ASCII triangle positions; remove unused vertices, normalize longest axis to 1.6,
+        generate smooth normals, discard scan attributes. --compress stores lossless GZip data.
         Existing files are never overwritten. The output includes build diagnostics and timings.
         Benchmark a cooked asset:
           --asset PATH [--suite smoke|instances --warmup N --frames N --output PATH]
         Benchmark a generated fixture:
-          --suite smoke|scale|instances [--fixture grid|terrain --size N]
+          --suite smoke|scale|instances [--fixture grid|terrain|plane --size N]
+        Framing: --view clip|frontal (frontal fits the asset bounds with a fixed orthographic view).
         Rendering options: --refinement-budget N --refinement-nodes N --in-flight N --no-timing
         """);
     return;
 }
 for (var i = 0; i < args.Length; i++) {
+    if (args[i] == "--compress") { compress = true; continue; }
     if (args[i] == "--no-timing") { timing = false; continue; }
-    if (i + 1 >= args.Length) { throw new ArgumentException("Expected --suite smoke|scale|instances, --asset PATH, --cook PATH, --fixture grid|terrain, --size N, --output PATH, --warmup N, --frames N, --refinement-budget N, --refinement-nodes N, --in-flight N, or --no-timing."); }
+    if (i + 1 >= args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
     var name = args[i++];
     switch (name) {
         case "--suite": suite = args[i]; break;
@@ -46,6 +55,8 @@ for (var i = 0; i < args.Length; i++) {
         case "--in-flight": inFlightFrames = int.Parse(args[i]); break;
         case "--asset": assetPath = args[i]; break;
         case "--cook": cookPath = args[i]; break;
+        case "--source": sourcePath = args[i]; break;
+        case "--view": view = args[i]; break;
         case "--fixture": fixture = args[i]; break;
         case "--size": gridSize = int.Parse(args[i]); break;
         case "--leaf-triangles": buildSettings = buildSettings with { MaxLeafTriangles = int.Parse(args[i]) }; break;
@@ -59,23 +70,30 @@ for (var i = 0; i < args.Length; i++) {
 if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1 || refinementBudget < 0 || refinementNodes < 0 || inFlightFrames is < 1 or > 64) {
     throw new ArgumentException("Invalid suite, frame counts, or refinement budget.");
 }
-if (gridSize < 1 || fixture is not ("grid" or "terrain") || (assetPath is not null && (cookPath is not null || suite == "scale"))) {
+if (gridSize < 1 || fixture is not ("grid" or "terrain" or "plane") || (assetPath is not null && (cookPath is not null || suite == "scale"))) {
     throw new ArgumentException("Invalid asset/fixture options. --asset cannot be combined with --cook or --suite scale.");
 }
 if (assetPath is not null && args.Any(option => option is "--fixture" or "--size" or "--leaf-triangles" or "--children"
     or "--ratio" or "--normal-weight" or "--uv-weight")) {
     throw new ArgumentException("Cooked assets already contain their geometry and build settings; fixture/build options require generated input.");
 }
+if (view is not ("clip" or "frontal") || (compress && cookPath is null)
+    || (sourcePath is not null && (cookPath is null || args.Any(option => option is "--fixture" or "--size")))) {
+    throw new ArgumentException("--source requires --cook without fixture/size; --compress requires --cook; --view must be clip or frontal.");
+}
 #if DEBUG
 throw new InvalidOperationException("Run this benchmark with --configuration Release.");
 #endif
 if (cookPath is not null) {
-    var source = fixture == "terrain" ? Assets.Terrain(gridSize) : Assets.Grid(gridSize);
+    MeshData source;
+    using (var reader = sourcePath is null ? null : File.OpenText(sourcePath)) {
+        source = reader is null ? Assets.Create(fixture, gridSize) : PlyMesh.Read(reader);
+    }
     var watch = Stopwatch.StartNew();
     var cooked = MeshPatchAsset.Cook(source, buildSettings);
     var cookMilliseconds = watch.Elapsed.TotalMilliseconds;
     watch.Restart();
-    var bytes = cooked.Encode();
+    var bytes = compress ? cooked.EncodeCompressed() : cooked.Encode();
     var encodeMilliseconds = watch.Elapsed.TotalMilliseconds;
     watch.Restart();
     MeshPatchAsset.Decode(bytes);
@@ -93,7 +111,8 @@ if (cookPath is not null) {
     }
     finally { if (ownsTemporary) { File.Delete(temporary); } }
     Console.WriteLine(JsonSerializer.Serialize(new {
-        Asset = destination, Fixture = fixture, GridSize = gridSize, Bytes = bytes.Length,
+        Asset = destination, Source = sourcePath, Fixture = sourcePath is null ? fixture : null,
+        GridSize = sourcePath is null ? (int?)gridSize : null, Vertices = source.Vertices.Length, Bytes = bytes.Length, Compressed = compress,
         MeshPatchAsset.FormatVersion, cooked.BuilderVersion, cooked.SourceHash, cooked.Settings,
         cooked.Build.SourceTriangleCount, cooked.Build.RemovedDegenerateTriangleCount,
         cooked.Build.SimplificationCount, cooked.Build.TargetMissCount, cooked.Build.UnreducedGroupCount,
@@ -137,11 +156,15 @@ foreach (var size in sizes) {
             }
             if (build is null) {
                 var watch = Stopwatch.StartNew();
-                build = MeshPatchBuilder.Build(fixture == "terrain" ? Assets.Terrain(size) : Assets.Grid(size), buildSettings);
+                build = MeshPatchBuilder.Build(Assets.Create(fixture, size), buildSettings);
                 buildSeconds = watch.Elapsed.TotalSeconds;
                 Console.WriteLine($"Cooked {sourceTriangles} triangles in {buildSeconds:F3} s; {build.Value.Tree.Nodes.Length} nodes.");
             }
             var tree = build.Value.Tree;
+            var bounds = tree.RootCount == 0 ? default : tree.Nodes.Span[0].Bounds;
+            foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
+                bounds = new(math.min(bounds.Min, node.Bounds.Min), math.max(bounds.Max, node.Bounds.Max));
+            }
             var asset = new AssetResult(loaded is null ? buildSeconds : null, tree.Nodes.Length, tree.RootCount,
                 tree.Nodes.Span[..tree.RootCount].ToArray().Sum(n => n.TriangleCount), tree.Nodes.ToArray().Sum(n => (long)n.TriangleCount),
                 assetPath, loaded?.SourceHash, loaded?.Settings ?? buildSettings, loaded?.BuilderVersion, readMilliseconds, decodeMilliseconds);
@@ -151,7 +174,7 @@ foreach (var size in sizes) {
                     new(int.MaxValue, int.MaxValue, input.TriangleBudget) {
                         MaxRefinementCandidates = input.RefinementBudget, MaxRefinementNodes = input.RefinementNodes
                     }, inFlightFrames);
-                var projection = Assets.Projection(scenario);
+                var projection = Assets.Projection(scenario, view == "frontal" ? bounds : null, (float)resolution.Width / resolution.Height);
                 var setupMilliseconds = startup.Elapsed.TotalMilliseconds;
                 startup.Restart();
                 await foreach (var _ in scene.RenderAsync([projection])) { }
@@ -177,7 +200,7 @@ foreach (var size in sizes) {
     }
 }
 var report = new {
-    SchemaVersion = 3, CreatedUtc = DateTimeOffset.UtcNow, Suite = suite, Fixture = loaded is null ? fixture : null,
+    SchemaVersion = 4, View = view, CreatedUtc = DateTimeOffset.UtcNow, Suite = suite, Fixture = loaded is null ? fixture : null,
     WarmupFrames = warmup, MeasuredFrames = frames, InFlightFrames = inFlightFrames,
     BuildConfiguration = "Release", Runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
     Adapter = gpu.Description, TimingRequested = timing, gpu.TimingEnabled,

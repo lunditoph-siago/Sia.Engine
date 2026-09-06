@@ -222,11 +222,18 @@ internal sealed unsafe partial class SceneExampleApp
         _orbitAngle += deltaTime * _orbitSpeed;
 
         var eye = new float3(0, _pipeline == ScenePipeline.Atmosphere ? 3 : _orbitHeight, _orbitRadius);
-        if (_pipeline == ScenePipeline.VisibilityLod) {
+        if (_pipeline == ScenePipeline.VisibilityLod && _patchScene == PatchScene.Terrain) {
             var distance = 22 + 12 * MathF.Sin(_orbitAngle);
             eye = new float3(0, distance * 0.65f, distance);
         }
         var target = _pipeline == ScenePipeline.Atmosphere ? new float3(0, 2, 0) : float3.zero;
+        if (_pipeline == ScenePipeline.VisibilityLod && _patchScene != PatchScene.Terrain) {
+            target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
+            var half = (_patchBounds.Max - _patchBounds.Min) * 0.5f;
+            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
+            var radius = System.Math.Max(0.001f, System.Math.Max(half.y, half.x / aspect));
+            eye = target + new float3(0, 0, half.z + radius * 1.05f / MathF.Tan(MathF.PI / 6));
+        }
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
         var world = _sceneWorld!;

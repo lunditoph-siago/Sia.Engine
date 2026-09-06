@@ -8,9 +8,9 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         try {
-            var (pipeline, assetPath) = ParseOptions(args);
-            var asset = pipeline == ScenePipeline.VisibilityLod ? await LoadPatchAssetAsync(assetPath) : null;
-            using var app = new SceneExampleApp(pipeline, asset);
+            var (pipeline, assetPath, scene) = ParseOptions(args);
+            var asset = pipeline == ScenePipeline.VisibilityLod ? await LoadPatchAssetAsync(assetPath, scene) : null;
+            using var app = new SceneExampleApp(pipeline, asset, scene);
 #if BROWSER
             await app.RunAsync();
 #else
@@ -24,13 +24,17 @@ public static class Program
         }
     }
 
-    private static async Task<MeshPatchAsset> LoadPatchAssetAsync(string? path)
+    private static async Task<MeshPatchAsset> LoadPatchAssetAsync(string? path, PatchScene scene)
     {
         var timer = Stopwatch.StartNew();
         byte[] bytes;
         if (path is null) {
-            using var stream = typeof(Program).Assembly.GetManifestResourceStream("Sia.Engine.Example.terrain.siapatch")
-                ?? throw new FileNotFoundException("The bundled terrain patch asset is missing.");
+            var name = scene.ToString().ToLowerInvariant();
+            using var stream = typeof(Program).Assembly.GetManifestResourceStream($"Sia.Engine.Example.{name}.siapatch")
+                ?? throw new FileNotFoundException($"The bundled {name} patch asset is missing.");
+            if (scene == PatchScene.Bunny) {
+                Console.WriteLine("Stanford Bunny: Stanford University Computer Graphics Laboratory; https://graphics.stanford.edu/data/3Dscanrep/");
+            }
             using var memory = new MemoryStream();
             await stream.CopyToAsync(memory);
             bytes = memory.ToArray();
@@ -50,20 +54,25 @@ public static class Program
         return asset;
     }
 
-    private static (ScenePipeline Pipeline, string? Asset) ParseOptions(string[] args)
+    private static (ScenePipeline Pipeline, string? Asset, PatchScene Scene) ParseOptions(string[] args)
     {
         var pipeline = ScenePipeline.Pbr;
         string? asset = null;
+        var scene = PatchScene.Terrain;
         for (var i = 0; i < args.Length; i += 2) {
-            if (i + 1 == args.Length) { throw new ArgumentException("Expected --pipeline NAME or --asset PATH."); }
+            if (i + 1 == args.Length) { throw new ArgumentException("Expected --pipeline NAME, --asset PATH, or --scene terrain|bunny|plane."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
             else if (args[i] == "--asset") { asset = args[i + 1]; }
+            else if (args[i] == "--scene") { scene = args[i + 1] switch {
+                "terrain" => PatchScene.Terrain, "bunny" => PatchScene.Bunny, "plane" => PatchScene.Plane,
+                _ => throw new ArgumentException("Expected --scene terrain|bunny|plane.")
+            }; }
             else { throw new ArgumentException("Unknown option: " + args[i]); }
         }
-        if (asset is not null && pipeline != ScenePipeline.VisibilityLod) {
-            throw new ArgumentException("--asset requires --pipeline visibility-lod.");
+        if ((asset is not null || args.Contains("--scene")) && pipeline != ScenePipeline.VisibilityLod) {
+            throw new ArgumentException("--asset and --scene require --pipeline visibility-lod.");
         }
-        return (pipeline, asset);
+        return (pipeline, asset, scene);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {

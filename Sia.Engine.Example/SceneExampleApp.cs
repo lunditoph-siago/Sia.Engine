@@ -28,10 +28,11 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private bool _disposed;
     private readonly ScenePipeline _pipeline;
 
-    public SceneExampleApp(ScenePipeline pipeline, Sia.Engine.Mesh.MeshPatchAsset? patchAsset = null)
+    public SceneExampleApp(ScenePipeline pipeline, Sia.Engine.Mesh.MeshPatchAsset? patchAsset = null, PatchScene patchScene = PatchScene.Terrain)
     {
         _pipeline = pipeline;
         _patchAsset = patchAsset;
+        _patchScene = patchScene;
     }
 
     public void Run()

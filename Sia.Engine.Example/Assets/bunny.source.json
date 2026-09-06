@@ -1,0 +1,23 @@
+{
+  "name": "Stanford Bunny",
+  "credit": "Stanford University Computer Graphics Laboratory",
+  "repository": "https://graphics.stanford.edu/data/3Dscanrep/",
+  "download": "https://graphics.stanford.edu/pub/3Dscanrep/bunny.tar.gz",
+  "entry": "bunny/reconstruction/bun_zipper.ply",
+  "sourceSha256": "b1acc63bece78444aa2e15bdcc72371a201279b98c6f5d4b74c993d02f0566fe",
+  "sourceBytes": 3033195,
+  "sourceVertices": 35947,
+  "retainedVertices": 34834,
+  "triangles": 69451,
+  "conversion": [
+    "Remove 1113 unreferenced vertices and confidence/intensity scan fields.",
+    "Center referenced bounds and uniformly scale the longest axis to 1.6. Preserve all triangles and winding.",
+    "Generate area-weighted smooth normals; use a uniform material with zero UVs.",
+    "Cook patch hierarchy and meshlets with builder 2 default settings; share identical vertex attributes across LODs, byte-shuffle section fields and losslessly compress with GZip SmallestSize."
+  ],
+  "asset": "bunny.siapatch",
+  "assetSha256": "6682f1423e2b9ae7dfbb8c6ded9953b6db99d3cd048b40f6cfcca07c3ed8d1d8",
+  "assetBytes": 1856765,
+  "decodedBytes": 4363112,
+  "usage": "Research and free redistribution with source acknowledgment. Commercial use requires Stanford permission; see the repository terms."
+}

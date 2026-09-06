@@ -87,7 +87,19 @@ public sealed partial class MeshPatchAsset
         return bytes;
     }
 
-    public static MeshPatchAsset Decode(ReadOnlySpan<byte> bytes, CancellationToken cancellationToken = default)
+    public static MeshPatchAsset Decode(ReadOnlySpan<byte> bytes, CancellationToken cancellationToken = default,
+        int maximumDecodedBytes = 512 * 1024 * 1024)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
+        if (bytes.StartsWith("SIAGZIP1"u8)) {
+            return DecodeRaw(Decompress(bytes, maximumDecodedBytes, cancellationToken), cancellationToken);
+        }
+        Require(bytes.Length <= maximumDecodedBytes, "Patch asset exceeds the decoded byte limit.");
+        return DecodeRaw(bytes, cancellationToken);
+    }
+
+    private static MeshPatchAsset DecodeRaw(ReadOnlySpan<byte> bytes, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Require(bytes.Length >= HeaderSize && bytes[..8].SequenceEqual("SIAPATCH"u8), "Invalid patch asset header.");
