@@ -49,7 +49,6 @@ internal sealed unsafe partial class SceneExampleApp
             frameContext);
         _renderPipeline!.Extract(in featureContext);
         _renderPipeline.Prepare(in featureContext);
-        ReportPatchLod(view);
         _renderPipeline.Queue(in featureContext);
         var props = new RenderGraphProps(
             _renderGraph!, _renderPipeline, featureContext,

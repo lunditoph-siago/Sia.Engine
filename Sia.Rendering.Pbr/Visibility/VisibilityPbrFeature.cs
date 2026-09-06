@@ -17,6 +17,7 @@ public sealed partial class VisibilityPbrFeature :
     private readonly MeshPatchTree? _patchTree;
     private readonly float4x4[] _transforms;
     private readonly VisibilityLodSettings _lod;
+    private readonly LodGpu? _gpuLod;
     private readonly Entity _albedoView;
     private readonly Entity _albedoTexture;
     private readonly Entity _sampler;
@@ -35,7 +36,7 @@ public sealed partial class VisibilityPbrFeature :
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
         Entity albedoTexture, Entity albedoView, Entity sampler, Entity geometryLayout, Entity resolveLayout,
         Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
-        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode)
+        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod)
     {
         _world = frame.ResourceWorld;
         _device = frame.Device;
@@ -44,6 +45,7 @@ public sealed partial class VisibilityPbrFeature :
         _patchTree = patchTree;
         _transforms = transforms;
         _lod = lod;
+        _gpuLod = gpuLod;
         _albedoView = albedoView;
         _albedoTexture = albedoTexture;
         _sampler = sampler;
@@ -65,7 +67,17 @@ public sealed partial class VisibilityPbrFeature :
 
     public static VisibilityPbrFeature CreateLod(in GpuFrame frame, MeshPatchTree tree,
         ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded)
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded) =>
+        CreateLod(in frame, tree, instances, albedo, lod, outputFormat, mode, false);
+
+    public static VisibilityPbrFeature CreateGpuLod(in GpuFrame frame, MeshPatchTree tree,
+        ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded) =>
+        CreateLod(in frame, tree, instances, albedo, lod, outputFormat, mode, true);
+
+    private static VisibilityPbrFeature CreateLod(in GpuFrame frame, MeshPatchTree tree,
+        ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, bool gpuSelection)
     {
         ArgumentNullException.ThrowIfNull(tree);
         if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
@@ -73,12 +85,12 @@ public sealed partial class VisibilityPbrFeature :
             throw new ArgumentOutOfRangeException(nameof(lod));
         }
         var (geometry, meshlets) = tree.CopyGeometry();
-        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod);
+        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod, gpuSelection);
     }
 
     private static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod)
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod, bool gpuSelection = false)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(albedo);
@@ -185,8 +197,9 @@ public sealed partial class VisibilityPbrFeature :
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
+            var gpuLod = gpuSelection ? CreateLodGpu(world, device, queue, tree!, (uint)instances.Length, lod, limits, acquired) : (LodGpu?)null;
             return new(in frame, buffers, texture, view, sampler, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode);
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod);
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -210,9 +223,11 @@ public sealed partial class VisibilityPbrFeature :
         view.Height = (uint)viewport.Height;
         view.Frame = context.Frame;
         var camera = context.Frame.Camera.Get<CameraMatrices>();
-        UpdateWork(view, camera.ViewProj);
+        if (!Finite(camera.ViewProj)) { throw new ArgumentException("Visibility requires a finite camera projection."); }
+        if (_gpuLod is null) { UpdateWork(view, camera.ViewProj); }
+        else { PrepareOcclusion(view, camera.ViewProj); }
         var uniform = new CameraGpu(camera.ViewProj, new float4(camera.WorldPosition, 1),
-            new uint4(view.Width, view.Height, view.WorkCount, (uint)_mode),
+            new uint4(view.Width, view.Height, _gpuLod is null ? view.WorkCount : TriangleCapacity, (uint)_mode),
             new float4(math.normalize(new float3(0.4f, 0.8f, 0.6f)), 0), new float4(4, 4, 4, 0));
         Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0, [uniform]);
     }

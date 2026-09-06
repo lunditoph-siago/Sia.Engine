@@ -8,7 +8,6 @@ namespace Sia.Engine.Example;
 internal sealed partial class SceneExampleApp
 {
     private VisibilityPbrFeature? _visibilityLod;
-    private int _lastLodTriangles = -1;
 
     private void InitializePatchLod()
     {
@@ -27,20 +26,11 @@ internal sealed partial class SceneExampleApp
             }
         }
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
-        _visibilityLod = VisibilityPbrFeature.CreateLod(in frame, tree, instances.ToArray(), CreateVisibilityChecker(),
+        _visibilityLod = VisibilityPbrFeature.CreateGpuLod(in frame, tree, instances.ToArray(), CreateVisibilityChecker(),
             new(8, new(256, 1024, 18000)), _surfaceFormat);
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
-        Console.WriteLine($"Patch LOD: {tree.Nodes.Length} patches per asset, {instances.Count} instances, "
+        Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length} patches per asset, {instances.Count} instances, "
             + $"{_visibilityLod.TriangleCapacity} finest triangles; target 8 px, triangle budget 18000.");
-    }
-
-    private void ReportPatchLod(RenderView view)
-    {
-        if (_visibilityLod?.GetLodSelection(view) is not { } selection || selection.TriangleCount == _lastLodTriangles) { return; }
-        _lastLodTriangles = selection.TriangleCount;
-        Console.WriteLine($"LOD: {selection.Patches.Length} patches, {selection.TriangleCount} triangles, "
-            + $"estimated error {selection.MaximumEstimatedPixelError:F1} px, "
-            + $"budget limited={selection.BudgetLimited}, unreachable={selection.BudgetUnreachable}.");
     }
 
     private static MeshData TerrainGrid(int x, int z, int size)
