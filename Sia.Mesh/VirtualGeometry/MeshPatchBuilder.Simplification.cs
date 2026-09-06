@@ -28,7 +28,7 @@ public static partial class MeshPatchBuilder
             var (from, to, fromRevision, toRevision) = collapse;
             if (fromRevision != revisions[from] || toRevision != revisions[to] || incident[from].Count == 0
                 || incident[to].Count == 0 || locked[from]) { continue; }
-            if (!CanCollapse(from, to, triangles, incident, positions, mesh.Vertices)) { continue; }
+            if (!CanCollapse(from, to, triangles, incident, locked, positions, mesh.Vertices)) { continue; }
             var affected = new HashSet<int>();
             foreach (var t in incident[from].Concat(incident[to])) {
                 var face = triangles[t];
@@ -88,11 +88,14 @@ public static partial class MeshPatchBuilder
         }
     }
 
-    private static bool CanCollapse(int from, int to, Triangle[] triangles, HashSet<int>[] incident,
+    private static bool CanCollapse(int from, int to, Triangle[] triangles, HashSet<int>[] incident, bool[] locked,
         double3[] positions, MeshVertex[] vertices)
     {
         var fromNeighbors = Neighbors(from);
         var toNeighbors = Neighbors(to);
+        if (locked[to] && fromNeighbors.Any(vertex => vertex != to && locked[vertex] && !toNeighbors.Contains(vertex))) {
+            return false;
+        }
         var common = 0;
         foreach (var vertex in fromNeighbors) { if (toNeighbors.Contains(vertex)) { common++; } }
         if (common != 2 || incident[from].Count(t => triangles[t].Contains(to)) != 2) { return false; }

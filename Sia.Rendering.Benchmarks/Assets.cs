@@ -6,17 +6,22 @@ namespace Sia.Engine.Rendering.Benchmarks;
 
 internal static class Assets
 {
-    public static MeshData Grid(int size)
+    public static MeshData Create(string fixture, int size) => fixture switch {
+        "grid" => Grid(size), "terrain" => Terrain(size), "plane" => Grid(size, flat: true),
+        _ => throw new ArgumentException("Unknown mesh fixture.", nameof(fixture))
+    };
+
+    public static MeshData Grid(int size, bool flat = false)
     {
         var vertices = new MeshVertex[checked((size + 1) * (size + 1))];
         var indices = new uint[checked(size * size * 6)];
         for (var y = 0; y <= size; y++) {
             for (var x = 0; x <= size; x++) {
-                var px = x * 1.6f / size - 0.8f;
+                var px = (x * 1.6f / size - 0.8f) * (flat ? 16f / 9 : 1);
                 var py = y * 1.6f / size - 0.8f;
-                var z = 0.5f + 0.03f * MathF.Sin(px * 8) * MathF.Cos(py * 6);
-                var dx = 0.24f * MathF.Cos(px * 8) * MathF.Cos(py * 6);
-                var dy = -0.18f * MathF.Sin(px * 8) * MathF.Sin(py * 6);
+                var z = flat ? 0.5f : 0.5f + 0.03f * MathF.Sin(px * 8) * MathF.Cos(py * 6);
+                var dx = flat ? 0 : 0.24f * MathF.Cos(px * 8) * MathF.Cos(py * 6);
+                var dy = flat ? 0 : -0.18f * MathF.Sin(px * 8) * MathF.Sin(py * 6);
                 vertices[y * (size + 1) + x] = new(new(px, py, z), math.normalize(new float3(-dx, -dy, 1)), new((float)x / size, (float)y / size));
             }
         }
@@ -43,8 +48,18 @@ internal static class Assets
         _ => [new(float4x4.identity, PbrMaterial.Default)]
     };
 
-    public static float4x4 Projection(string scenario) => scenario == "far"
-        ? float4x4.Scale(new float3(0.2f, 0.2f, 1)) : float4x4.identity;
+    public static float4x4 Projection(string scenario, Aabb? bounds = null, float aspect = 1)
+    {
+        var projection = float4x4.identity;
+        if (bounds is { } box) {
+            var center = (box.Min + box.Max) * 0.5f;
+            var half = (box.Max - box.Min) * 0.5f;
+            var radius = System.Math.Max(0.001f, System.Math.Max(half.y, System.Math.Max(half.x / aspect, half.z))) * 1.05f;
+            projection = math.mul(float4x4.Translate(new float3(0, 0, 0.5f)), math.mul(
+                float4x4.Scale(new float3(1 / (radius * aspect), 1 / radius, -0.45f / radius)), float4x4.Translate(-center)));
+        }
+        return scenario == "far" ? math.mul(float4x4.Scale(new float3(0.2f, 0.2f, 1)), projection) : projection;
+    }
     public static MeshData Terrain(int size)
     {
         var vertices = new MeshVertex[checked((size + 1) * (size + 1))];

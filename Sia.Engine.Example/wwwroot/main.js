@@ -52,6 +52,10 @@ try {
   const parameters = new URLSearchParams(window.location.search);
   const pipeline = parameters.get('pipeline') ?? 'pbr';
   const args = ['--pipeline', pipeline];
+  if (parameters.has('scene')) args.push('--scene', parameters.get('scene'));
+  if (pipeline === 'visibility-lod' && parameters.get('scene') === 'bunny' && !parameters.has('asset')) {
+    document.getElementById('bunny-credit').hidden = false;
+  }
   if (parameters.has('asset')) args.push('--asset', new URL(parameters.get('asset'), window.location.href).href);
   const { runMain, Module, setModuleImports } = await dotnet
     .withApplicationArguments(...args)

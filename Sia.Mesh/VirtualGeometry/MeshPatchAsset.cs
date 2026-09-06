@@ -5,7 +5,7 @@ namespace Sia.Engine.Mesh;
 public sealed partial class MeshPatchAsset
 {
     public const int FormatVersion = 1;
-    public const int CurrentBuilderVersion = 1;
+    public const int CurrentBuilderVersion = 2;
 
     public MeshPatchBuildResult Build { get; }
     public MeshPatchBuildSettings Settings { get; }

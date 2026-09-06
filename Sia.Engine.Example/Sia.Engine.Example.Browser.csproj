@@ -17,7 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Assets/terrain.siapatch" LogicalName="Sia.Engine.Example.terrain.siapatch" />
+    <EmbeddedResource Include="Assets/bunny.siapatch" LogicalName="Sia.Engine.Example.bunny.siapatch" />
     <Compile Remove="obj_desktop\**" />
     <EmbeddedResource Remove="obj_desktop\**" />
     <None Remove="obj_desktop\**" />

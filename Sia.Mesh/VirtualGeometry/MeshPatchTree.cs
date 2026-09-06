@@ -66,7 +66,11 @@ public sealed partial class MeshPatchTree
             var patch = snapshots[i];
             var mesh = patch.Geometry;
             var meshlets = MeshletBuilder.Build(mesh, maxVertices, maxTriangles, cancellationToken);
-            boundaries[i] = Boundary(mesh, vertexIdentities);
+            var vertexIds = VertexIds(mesh.Vertices, vertexIdentities);
+            boundaries[i] = Boundary(mesh.Indices, vertexIds);
+            for (var v = 0; v < vertexIds.Length; v++) {
+                if (vertexIds[v] == vertices.Count) { vertices.Add(mesh.Vertices[v]); }
+            }
             var min = new float3(float.PositiveInfinity);
             var max = new float3(float.NegativeInfinity);
             foreach (var index in mesh.Indices) {
@@ -83,11 +87,10 @@ public sealed partial class MeshPatchTree
                     TriangleOffset = checked(cluster.TriangleOffset + localIndices.Count)
                 });
             }
-            foreach (var vertex in meshlets.VertexIndices) { vertexReferences.Add(checked(vertex + (uint)vertices.Count)); }
+            foreach (var vertex in meshlets.VertexIndices) { vertexReferences.Add((uint)vertexIds[vertex]); }
             foreach (var triangle in meshlets.SourceTriangleIndices) { sourceTriangles.Add(checked(triangle + (uint)triangleOffset)); }
             localIndices.AddRange(meshlets.TriangleIndices);
-            foreach (var index in mesh.Indices) { indices.Add(checked(index + (uint)vertices.Count)); }
-            vertices.AddRange(mesh.Vertices);
+            foreach (var index in mesh.Indices) { indices.Add((uint)vertexIds[index]); }
         }
 
         for (var i = nodes.Length - 1; i >= 0; i--) {
@@ -133,9 +136,6 @@ public sealed partial class MeshPatchTree
             patches.Add((patch, parent));
         }
     }
-
-    private static Dictionary<(int, int), int> Boundary(MeshData mesh, Dictionary<VertexIdentity, int> identities)
-        => Boundary(mesh.Indices, VertexIds(mesh.Vertices, identities));
 
     private static int[] VertexIds(ReadOnlySpan<MeshVertex> vertices, Dictionary<VertexIdentity, int> identities)
     {
