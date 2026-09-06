@@ -12,6 +12,7 @@ public sealed partial class VisibilityPbrFeature
 {
     private static readonly RenderGraphBufferKey s_HzbKey = new("visibility-hzb");
     private static readonly RenderGraphBufferKey s_HzbParamsKey = new("visibility-hzb-params");
+    private static readonly RenderGraphBufferKey s_HzbReduceKey = new("visibility-hzb-reduce-params");
 
     private static OcclusionGpu CreateOcclusionGpu(World world, WgpuHandle<WGPUDevice> device, Entity lodLayout, Entity lodPipelineLayout,
         Entity lodShader, List<Entity> acquired)
@@ -84,13 +85,17 @@ public sealed partial class VisibilityPbrFeature
                 WGPUBufferUsage.Uniform, limits, acquired);
             var group = Own(_world, BindGroup(_gpuLod!.Value.Occlusion.Layout,
                 [BufferEntry(0, parameters), BufferEntry(1, buffer)]), acquired);
-            var reduceParameters = new Entity[count];
+            var stride = System.Math.Max(32u, limits.MinUniformBufferOffsetAlignment);
+            var data = new uint4[checked(count * (int)(stride / 16))];
             for (var i = 0; i < count; i++) {
                 var source = i == 0 ? new uint4(width, height, 0, factor) : levels[i - 1] with { w = 2 };
-                reduceParameters[i] = Upload<uint4>(_world, device, _queue.GetWgpu<WGPUQueue>(), [source, levels[i]],
-                    WGPUBufferUsage.Uniform, limits, acquired);
+                var offset = checked(i * (int)(stride / 16));
+                data[offset] = source;
+                data[offset + 1] = levels[i];
             }
-            return new(buffer, parameters, group, reduceParameters, acquired.ToArray(), levels, width, height, factor);
+            var reduceParameters = Upload<uint4>(_world, device, _queue.GetWgpu<WGPUQueue>(), data,
+                WGPUBufferUsage.Uniform, limits, acquired);
+            return new(buffer, parameters, group, reduceParameters, count, stride, acquired.ToArray(), levels, width, height, factor);
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -121,9 +126,7 @@ public sealed partial class VisibilityPbrFeature
     private static void BuildPostOcclusionGraph(ref RenderGraphBuildContext graph, ViewState view)
     {
         var hzb = view.Hzb!.Value;
-        for (var i = 0; i < hzb.ReduceParameters.Length; i++) {
-            ImportBuffer(ref graph, new("visibility-hzb-level-" + i), hzb.ReduceParameters[i], RenderGraphBufferUsage.Uniform);
-        }
+        ImportBuffer(ref graph, s_HzbReduceKey, hzb.ReduceParameters, RenderGraphBufferUsage.Uniform);
         graph.UseComputePass(new("visibility-hzb-main"), "visibility-hzb-main", view.DeclareHzb, view.BuildHzb);
         graph.UseComputePass(new("visibility-cull-post"), "visibility-cull-post", DeclareCull, view.CullPost);
         graph.UseComputePass(new("visibility-compact-post"), "visibility-compact-post", view.DeclareCompact, view.CompactPost);
@@ -168,9 +171,7 @@ public sealed partial class VisibilityPbrFeature
         public void DeclareHzb(RenderGraphPassDeclarationBuilder declaration)
         {
             declaration.Read(Frame.DepthTarget, RenderGraphTextureUsage.TextureBinding).ReadWrite(s_HzbKey, RenderGraphBufferUsage.Storage);
-            for (var i = 0; i < Hzb!.Value.ReduceParameters.Length; i++) {
-                declaration.Read(new RenderGraphBufferKey("visibility-hzb-level-" + i), RenderGraphBufferUsage.Uniform);
-            }
+            declaration.Read(s_HzbReduceKey, RenderGraphBufferUsage.Uniform);
         }
 
         public void ReleaseHzbGroups()
@@ -188,9 +189,10 @@ public sealed partial class VisibilityPbrFeature
             if (_hzbGroups.Length == 0 || _hzbDepth != depth) {
                 var acquired = new List<Entity>();
                 try {
-                    foreach (var level in hzb.ReduceParameters) {
+                    for (var level = 0; level < hzb.LevelCount; level++) {
+                        var parameters = BufferEntry(2, hzb.ReduceParameters) with { Offset = (ulong)level * hzb.ReduceStride, Size = 32 };
                         Own(Owner._world, Owner.BindGroup(gpu.ReduceLayout,
-                            [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), BufferEntry(2, level)]), acquired);
+                            [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), parameters]), acquired);
                     }
                 }
                 catch {
@@ -226,7 +228,7 @@ public sealed partial class VisibilityPbrFeature
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct HzbParamsGpu(float4x4 PreviousProjection, uint4 Size, HzbLevelsGpu Levels);
 
-    private readonly record struct HzbViewGpu(Entity Buffer, Entity Parameters, Entity Group, Entity[] ReduceParameters,
+    private readonly record struct HzbViewGpu(Entity Buffer, Entity Parameters, Entity Group, Entity ReduceParameters, int LevelCount, uint ReduceStride,
         Entity[] Owned, HzbLevelsGpu Levels, uint Width, uint Height, uint Factor);
 
     private readonly record struct OcclusionGpu(Entity Layout, Entity ReduceLayout, Entity CullMain, Entity CullPost,
