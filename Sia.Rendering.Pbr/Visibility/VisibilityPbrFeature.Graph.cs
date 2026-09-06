@@ -42,6 +42,9 @@ public sealed partial class VisibilityPbrFeature
             albedo.Size.Width, albedo.Size.Height, mipLevelCount: albedo.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
         graph.BindImportedTexture(s_AlbedoKey, _albedoTexture.GetWgpu<WGPUTexture>());
         if (_gpuLod is { } lod) { BuildLodGraph(ref graph, view, lod); }
+        if (view.Timing is { } timing) {
+            ImportBuffer(ref graph, GpuTimingsTarget, timing.Results, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource);
+        }
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
         if (_gpuLod is not null) { BuildPostOcclusionGraph(ref graph, view); }
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
@@ -68,7 +71,7 @@ public sealed partial class VisibilityPbrFeature
             var workItems = _gpuLod is null ? new uint4[checked((int)TriangleCapacity)] : [];
             var workBuffer = Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 16ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
-            var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[16],
+            var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[20],
                 WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
             var entries = new WGPUBindGroupEntry[7];
             entries[0] = BufferEntry(0, uniform);
@@ -76,7 +79,8 @@ public sealed partial class VisibilityPbrFeature
             entries[6] = BufferEntry(6, workBuffer);
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
             var lodView = _gpuLod is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
-            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView);
+            var timing = _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
+            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView) { Timing = timing };
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -155,6 +159,7 @@ public sealed partial class VisibilityPbrFeature
 
         private void Raster(WgpuReactiveRenderGraphPassContext context, bool post)
         {
+            if (Timing is not null) { TimedRaster(context, post); return; }
             var pass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphColorAttachment(Owner.VisibilityTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear),
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear));
@@ -187,7 +192,7 @@ public sealed partial class VisibilityPbrFeature
                 _idView = id;
                 _hdrView = hdr;
             }
-            var pass = context.GetOrBeginComputePass();
+            var pass = BeginCompute(context);
             try {
                 Wgpu.SetComputePipeline(pass, Owner._resolve.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
@@ -200,10 +205,13 @@ public sealed partial class VisibilityPbrFeature
             }
         }
 
-        public void DeclareOutput(RenderGraphPassDeclarationBuilder declaration) => declaration
-            .Read(s_OutputKey, RenderGraphBufferUsage.Uniform)
-            .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
-            .Write(Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
+        public void DeclareOutput(RenderGraphPassDeclarationBuilder declaration)
+        {
+            declaration.Read(s_OutputKey, RenderGraphBufferUsage.Uniform)
+                .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
+                .Write(Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
+            if (Timing is not null) { declaration.Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve); }
+        }
 
         public void Output(WgpuReactiveRenderGraphPassContext context)
         {
@@ -215,6 +223,7 @@ public sealed partial class VisibilityPbrFeature
                 _outputGroup = next;
                 _outputSource = source;
             }
+            if (Timing is not null) { TimedOutput(context); return; }
             var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(
                 Frame.ColorTarget, Frame.ColorLoadOp, Cacheable: Frame.ColorCacheable));
             Wgpu.SetRenderPipeline(pass, Owner._output.Pipeline.GetWgpu<WGPURenderPipeline>());
