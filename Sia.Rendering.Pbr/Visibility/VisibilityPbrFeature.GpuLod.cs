@@ -40,11 +40,12 @@ public sealed partial class VisibilityPbrFeature
         var parameters = Upload<LodParamsGpu>(world, device, queue, [new(
             new uint4((uint)source.Length, (uint)tree.RootCount, instances, limits.MaxComputeWorkgroupsPerDimension),
             new uint4((uint)settings.Budget.MaxPatches, (uint)settings.Budget.MaxMeshlets, (uint)settings.Budget.MaxTriangles,
-                BitConverter.SingleToUInt32Bits(settings.TargetPixelError == 0 ? 0 : settings.TargetPixelError)))],
+                BitConverter.SingleToUInt32Bits(settings.TargetPixelError == 0 ? 0 : settings.TargetPixelError)),
+            new uint4((uint)settings.Budget.MaxRefinementCandidates, 0, 0, 0))],
             WGPUBufferUsage.Uniform, limits, acquired);
         var layout = Layout(world, device, [
             BufferLayout(0, WGPUBufferBindingType.Uniform, 128, WGPUShaderStage.Compute),
-            BufferLayout(1, WGPUBufferBindingType.Uniform, 32, WGPUShaderStage.Compute),
+            BufferLayout(1, WGPUBufferBindingType.Uniform, 48, WGPUShaderStage.Compute),
             BufferLayout(2, WGPUBufferBindingType.ReadOnlyStorage, 64, WGPUShaderStage.Compute),
             BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 176, WGPUShaderStage.Compute),
             BufferLayout(4, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute),
@@ -59,7 +60,8 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, shader, pipelineLayout, "project", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "select_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
-            count, limits.MaxComputeWorkgroupsPerDimension, occlusion, enableTiming);
+            count, limits.MaxComputeWorkgroupsPerDimension, occlusion,
+            CreateCompactionGpu(world, device, acquired), enableTiming);
     }
 
     private static unsafe Entity ComputePipeline(World world, WgpuHandle<WGPUDevice> device, Entity shader,
@@ -94,7 +96,7 @@ public sealed partial class VisibilityPbrFeature
         var group = Own(_world, BindGroup(lod.Layout, [BufferEntry(0, camera), BufferEntry(1, lod.Parameters),
             BufferEntry(2, lod.Patches), BufferEntry(3, _geometry[4]), BufferEntry(4, state), BufferEntry(5, heap),
             BufferEntry(6, indirect), BufferEntry(7, work)]), acquired);
-        return new(state, heap, group);
+        return new(state, heap, group, CreateCompactionView(lod, state, heap, indirect, limits, acquired));
     }
 
     private static void BuildLodGraph(ref RenderGraphBuildContext graph, ViewState view, LodGpu lod)
@@ -147,10 +149,10 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct PatchGpu(float4 MinimumError, float4 Maximum, uint4 Children, uint4 Geometry);
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget);
+    private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget, uint4 Traversal);
 
     private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity Project, Entity Select,
-        Entity Emit, uint Count, uint DispatchDimension, OcclusionGpu Occlusion, bool EnableTiming);
+        Entity Emit, uint Count, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming);
 
-    private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Group);
+    private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Group, CompactionViewGpu Compaction);
 }

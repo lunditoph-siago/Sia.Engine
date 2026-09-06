@@ -31,8 +31,6 @@ public sealed partial class VisibilityPbrFeature
         return new(layout, reduceLayout,
             ComputePipeline(world, device, lodShader, pipelineLayout, "cull_main", acquired),
             ComputePipeline(world, device, lodShader, pipelineLayout, "cull_post", acquired),
-            ComputePipeline(world, device, lodShader, lodPipelineLayout, "compact_main", acquired),
-            ComputePipeline(world, device, lodShader, lodPipelineLayout, "compact_post", acquired),
             ComputePipeline(world, device, lodShader, lodPipelineLayout, "emit_post", acquired),
             ComputePipeline(world, device, shader, reducePipelineLayout, "seed", acquired),
             ComputePipeline(world, device, shader, reducePipelineLayout, "reduce", acquired));
@@ -105,8 +103,12 @@ public sealed partial class VisibilityPbrFeature
         var hzb = view.Hzb!.Value;
         ImportBuffer(ref graph, s_HzbKey, hzb.Buffer, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.CopySource);
         ImportBuffer(ref graph, s_HzbParamsKey, hzb.Parameters, RenderGraphBufferUsage.Uniform);
+        var parameters = view.Lod!.Value.Compaction.Parameters;
+        for (var i = 0; i < parameters.Length; i++) {
+            ImportBuffer(ref graph, new("visibility-compact-params-" + i), parameters[i], RenderGraphBufferUsage.Uniform);
+        }
         graph.UseComputePass(new("visibility-cull-main"), "visibility-cull-main", DeclareCull, view.CullMain);
-        graph.UseComputePass(new("visibility-compact-main"), "visibility-compact-main", DeclareCompact, view.CompactMain);
+        graph.UseComputePass(new("visibility-compact-main"), "visibility-compact-main", view.DeclareCompact, view.CompactMain);
     }
 
     private static void DeclareCull(RenderGraphPassDeclarationBuilder declaration) => declaration
@@ -114,10 +116,6 @@ public sealed partial class VisibilityPbrFeature
         .Read(s_HzbParamsKey, RenderGraphBufferUsage.Uniform).Read(s_HzbKey, RenderGraphBufferUsage.Storage)
         .Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_GeometryKeys[4], RenderGraphBufferUsage.Storage)
         .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage);
-
-    private static void DeclareCompact(RenderGraphPassDeclarationBuilder declaration) => declaration
-        .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
-        .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage).ReadWrite(s_IndirectKey, RenderGraphBufferUsage.Storage);
 
     private static void BuildPostOcclusionGraph(ref RenderGraphBuildContext graph, ViewState view)
     {
@@ -127,7 +125,7 @@ public sealed partial class VisibilityPbrFeature
         }
         graph.UseComputePass(new("visibility-hzb-main"), "visibility-hzb-main", view.DeclareHzb, view.BuildHzb);
         graph.UseComputePass(new("visibility-cull-post"), "visibility-cull-post", DeclareCull, view.CullPost);
-        graph.UseComputePass(new("visibility-compact-post"), "visibility-compact-post", DeclareCompact, view.CompactPost);
+        graph.UseComputePass(new("visibility-compact-post"), "visibility-compact-post", view.DeclareCompact, view.CompactPost);
         graph.UseComputePass(new("visibility-emit-post"), "visibility-emit-post", declaration => declaration
             .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
             .Read(s_LodStateKey, RenderGraphBufferUsage.Storage).ReadWrite(s_WorkKey, RenderGraphBufferUsage.Storage), view.EmitPost);
@@ -150,12 +148,6 @@ public sealed partial class VisibilityPbrFeature
 
         public void CullPost(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CullPost, (Owner._gpuLod.Value.Count + 63) / 64, Hzb!.Value.Group);
-
-        public void CompactMain(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CompactMain, 1);
-
-        public void CompactPost(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CompactPost, 1);
 
         public void EmitPost(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, Owner._gpuLod!.Value.Occlusion.EmitPost, Owner._gpuLod.Value.Count);
@@ -235,5 +227,5 @@ public sealed partial class VisibilityPbrFeature
         Entity[] Owned, HzbLevelsGpu Levels, uint Width, uint Height, uint Factor);
 
     private readonly record struct OcclusionGpu(Entity Layout, Entity ReduceLayout, Entity CullMain, Entity CullPost,
-        Entity CompactMain, Entity CompactPost, Entity EmitPost, Entity Seed, Entity Reduce);
+        Entity EmitPost, Entity Seed, Entity Reduce);
 }
