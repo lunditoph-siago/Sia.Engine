@@ -45,4 +45,31 @@ internal static class Assets
 
     public static float4x4 Projection(string scenario) => scenario == "far"
         ? float4x4.Scale(new float3(0.2f, 0.2f, 1)) : float4x4.identity;
+    public static MeshData Terrain(int size)
+    {
+        var vertices = new MeshVertex[checked((size + 1) * (size + 1))];
+        for (var j = 0; j <= size; j++) {
+            for (var i = 0; i <= size; i++) { vertices[j * (size + 1) + i] = TerrainVertex(i, j); }
+        }
+        var indices = new List<uint>(checked(size * size * 6));
+        for (var j = 0; j < size; j++) {
+            for (var i = 0; i < size; i++) {
+                var a = (uint)(j * (size + 1) + i);
+                var b = a + (uint)size + 1;
+                indices.AddRange([a, b, a + 1, a + 1, b, b + 1]);
+            }
+        }
+        return new(vertices, indices.ToArray(), default);
+    }
+
+    private static MeshVertex TerrainVertex(int gx, int gz)
+    {
+        var x = gx / 16f - 2;
+        var z = gz / 16f - 2;
+        var y = 0.35f * MathF.Sin(2 * x) * MathF.Cos(2.5f * z) + 0.12f * MathF.Cos(5 * x + 3 * z);
+        var dx = 0.7f * MathF.Cos(2 * x) * MathF.Cos(2.5f * z) - 0.6f * MathF.Sin(5 * x + 3 * z);
+        var dz = -0.875f * MathF.Sin(2 * x) * MathF.Sin(2.5f * z) - 0.36f * MathF.Sin(5 * x + 3 * z);
+        return new(new float3(x, y, z), math.normalize(new float3(-dx, 1, -dz)), new float2(gx / 8f, gz / 8f));
+    }
+
 }
