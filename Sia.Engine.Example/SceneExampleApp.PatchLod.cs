@@ -11,7 +11,6 @@ internal sealed partial class SceneExampleApp
 {
     private VisibilityPbrFeature? _visibilityLod;
     private readonly MeshPatchAsset? _patchAsset;
-    private readonly PatchScene _patchScene;
     private Aabb _patchBounds;
     private Aabb _patchSceneBounds;
     private readonly VisibilityDebugMode _patchDebugMode;
@@ -36,43 +35,36 @@ internal sealed partial class SceneExampleApp
         }
         var instances = new List<VisibilityInstance>();
         _patchSceneBounds = _patchBounds;
-        var horizontal = _patchScene == PatchScene.Bunny ? 7 : _patchScene == PatchScene.Terrain ? 1 : 0;
-        var vertical = _patchScene == PatchScene.Bunny ? 4 : horizontal;
         var spacing = math.max(_patchBounds.Max - _patchBounds.Min, new float3(0.1f)) * 1.2f;
-        for (var row = -vertical; row <= vertical; row++) {
-            for (var column = -horizontal; column <= horizontal; column++) {
-                var offset = _patchScene == PatchScene.Bunny ? new float3(column * spacing.x, row * spacing.y, 0)
-                    : new float3(column * 4.5f, 0, row * 4.5f);
+        for (var row = -4; row <= 4; row++) {
+            for (var column = -7; column <= 7; column++) {
+                var offset = new float3(column * spacing.x, row * spacing.y, 0);
                 _patchSceneBounds = new(math.min(_patchSceneBounds.Min, _patchBounds.Min + offset),
                     math.max(_patchSceneBounds.Max, _patchBounds.Max + offset));
                 instances.Add(new(float4x4.Translate(offset),
-                    PbrMaterial.Default with { BaseColor = _patchScene == PatchScene.Bunny ? new float3(0.8f, 0.75f, 0.65f) : new float3(0.45f, 0.8f, 0.35f), Roughness = 0.8f }));
+                    PbrMaterial.Default with { BaseColor = new float3(0.8f, 0.75f, 0.65f), Roughness = 0.8f }));
             }
         }
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
-        var albedo = _patchScene == PatchScene.Bunny
-            ? new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]) : CreateVisibilityChecker();
-        var settings = _patchScene == PatchScene.Bunny ? new VisibilityLodSettings(4,
-            new MeshPatchBudget(4096, 8192, 262144) { MaxRefinementCandidates = 8192, MaxRefinementNodes = 32768 })
-            : new VisibilityLodSettings(8, new(256, 1024, 18000));
+        var albedo = new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]);
+        var settings = new VisibilityLodSettings(4,
+            new MeshPatchBudget(4096, 8192, 262144) { MaxRefinementCandidates = 8192, MaxRefinementNodes = 32768 });
         _visibilityLod = VisibilityPbrFeature.CreateGpuLod(in frame, tree, instances.ToArray(), albedo,
             settings, _surfaceFormat, _patchDebugMode);
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
         Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length} patches per asset, {instances.Count} instances, "
             + $"{_visibilityLod.TriangleCapacity} work triangles; target {settings.TargetPixelError} px, "
             + $"triangle budget {settings.Budget.MaxTriangles}; setup/upload {started.Elapsed.TotalMilliseconds:F2} ms.");
-        if (_patchScene == PatchScene.Bunny) {
-            GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
-                if (action == InputAction.Press) {
-                    _patchKeys |= key switch {
-                        Key.Space => 1u, Key.M => 2u, Key.R => 4u,
-                        Key.S or Key.Down => 8u, Key.W or Key.Up => 16u, _ => 0u
-                    };
-                }
-            });
-            Console.WriteLine($"Bunny wall: 15 x 9 instances, {(long)build.SourceTriangleCount * instances.Count:N0} source triangles, one shared geometry asset.");
-            Console.WriteLine("W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
-        }
+        GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
+            if (action == InputAction.Press) {
+                _patchKeys |= key switch {
+                    Key.Space => 1u, Key.M => 2u, Key.R => 4u,
+                    Key.S or Key.Down => 8u, Key.W or Key.Up => 16u, _ => 0u
+                };
+            }
+        });
+        Console.WriteLine($"Bunny wall: 15 x 9 instances, {(long)build.SourceTriangleCount * instances.Count:N0} source triangles, one shared geometry asset.");
+        Console.WriteLine("W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
     }
 
     private void UpdatePatchInspection(float deltaTime)
@@ -80,6 +72,14 @@ internal sealed partial class SceneExampleApp
         bool Down(Key key) => Glfw.GetKey(_window, key) != InputAction.Release;
         var pressed = _patchKeys;
         _patchKeys = 0;
+#if BROWSER
+        pressed |= (uint)TakeInspectionCommands();
+        var distance = TakeInspectionDistance();
+        if (double.IsFinite(distance)) {
+            _patchDistance = (float)System.Math.Clamp(distance, 0, 1);
+            _patchTour = false;
+        }
+#endif
         if ((pressed & 1) != 0) {
             _patchTour = !_patchTour;
             _patchTourPhase = MathF.Acos(1 - 2 * _patchDistance);
@@ -104,7 +104,7 @@ internal sealed partial class SceneExampleApp
             _patchStatus = status;
             Glfw.SetTitle(_window, "Sia.Engine - " + status);
 #if BROWSER
-            SetInspectionStatus(status);
+            SetInspectionStatus(status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles);
 #endif
         }
     }
@@ -114,7 +114,6 @@ internal sealed partial class SceneExampleApp
         var half = (_patchBounds.Max - _patchBounds.Min) * 0.5f;
         var radius = System.Math.Max(0.001f, System.Math.Max(half.y, half.x / aspect));
         var near = half.z + radius * 1.05f / MathF.Tan(MathF.PI / 6);
-        if (_patchScene != PatchScene.Bunny) { return target + new float3(0, 0, near); }
         var wallHalf = (_patchSceneBounds.Max - _patchSceneBounds.Min) * 0.5f;
         var far = half.z + System.Math.Max(wallHalf.y, wallHalf.x / aspect) * 1.3f / MathF.Tan(MathF.PI / 6);
         return target + new float3(0, 0, near * MathF.Pow(far / near, _patchDistance));

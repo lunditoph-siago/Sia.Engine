@@ -84,7 +84,13 @@ internal sealed partial class SceneExampleApp
     private static partial int GetCanvasHeight();
 
     [JSImport("setInspectionStatus", "main.js")]
-    private static partial void SetInspectionStatus(string status);
+    private static partial void SetInspectionStatus(string status, double distance, bool touring, bool triangles);
+
+    [JSImport("takeInspectionCommands", "main.js")]
+    private static partial int TakeInspectionCommands();
+
+    [JSImport("takeInspectionDistance", "main.js")]
+    private static partial double TakeInspectionDistance();
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {

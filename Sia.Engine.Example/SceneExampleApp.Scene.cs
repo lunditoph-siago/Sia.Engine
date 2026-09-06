@@ -18,7 +18,6 @@ internal sealed unsafe partial class SceneExampleApp
 {
     private const float _orbitRadius = 11.0f;
     private const float _orbitHeight = 6.0f;
-    private const float _orbitSpeed = 0.35f;
     private const int _gridExtent = 3;
     private const float _gridSpacing = 1.15f;
 
@@ -34,7 +33,6 @@ internal sealed unsafe partial class SceneExampleApp
     private RenderWorld? _renderWorld;
     private RenderFeaturePipeline<RenderFrameContext>? _renderPipeline;
     private Entity _camera;
-    private float _orbitAngle;
 
     private void InitializeScene()
     {
@@ -50,9 +48,6 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
             Intensity = 0.35f
         };
-        if (_pipeline == ScenePipeline.Atmosphere) {
-            _sceneWorld.AcquireAddon<EnvironmentLighting>().Atmosphere = new SkyAtmosphere();
-        }
 
         _sceneStage = SystemChain.Empty
             .Add<TransformSystem>()
@@ -62,24 +57,18 @@ internal sealed unsafe partial class SceneExampleApp
 
         BuildScene(meshRegistry);
 
-        if (_pipeline == ScenePipeline.VisibilityLod) {
+        if (_pipeline == ScenePipeline.Bunny) {
             InitializePatchLod();
             return;
         }
 
-        if (_pipeline is ScenePipeline.Visibility or ScenePipeline.VisibilityNormals or ScenePipeline.VisibilityUV) {
-            InitializeVisibility();
-            return;
-        }
-
-        if (_pipeline is not (ScenePipeline.Pbr or ScenePipeline.Atmosphere)) {
+        if (_pipeline == ScenePipeline.Unlit) {
             var pipeline = UnlitPipeline.Create(
                 _renderWorld.Entities,
                 _renderDevice,
                 _surfaceFormat,
                 WGPUTextureFormat.Depth32Float,
-                UnlitShaderSource.Load(),
-                _pipeline == ScenePipeline.Normals ? "normals" : "unlit");
+                UnlitShaderSource.Load(), "unlit");
             _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
                 .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
                 .Build();
@@ -103,15 +92,22 @@ internal sealed unsafe partial class SceneExampleApp
             _depthPipeline, _forwardPipeline, _cullingPipeline, _shadowDepthPipeline, _iblPipelines,
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer, new PbrRenderFeatureOptions {
-                ExposureCompensation = _pipeline == ScenePipeline.Atmosphere ? -2 : 0
-            }))
+            .Add(new PbrRenderFeature(_sceneRenderer))
             .Build();
     }
 
     private void BuildScene(MeshRegistry meshRegistry)
     {
         var world = _sceneWorld!;
+
+        _camera = world.Create(HList.From(
+            new CameraComponent(VerticalFovRadians: MathF.PI / 3.0f, Near: 0.1f, Far: 100.0f),
+            new CameraActive(),
+            new Transform(float3.zero, quaternion.identity, new float3(1, 1, 1)),
+            GlobalTransform.Identity,
+            new Node<SceneGraph>(null),
+            CameraMatrices.Identity));
+        if (_pipeline == ScenePipeline.Bunny) { return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
         var groundHandle = meshRegistry.Register(groundMesh);
@@ -158,15 +154,12 @@ internal sealed unsafe partial class SceneExampleApp
             }
         }
 
-        var atmosphere = world.AcquireAddon<EnvironmentLighting>().Atmosphere;
-        var sunDirection = atmosphere?.SunDirection ?? math.normalize(new float3(0.4f, 1.0f, 0.3f));
+        var sunDirection = math.normalize(new float3(0.4f, 1.0f, 0.3f));
         var sunRotation = quaternion.LookRotation(math.normalize(sunDirection), new float3(0, 1, 0));
-        var sunlight = atmosphere is null ? new LightColor(new float3(1.0f, 0.96f, 0.9f), 2.0f)
-            : new LightColor(atmosphere.EvaluateSunIrradiance(new float3(0, 1, 0)), 1);
         world.Create(HList.From(
             new DirectionalLight(),
             new ShadowCaster(),
-            sunlight,
+            new LightColor(new float3(1.0f, 0.96f, 0.9f), 2.0f),
             new Transform(float3.zero, sunRotation, new float3(1, 1, 1)),
             GlobalTransform.Identity,
             new Node<SceneGraph>(null)));
@@ -200,13 +193,6 @@ internal sealed unsafe partial class SceneExampleApp
             GlobalTransform.Identity,
             new Node<SceneGraph>(null)));
 
-        _camera = world.Create(HList.From(
-            new CameraComponent(VerticalFovRadians: MathF.PI / 3.0f, Near: 0.1f, Far: 100.0f),
-            new CameraActive(),
-            new Transform(float3.zero, quaternion.identity, new float3(1, 1, 1)),
-            GlobalTransform.Identity,
-            new Node<SceneGraph>(null),
-            CameraMatrices.Identity));
     }
 
     private static void CreatePointLight(World world, float3 position, float3 color, float intensity, float range) =>
@@ -219,16 +205,10 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
-        _orbitAngle += deltaTime * _orbitSpeed;
-
-        var eye = new float3(0, _pipeline == ScenePipeline.Atmosphere ? 3 : _orbitHeight, _orbitRadius);
-        if (_pipeline == ScenePipeline.VisibilityLod && _patchScene == PatchScene.Terrain) {
-            var distance = 22 + 12 * MathF.Sin(_orbitAngle);
-            eye = new float3(0, distance * 0.65f, distance);
-        }
-        var target = _pipeline == ScenePipeline.Atmosphere ? new float3(0, 2, 0) : float3.zero;
-        if (_pipeline == ScenePipeline.VisibilityLod && _patchScene != PatchScene.Terrain) {
-            if (_patchScene == PatchScene.Bunny) { UpdatePatchInspection(deltaTime); }
+        var eye = new float3(0, _orbitHeight, _orbitRadius);
+        var target = float3.zero;
+        if (_pipeline == ScenePipeline.Bunny) {
+            UpdatePatchInspection(deltaTime);
             target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = PatchEye(aspect, target);
