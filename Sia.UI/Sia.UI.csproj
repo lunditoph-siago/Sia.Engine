@@ -9,9 +9,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sia.Graphics" Version="0.0.19" />
-    <PackageReference Include="Sia.RenderGraph" Version="0.0.19" />
-    <PackageReference Include="Sia.WebGPU" Version="0.0.19" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.20" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.20" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.20" />
   </ItemGroup>
 
   <ItemGroup>
