@@ -9,6 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Sia.Rendering.Pbr/Sia.Rendering.Pbr.csproj" />
-    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.19" />
+    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.20" />
   </ItemGroup>
 </Project>
