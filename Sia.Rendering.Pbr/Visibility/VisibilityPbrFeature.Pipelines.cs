@@ -86,7 +86,7 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe Entity CreateRaster(World world, WgpuHandle<WGPUDevice> device,
-        Entity layout, List<Entity> acquired)
+        Entity layout, List<Entity> acquired, bool shadow = false)
     {
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityRaster(), "visibility-raster"), acquired);
         var pipelineLayout = PipelineLayout(world, device, [layout], acquired);
@@ -104,12 +104,14 @@ public sealed partial class VisibilityPbrFeature
             depth.Format = WGPUTextureFormat.Depth32Float;
             depth.DepthWriteEnabled = WGPUOptionalBool.True;
             depth.DepthCompare = WGPUCompareFunction.Less;
+            depth.DepthBias = shadow ? 2 : 0;
+            depth.DepthBiasSlopeScale = shadow ? 2 : 0;
             var descriptor = WGPURenderPipelineDescriptor.Default;
             descriptor.Layout = (WGPUPipelineLayout*)pipelineLayout.GetWgpu<WGPUPipelineLayout>().DangerousGetHandle();
             descriptor.Vertex = WGPUVertexState.Default;
             descriptor.Vertex.Module = fragment.Module;
             descriptor.Vertex.EntryPoint = new WGPUStringView { Data = vertexName, Length = 6 };
-            descriptor.Fragment = &fragment;
+            descriptor.Fragment = shadow ? null : &fragment;
             descriptor.DepthStencil = &depth;
             descriptor.Primitive = WGPUPrimitiveState.Default;
             descriptor.Primitive.Topology = WGPUPrimitiveTopology.TriangleList;
