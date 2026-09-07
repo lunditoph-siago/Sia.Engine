@@ -191,8 +191,8 @@ public sealed partial class VisibilityPbrFeature
                 try {
                     for (var level = 0; level < hzb.LevelCount; level++) {
                         var parameters = BufferEntry(2, hzb.ReduceParameters) with { Offset = (ulong)level * hzb.ReduceStride, Size = 32 };
-                        Own(Owner._world, Owner.BindGroup(gpu.ReduceLayout,
-                            [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), parameters]), acquired);
+                        acquired.Add(Owner.OwnTextureBindGroup(gpu.ReduceLayout,
+                            [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), parameters], depth));
                     }
                 }
                 catch {
