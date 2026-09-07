@@ -26,14 +26,14 @@ struct VertexInput {
 struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
-    @location(2) @interpolate(flat) size: vec2<f32>,
-    @location(3) @interpolate(flat) flags: u32,
-    @location(4) @interpolate(flat) radius: vec4<f32>,
-    @location(5) @interpolate(flat) border: vec4<f32>,
+    @location(2) @interpolate(flat, either) size: vec2<f32>,
+    @location(3) @interpolate(flat, either) flags: u32,
+    @location(4) @interpolate(flat, either) radius: vec4<f32>,
+    @location(5) @interpolate(flat, either) border: vec4<f32>,
     @location(6) point: vec2<f32>,
-    @location(7) @interpolate(flat) clip: vec4<f32>,
+    @location(7) @interpolate(flat, either) clip: vec4<f32>,
     @location(8) world_position: vec2<f32>,
-    @location(9) @interpolate(flat) texture_layer: u32,
+    @location(9) @interpolate(flat, either) texture_layer: u32,
     @builtin(position) position: vec4<f32>,
 };
 
