@@ -27,8 +27,10 @@ struct UiPrimitive {
     color: u32,
 }
 
+#if PLAN_VERTEX_STORAGE == true
 @group(0) @binding(1) var<storage, read> primitives: array<UiPrimitive>;
 @group(0) @binding(2) var<storage, read> paint_order: array<u32>;
+#endif
 @group(0) @binding(3) var sprite_texture: texture_2d_array<f32>;
 @group(0) @binding(4) var sprite_sampler: sampler;
 
@@ -46,6 +48,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
 };
 
+#if PLAN_VERTEX_STORAGE == true
 @vertex
 fn vertex(
     @builtin(vertex_index) vertex_index: u32,
@@ -102,6 +105,7 @@ fn vertex(
     return out;
 }
 
+#endif
 // Returns the radius of the corner closest to the given point.
 fn select_corner_radius(
     point: vec2<f32>,
