@@ -8,7 +8,7 @@ using Sia.WebGPU;
 namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class VisibilityPbrFeature :
-    IPrepareRenderFeature<RenderFrameContext>, IRenderGraphContributor<RenderFrameContext>
+    IExtractRenderFeature<RenderFrameContext>, IPrepareRenderFeature<RenderFrameContext>, IRenderGraphContributor<RenderFrameContext>
 {
     private readonly World _world;
     private readonly Entity _device;
@@ -39,7 +39,8 @@ public sealed partial class VisibilityPbrFeature :
 
     public RenderFeatureKey Key { get; } = new("visibility-pbr");
     public uint TriangleCount { get; }
-    public uint InstanceCount { get; }
+    public uint InstanceCount { get; private set; }
+    public uint InstanceCapacity { get; private set; }
     public uint TriangleCapacity { get; }
 
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
@@ -65,6 +66,7 @@ public sealed partial class VisibilityPbrFeature :
         _output = output;
         TriangleCount = triangles;
         InstanceCount = (uint)transforms.Length;
+        InstanceCapacity = InstanceCount;
         TriangleCapacity = capacity;
         _mode = mode;
     }
@@ -124,34 +126,14 @@ public sealed partial class VisibilityPbrFeature :
         var triangles = checked((uint)geometry.Triangles.Length);
         var capacity = scene?.TriangleCapacity ?? WorkCapacity(tree, triangles, (uint)instances.Length, lod.Budget);
         _ = checked(capacity * 3u);
-        var gpuInstances = new InstanceGpu[instances.Length];
+        var gpuInstances = new InstanceGpu[scene?.InstanceCapacity ?? instances.Length];
         var transforms = new float4x4[instances.Length];
         for (var i = 0; i < instances.Length; i++) {
             if (scene is null && instances[i].AssetIndex != 0) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "A single geometry input only accepts asset index zero.");
             }
-            var transform = instances[i].Transform;
-            var material = instances[i].Material;
-            var determinant = math.determinant(transform);
-            if (!Finite(transform) || !float.IsFinite(determinant) || determinant <= 1e-12f
-                || transform.c0.w != 0 || transform.c1.w != 0 || transform.c2.w != 0 || transform.c3.w != 1) {
-                throw new ArgumentException("Instances require finite, non-singular affine transforms with positive determinant.", nameof(instances));
-            }
-            if (!Finite(material.BaseColor) || !Finite(material.EmissiveColor)
-                || !float.IsFinite(material.Metallic) || material.Metallic is < 0 or > 1
-                || !float.IsFinite(material.Roughness) || material.Roughness is < 0 or > 1
-                || !float.IsFinite(material.EmissiveStrength) || material.EmissiveStrength < 0) {
-                throw new ArgumentException("Instance material parameters are invalid.", nameof(instances));
-            }
-            var normalTransform = math.transpose(math.inverse(transform));
-            var emissive = material.EmissiveColor * material.EmissiveStrength;
-            if (!Finite(normalTransform) || !Finite(emissive)) {
-                throw new ArgumentException("Instance transforms/materials overflow their GPU representation.", nameof(instances));
-            }
-            gpuInstances[i] = new(transform, normalTransform,
-                new float4(material.BaseColor, 1), new float4(material.Metallic, MathF.Max(material.Roughness, 0.045f), 0, 0),
-                new float4(emissive, 0), scene?.InstanceRoots[i] ?? default);
-            transforms[i] = transform;
+            gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default);
+            transforms[i] = instances[i].Transform;
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
         if (enableGpuTiming && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.TimestampQuery) == 0) {
@@ -226,7 +208,9 @@ public sealed partial class VisibilityPbrFeature :
             var output = CreateOutput(world, device, outputFormat, acquired);
             var gpuLod = scene is not null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
             return new(in frame, buffers, texture, view, sampler, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod);
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod) {
+                InstanceCapacity = (uint)gpuInstances.Length
+            };
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -236,13 +220,15 @@ public sealed partial class VisibilityPbrFeature :
 
     public void Prepare(in RenderFeatureContext<RenderFrameContext> context)
     {
-        if (!ReferenceEquals(context.Frame.Frame.ResourceWorld, _world)
-            || context.Frame.Frame.Device != _device || context.Frame.Frame.Queue != _queue) {
-            throw new InvalidOperationException("The visibility feature belongs to a different resource world/device/queue.");
-        }
+        ValidateFrame(in context);
+        PrepareInstances(in context);
         var view = context.View.PersistentResources.GetOrAdd(() => CreateView());
         if (!ReferenceEquals(view.Owner, this)) {
             throw new InvalidOperationException("A view cannot reuse state from another visibility feature.");
+        }
+        if (view.InstanceVersion != _instanceVersion) {
+            view.HistoryValid = false;
+            view.InstanceVersion = _instanceVersion;
         }
         var viewport = context.Frame.Frame.MainWorld.AcquireAddon<Viewport>().Value;
         if (viewport.Width <= 0 || viewport.Height <= 0) { throw new InvalidOperationException("Visibility requires a nonempty viewport."); }
