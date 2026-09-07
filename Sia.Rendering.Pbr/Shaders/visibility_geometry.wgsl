@@ -14,6 +14,7 @@ struct VisibilityInstance {
     color: vec4<f32>,
     material: vec4<f32>,
     emissive: vec4<f32>,
+    roots: vec4<u32>,
 }
 @group(0) @binding(0) var<uniform> visibility_camera: VisibilityCamera;
 @group(0) @binding(1) var<storage, read> visibility_vertices: array<VisibilityVertex>;
