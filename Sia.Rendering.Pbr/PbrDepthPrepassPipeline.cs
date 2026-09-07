@@ -41,7 +41,9 @@ public sealed unsafe class PbrDepthPrepassPipeline
         WGPUTextureFormat depthFormat)
     {
         var vertexEntryPoint = "vertex"u8;
-        fixed (byte* vertexEntry = vertexEntryPoint) {
+        var fragmentEntryPoint = "fragment"u8;
+        fixed (byte* vertexEntry = vertexEntryPoint)
+        fixed (byte* fragmentEntry = fragmentEntryPoint) {
             Span<WGPUVertexAttribute> attributes = stackalloc WGPUVertexAttribute[MeshVertexLayout.AttributeCount];
             MeshVertexLayout.Fill(attributes);
 
@@ -73,7 +75,13 @@ public sealed unsafe class PbrDepthPrepassPipeline
                 descriptor.Primitive.CullMode = WGPUCullMode.Back;
                 descriptor.DepthStencil = &depthStencil;
                 descriptor.Multisample = WGPUMultisampleState.Default;
-                descriptor.Fragment = null;
+                var fragment = WGPUFragmentState.Default;
+                fragment.Module = (WGPUShaderModule*)shaderModule.DangerousGetHandle();
+                fragment.EntryPoint = new WGPUStringView {
+                    Data = fragmentEntry,
+                    Length = (nuint)fragmentEntryPoint.Length
+                };
+                descriptor.Fragment = &fragment;
                 return Wgpu.CreateRenderPipeline(device, in descriptor);
             }
         }

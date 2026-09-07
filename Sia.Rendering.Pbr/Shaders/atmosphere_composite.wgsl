@@ -2,7 +2,7 @@
 #import pbr::ibl::{ibl_fullscreen_ndc}
 
 @group(1) @binding(0) var scene: texture_2d<f32>;
-@group(1) @binding(1) var depth: texture_depth_2d;
+@group(1) @binding(1) var depth: texture_2d<f32>;
 @group(1) @binding(2) var aerial_radiance: texture_3d<f32>;
 @group(1) @binding(3) var aerial_transmittance: texture_3d<f32>;
 
@@ -19,7 +19,7 @@ fn vertex(@builtin(vertex_index) index: u32) -> VertexOutput {
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(input.position.xy);
     let original = textureLoad(scene, pixel, 0);
-    let z = textureLoad(depth, pixel, 0);
+    let z = textureLoad(depth, pixel, 0).r;
     if (z >= 1.0) { return original; }
     let uv = input.position.xy / vec2<f32>(textureDimensions(scene));
     let ndc = uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);

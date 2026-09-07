@@ -32,7 +32,7 @@ internal sealed unsafe class AtmospherePipelines
         Skybox = CreateRender(frame, "skybox", default);
         PrefilterLayout = Layout(frame, [Uniform(0, IblPrefilterParamsGpu.Stride)]);
         Prefilter = CreateRender(frame, "prefilter", PrefilterLayout);
-        CompositeLayout = Layout(frame, [Texture(0), Texture(1, WGPUTextureViewDimension._2D, WGPUTextureSampleType.Depth),
+        CompositeLayout = Layout(frame, [Texture(0), Texture(1, WGPUTextureViewDimension._2D, WGPUTextureSampleType.UnfilterableFloat),
             Texture(2, WGPUTextureViewDimension._3D), Texture(3, WGPUTextureViewDimension._3D)]);
         Composite = CreateRender(frame, "composite", CompositeLayout);
     }
