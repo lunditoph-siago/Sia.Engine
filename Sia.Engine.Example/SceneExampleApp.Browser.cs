@@ -56,7 +56,7 @@ internal sealed partial class SceneExampleApp
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
-        _device = await Wgpu.RequestDeviceAsync(_adapter);
+        _device = await RequestBrowserDeviceAsync();
         _queue = Wgpu.GetQueue(_device);
         InitializeRenderGraph();
         InitializeScene();
@@ -94,6 +94,10 @@ internal sealed partial class SceneExampleApp
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
+        if (GetBrowserFeatureLevel() == "compatibility") {
+            return await Wgpu.RequestAdapterAsync(_instance,
+                BuildAdapterOptions(WGPUFeatureLevel.Compatibility, WGPUPowerPreference.Undefined));
+        }
         try {
             return await Wgpu.RequestAdapterAsync(_instance, BuildAdapterOptions());
         }
@@ -111,6 +115,43 @@ internal sealed partial class SceneExampleApp
                     $"Compatibility: {compatibilityError.Message}");
             }
         }
+    }
+
+    [JSImport("getBrowserFeatureLevel", "main.js")]
+    private static partial string GetBrowserFeatureLevel();
+
+    private unsafe Task<WgpuHandle<WGPUDevice>> RequestBrowserDeviceAsync()
+    {
+        var supportedStages = WGPUCompatibilityModeLimits.Default;
+        var supported = WGPULimits.Default;
+        supported.NextInChain = &supportedStages.Chain;
+        if (WgpuUnsafe.wgpuAdapterGetLimits((WGPUAdapter*)_adapter.DangerousGetHandle(), &supported) != WGPUStatus.Success) {
+            throw new WgpuException("The browser adapter did not report its device limits.");
+        }
+        var vertexStorage = _pipeline == ScenePipeline.Bunny ? 6u : 1u;
+        var fragmentStorage = _pipeline == ScenePipeline.Pbr ? 5u : 4u;
+        var workgroupSize = _pipeline == ScenePipeline.Bunny ? 256u : 128u;
+        if (supportedStages.MaxStorageBuffersInVertexStage == uint.MaxValue
+            || supportedStages.MaxStorageBuffersInVertexStage < vertexStorage
+            || supportedStages.MaxStorageBuffersInFragmentStage == uint.MaxValue
+            || supportedStages.MaxStorageBuffersInFragmentStage < fragmentStorage
+            || supported.MaxStorageBuffersPerShaderStage < System.Math.Max(vertexStorage, fragmentStorage)
+            || supported.MaxComputeWorkgroupSizeX < workgroupSize
+            || supported.MaxComputeInvocationsPerWorkgroup < workgroupSize) {
+            throw new WgpuException($"{_pipeline} requires {vertexStorage} vertex storage buffers, " +
+                $"{fragmentStorage} fragment storage buffers and {workgroupSize} compute invocations per workgroup. " +
+                "The adapter cannot support this rendering path.");
+        }
+        var requiredStages = WGPUCompatibilityModeLimits.Default;
+        requiredStages.MaxStorageBuffersInVertexStage = vertexStorage;
+        requiredStages.MaxStorageBuffersInFragmentStage = fragmentStorage;
+        var required = WGPULimits.Default;
+        required.NextInChain = &requiredStages.Chain;
+        required.MaxComputeWorkgroupSizeX = workgroupSize;
+        required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
+        var descriptor = WGPUDeviceDescriptor.Default;
+        descriptor.RequiredLimits = &required;
+        return Wgpu.RequestDeviceAsync(_adapter, descriptor);
     }
 }
 #endif
