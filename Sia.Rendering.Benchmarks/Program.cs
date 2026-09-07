@@ -17,6 +17,9 @@ var inFlightFrames = 1;
 string? assetPath = null;
 string? cookPath = null;
 string? sourcePath = null;
+string? scenePath = null;
+var textureSize = 256;
+var attribution = "";
 var compress = false;
 var view = "clip";
 var fixture = "grid";
@@ -25,6 +28,7 @@ var buildSettings = MeshPatchBuildSettings.Default;
 if (args.Contains("--help")) {
     Console.WriteLine("""
         Cook without creating a GPU device:
+          --cook-scene OUTPUT.siapbr --source SCENE.gltf|SCENE.glb [--texture-size 256 --attribution TEXT]
           --cook PATH --fixture grid|terrain|plane --size N
           [--leaf-triangles N --children N --ratio F --normal-weight F --uv-weight F]
           --cook PATH --source MESH.ply [--compress]
@@ -56,6 +60,9 @@ for (var i = 0; i < args.Length; i++) {
         case "--asset": assetPath = args[i]; break;
         case "--cook": cookPath = args[i]; break;
         case "--source": sourcePath = args[i]; break;
+        case "--cook-scene": scenePath = args[i]; break;
+        case "--texture-size": textureSize = int.Parse(args[i]); break;
+        case "--attribution": attribution = args[i]; break;
         case "--view": view = args[i]; break;
         case "--fixture": fixture = args[i]; break;
         case "--size": gridSize = int.Parse(args[i]); break;
@@ -66,6 +73,22 @@ for (var i = 0; i < args.Length; i++) {
         case "--uv-weight": buildSettings = buildSettings with { UVWeight = float.Parse(args[i], CultureInfo.InvariantCulture) }; break;
         default: throw new ArgumentException("Unknown option: " + name);
     }
+}
+if (scenePath is not null) {
+    if (sourcePath is null || args.Any(option => option.StartsWith("--", StringComparison.Ordinal) && option is not
+        ("--cook-scene" or "--source" or "--texture-size" or "--attribution" or "--leaf-triangles" or "--children" or "--ratio" or "--normal-weight" or "--uv-weight"))) {
+        throw new ArgumentException("--cook-scene requires --source and accepts only texture, attribution and mesh build settings.");
+    }
+    var watch = Stopwatch.StartNew();
+    var scene = GltfScene.Read(sourcePath, textureSize, attribution, buildSettings);
+    var bytes = scene.Encode();
+    var decoded = PbrSceneAsset.Decode(bytes);
+    WriteAsset(scenePath, bytes);
+    Console.WriteLine(JsonSerializer.Serialize(new {
+        Path = Path.GetFullPath(scenePath), Bytes = bytes.Length, Geometry = decoded.Geometry.Length,
+        Materials = decoded.Materials.Length, Instances = decoded.Instances.Length, Milliseconds = watch.Elapsed.TotalMilliseconds
+    }));
+    return;
 }
 if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1 || refinementBudget < 0 || refinementNodes < 0 || inFlightFrames is < 1 or > 64) {
     throw new ArgumentException("Invalid suite, frame counts, or refinement budget.");
@@ -98,18 +121,7 @@ if (cookPath is not null) {
     watch.Restart();
     MeshPatchAsset.Decode(bytes);
     var validateMilliseconds = watch.Elapsed.TotalMilliseconds;
-    var destination = Path.GetFullPath(cookPath);
-    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-    var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-    var ownsTemporary = false;
-    try {
-        using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-            ownsTemporary = true;
-            file.Write(bytes);
-        }
-        File.Move(temporary, destination, overwrite: false);
-    }
-    finally { if (ownsTemporary) { File.Delete(temporary); } }
+    var destination = WriteAsset(cookPath, bytes);
     Console.WriteLine(JsonSerializer.Serialize(new {
         Asset = destination, Source = sourcePath, Fixture = sourcePath is null ? fixture : null,
         GridSize = sourcePath is null ? (int?)gridSize : null, Vertices = source.Vertices.Length, Bytes = bytes.Length, Compressed = compress,
@@ -223,6 +235,23 @@ var path = Path.GetFullPath(output);
 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(path);
+
+static string WriteAsset(string path, byte[] bytes)
+{
+    var destination = Path.GetFullPath(path);
+    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+    var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
+    var ownsTemporary = false;
+    try {
+        using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+            ownsTemporary = true;
+            file.Write(bytes);
+        }
+        File.Move(temporary, destination, overwrite: false);
+    }
+    finally { if (ownsTemporary) { File.Delete(temporary); } }
+    return destination;
+}
 
 internal sealed record CaseInput(int? GridSize, int SourceTriangles, int InstanceCount, string Scenario, uint Width, uint Height,
     int TriangleBudget, int RefinementBudget, int RefinementNodes);
