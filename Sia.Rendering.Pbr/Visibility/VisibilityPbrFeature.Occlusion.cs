@@ -23,7 +23,7 @@ public sealed partial class VisibilityPbrFeature
         ], acquired);
         var pipelineLayout = PipelineLayout(world, device, [lodLayout, layout], acquired);
         var reduceLayout = Layout(world, device, [
-            TextureLayout(0, WGPUTextureSampleType.Depth, WGPUShaderStage.Compute),
+            TextureLayout(0, WGPUTextureSampleType.UnfilterableFloat, WGPUShaderStage.Compute),
             BufferLayout(1, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
             BufferLayout(2, WGPUBufferBindingType.Uniform, 32, WGPUShaderStage.Compute)
         ], acquired);

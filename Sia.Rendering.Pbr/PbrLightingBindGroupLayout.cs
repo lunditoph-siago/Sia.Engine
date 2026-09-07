@@ -55,7 +55,7 @@ internal static unsafe class PbrLightingBindGroupLayout
         entries[5].Binding = ShadowAtlasBinding;
         entries[5].Visibility = WGPUShaderStage.Fragment;
         entries[5].Texture = WGPUTextureBindingLayout.Default;
-        entries[5].Texture.SampleType = WGPUTextureSampleType.Depth;
+        entries[5].Texture.SampleType = WGPUTextureSampleType.UnfilterableFloat;
         entries[5].Texture.ViewDimension = WGPUTextureViewDimension._2DArray;
         entries[5].Texture.Multisampled = 0;
 

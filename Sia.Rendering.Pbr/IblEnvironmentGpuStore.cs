@@ -51,14 +51,16 @@ public sealed class IblEnvironmentGpuStore
 
     public bool IsValid => _resourcesCreated;
 
-    public bool EnsureCapacity(in GpuFrame frame)
+    public unsafe bool EnsureCapacity(in GpuFrame frame)
     {
         if (_resourcesCreated) {
             return false;
         }
 
+        var bindingDimension = WGPUTextureBindingViewDimension.Default;
+        bindingDimension.TextureBindingViewDimension = WGPUTextureViewDimension.Cube;
         _prefilteredTexture = frame.ResourceWorld.CreateWgpuTexture(frame.Device, new WGPUTextureDescriptor {
-            NextInChain = null,
+            NextInChain = &bindingDimension.Chain,
             Label = default,
             Usage = WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc,
             Dimension = WGPUTextureDimension._2D,
