@@ -11,7 +11,8 @@ public sealed partial class MeshPatchTree
         Require(Valid(geometry.Bounds), "Invalid geometry bounds.");
         foreach (var vertex in geometry.Vertices) {
             cancellationToken.ThrowIfCancellationRequested();
-            Require(Finite(vertex.Position) && Finite(vertex.Normal) && float.IsFinite(vertex.UV.x) && float.IsFinite(vertex.UV.y),
+            Require(Finite(vertex.Position) && Finite(vertex.Normal) && float.IsFinite(vertex.UV.x) && float.IsFinite(vertex.UV.y)
+                && vertex.HasFiniteTangent,
                 "Patch vertex attributes must be finite.");
         }
         foreach (var index in geometry.Indices) { Require(index < geometry.Vertices.Length, "Geometry index is out of range."); }

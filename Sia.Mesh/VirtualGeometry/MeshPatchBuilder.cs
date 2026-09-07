@@ -134,6 +134,7 @@ public static partial class MeshPatchBuilder
     private static double3 Center(Aabb bounds) => (new double3(bounds.Min.x, bounds.Min.y, bounds.Min.z)
         + new double3(bounds.Max.x, bounds.Max.y, bounds.Max.z)) * 0.5;
     private static VertexIdentity Identity(MeshVertex v) => new(v.Position.x, v.Position.y, v.Position.z,
-        v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y);
-    private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V);
+        v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y, v.Tangent.x, v.Tangent.y, v.Tangent.z, v.Tangent.w);
+    private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V,
+        float Tx, float Ty, float Tz, float Tw);
 }

@@ -40,7 +40,7 @@ public sealed partial class VisibilityPbrFeature
     private static Entity CreateGeometryLayout(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired) =>
         Layout(world, device, [
             BufferLayout(0, WGPUBufferBindingType.Uniform, 128),
-            BufferLayout(1, WGPUBufferBindingType.ReadOnlyStorage, 48),
+            BufferLayout(1, WGPUBufferBindingType.ReadOnlyStorage, 64),
             BufferLayout(2, WGPUBufferBindingType.ReadOnlyStorage, 16),
             BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 4),
             BufferLayout(4, WGPUBufferBindingType.ReadOnlyStorage, 16),
