@@ -28,7 +28,7 @@ struct DirectionalLightBuffer {
 @group(1) @binding(2) var<storage, read> light_grid: array<vec2<u32>>;
 @group(1) @binding(3) var<storage, read> light_index_list: array<u32>;
 @group(1) @binding(4) var<uniform> directional_lights: DirectionalLightBuffer;
-@group(1) @binding(5) var shadow_atlas: texture_depth_2d_array;
+@group(1) @binding(5) var shadow_atlas: texture_2d_array<f32>;
 @group(1) @binding(6) var shadow_sampler: sampler_comparison;
 @group(1) @binding(7) var<storage, read> shadow_layers: array<mat4x4<f32>>;
 @group(1) @binding(8) var<uniform> shadow_config: ShadowConfig;

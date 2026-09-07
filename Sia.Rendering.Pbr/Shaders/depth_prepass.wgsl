@@ -9,3 +9,8 @@ fn vertex(input: VertexInput, @builtin(instance_index) instance_index: u32) -> @
     let world_position = instance.world_matrix * vec4<f32>(input.position, 1.0);
     return camera.view_proj * world_position;
 }
+
+@fragment
+fn fragment(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return position.z;
+}

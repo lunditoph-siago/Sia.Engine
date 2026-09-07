@@ -46,6 +46,10 @@ function getCanvasHeight() {
   return Math.max(1, Math.round(window.innerHeight));
 }
 
+function getBrowserFeatureLevel() {
+  return new URLSearchParams(location.search).get('feature-level') ?? 'compatibility';
+}
+
 function showError(message) {
   let overlay = document.getElementById('error-overlay');
   if (!overlay) {
@@ -103,7 +107,7 @@ try {
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, setInspectionStatus, takeInspectionCommands, takeInspectionDistance });
+  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, takeInspectionCommands, takeInspectionDistance });
   canvas.focus();
   await runMain();
 } catch (error) {

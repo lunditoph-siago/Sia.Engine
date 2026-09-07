@@ -21,7 +21,7 @@ fn shadow_select_cascade(config: ShadowConfig, view_z: f32) -> i32 {
 }
 
 fn shadow_sample_pcf(
-    atlas: texture_depth_2d_array,
+    atlas: texture_2d_array<f32>,
     layer: i32,
     view_proj: mat4x4<f32>,
     world_position: vec3<f32>,
@@ -44,7 +44,7 @@ fn shadow_sample_pcf(
     for (var dy = -1; dy <= 1; dy = dy + 1) {
         for (var dx = -1; dx <= 1; dx = dx + 1) {
             let coord = clamp(center + vec2<i32>(dx, dy), vec2<i32>(0, 0), dims - vec2<i32>(1, 1));
-            let stored_depth = textureLoad(atlas, coord, layer, 0);
+            let stored_depth = textureLoad(atlas, coord, layer, 0).r;
             lit += select(0.0, 1.0, depth_ref <= stored_depth);
             samples += 1.0;
         }

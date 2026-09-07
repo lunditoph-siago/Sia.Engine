@@ -2,7 +2,7 @@
 
 struct RasterOutput {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) id: u32,
+    @location(0) @interpolate(flat, either) id: u32,
 }
 @vertex
 fn vertex(@builtin(vertex_index) index: u32) -> RasterOutput {
