@@ -9,13 +9,31 @@ using Sia.WebGPU;
 namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class PbrRenderer(
-    PbrDepthPrepassPipeline depthPipeline,
-    ForwardPbrPipeline forwardPipeline,
     PbrClusterLightCullingPipeline cullingPipeline,
-    PbrShadowDepthPipeline shadowDepthPipeline,
     PbrIblPrecomputePipelines iblPipelines,
     PbrOutputPipelines outputPipelines)
 {
+    private readonly PbrDepthPrepassPipeline? _depthPipeline;
+    private readonly ForwardPbrPipeline? _forwardPipeline;
+    private readonly PbrShadowDepthPipeline? _shadowDepthPipeline;
+    private Entity _lightingLayout;
+    private Entity _iblLayout;
+
+    internal bool HasMeshPipelines => _forwardPipeline is not null;
+
+    public PbrRenderer(PbrDepthPrepassPipeline depthPipeline, ForwardPbrPipeline forwardPipeline,
+        PbrClusterLightCullingPipeline cullingPipeline, PbrShadowDepthPipeline shadowDepthPipeline,
+        PbrIblPrecomputePipelines iblPipelines, PbrOutputPipelines outputPipelines)
+        : this(cullingPipeline, iblPipelines, outputPipelines)
+    {
+        ArgumentNullException.ThrowIfNull(depthPipeline);
+        ArgumentNullException.ThrowIfNull(forwardPipeline);
+        ArgumentNullException.ThrowIfNull(shadowDepthPipeline);
+        _depthPipeline = depthPipeline; _forwardPipeline = forwardPipeline; _shadowDepthPipeline = shadowDepthPipeline;
+        _lightingLayout = forwardPipeline.LightingBindGroupLayout;
+        _iblLayout = forwardPipeline.IblBindGroupLayout;
+    }
+
     public PbrExtractedView ExtractFrame(
         PbrViewState state,
         in GpuFrame frame,
@@ -25,6 +43,9 @@ public sealed partial class PbrRenderer(
     {
         var cache = frame.MainWorld.AcquireAddon<PbrRenderCache>();
         cache.Refresh();
+        if (!HasMeshPipelines && cache.MeshHandles.Count != 0) {
+            throw new InvalidOperationException("This renderer requires VisibilityInstance geometry. MeshRenderer geometry requires mesh pipelines.");
+        }
 
         var matrices = cameraEntity.Get<CameraMatrices>();
         var visible = cache.Cull(matrices.Frustum);
@@ -61,6 +82,7 @@ public sealed partial class PbrRenderer(
 
     public void PrepareFrame(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted)
     {
+        if (!HasMeshPipelines) { return; }
         var meshStore = frame.ResourceWorld.AcquireAddon<MeshGpuStore>();
         var meshRegistry = frame.ResourceWorld.AcquireAddon<MeshRegistry>();
         state.Meshes.Clear();
@@ -89,22 +111,24 @@ public sealed partial class PbrRenderer(
         in GpuFrame frame,
         PbrExtractedView extracted)
     {
+        EnsureSceneLayouts(in frame);
         var clusterConfig = extracted.ClusterConfig;
         var shadowConfig = extracted.ShadowConfig;
         var atlasResized = state.ShadowAtlas.EnsureCapacity(in frame, shadowConfig);
         var shadowLayersResized = state.Shadows.Upload(in frame, shadowConfig);
         var layerCount = shadowConfig.LayerCount;
-        EnsureShadowCameraBuffers(state, in frame, layerCount);
-        if (atlasResized || state.ShadowDrawBindGroups.Length != layerCount) {
-            EnsureShadowDrawBindGroups(state, in frame, layerCount);
-        }
-
-        for (var layer = 0; layer < layerCount; layer++) {
-            Wgpu.WriteBuffer(
-                frame.Queue.GetWgpu<WGPUQueue>(),
-                state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
-                0,
-                [new CameraUniformData(state.Shadows.LayerViewProj(layer), float4.zero)]);
+        if (_shadowDepthPipeline is not null) {
+            EnsureShadowCameraBuffers(state, in frame, layerCount);
+            if (atlasResized || state.ShadowDrawBindGroups.Length != layerCount) {
+                EnsureShadowDrawBindGroups(state, in frame, layerCount);
+            }
+            for (var layer = 0; layer < layerCount; layer++) {
+                Wgpu.WriteBuffer(
+                    frame.Queue.GetWgpu<WGPUQueue>(),
+                    state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
+                    0,
+                    [new CameraUniformData(state.Shadows.LayerViewProj(layer), float4.zero)]);
+            }
         }
 
         var lightsResized = state.Lights.Upload(in frame);
@@ -128,6 +152,7 @@ public sealed partial class PbrRenderer(
 
     public void PrepareIbl(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted)
     {
+        EnsureSceneLayouts(in frame);
         var created = state.Ibl.EnsureCapacity(in frame);
         if (created) {
             EnsureIblPrefilterBindGroups(state, in frame);
@@ -233,7 +258,7 @@ public sealed partial class PbrRenderer(
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
         state.IblBindGroup = frame.ResourceWorld.OwnWgpu(PbrIblBindGroupLayout.CreateBindGroup(
             deviceHandle,
-            forwardPipeline.IblBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
+            _iblLayout.GetWgpu<WGPUBindGroupLayout>(),
             state.Ibl.ShBuffer.GetWgpu<WGPUBuffer>(),
             state.Ibl.PrefilteredSamplingView.GetWgpu<WGPUTextureView>(),
             state.Ibl.PrefilteredSampler.GetWgpu<WGPUSampler>(),
@@ -262,7 +287,7 @@ public sealed partial class PbrRenderer(
             return;
         }
 
-        Wgpu.SetRenderPipeline(renderPass, shadowDepthPipeline.RenderPipeline.GetWgpu<WGPURenderPipeline>());
+        Wgpu.SetRenderPipeline(renderPass, (_shadowDepthPipeline ?? throw new InvalidOperationException("Mesh shadow pipelines are not configured.")).RenderPipeline.GetWgpu<WGPURenderPipeline>());
         Wgpu.SetBindGroup(renderPass, 0, state.ShadowDrawBindGroups[layer].GetWgpu<WGPUBindGroup>());
         foreach (var item in items) {
             var mesh = state.Meshes[item.Mesh];
@@ -308,7 +333,7 @@ public sealed partial class PbrRenderer(
         for (var layer = 0; layer < layerCount; layer++) {
             bindGroups[layer] = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
                 deviceHandle,
-                shadowDepthPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
+                _shadowDepthPipeline!.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
                 state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
                 state.Instances.IsValid ? state.Instances.Buffer.GetWgpu<WGPUBuffer>() : default,
                 state.Instances.Capacity));
@@ -341,7 +366,7 @@ public sealed partial class PbrRenderer(
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
         state.ForwardLightingBindGroup = frame.ResourceWorld.OwnWgpu(PbrLightingBindGroupLayout.CreateBindGroup(
             deviceHandle,
-            forwardPipeline.LightingBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
+            _lightingLayout.GetWgpu<WGPUBindGroupLayout>(),
             state.ClusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
             state.Lights.ClusteredBuffer.GetWgpu<WGPUBuffer>(), state.Lights.ClusteredCapacity,
             state.ClusterBuffers.LightGridBuffer.GetWgpu<WGPUBuffer>(), state.ClusterBuffers.LightGridSize,
@@ -358,7 +383,7 @@ public sealed partial class PbrRenderer(
         IReadOnlyList<PbrDrawItem> items,
         WgpuHandle<WGPURenderPassEncoder> renderPass) =>
         Encode(
-            state, items, renderPass, depthPipeline.RenderPipeline,
+            state, items, renderPass, (_depthPipeline ?? throw new InvalidOperationException("Mesh depth pipelines are not configured.")).RenderPipeline,
             state.DepthBindGroup, default, default);
 
     public void EncodeForwardPbr(
@@ -366,7 +391,7 @@ public sealed partial class PbrRenderer(
         IReadOnlyList<PbrDrawItem> items,
         WgpuHandle<WGPURenderPassEncoder> renderPass) =>
         Encode(
-            state, items, renderPass, forwardPipeline.RenderPipeline,
+            state, items, renderPass, (_forwardPipeline ?? throw new InvalidOperationException("Forward mesh pipelines are not configured.")).RenderPipeline,
             state.ForwardBindGroup, state.ForwardLightingBindGroup, state.IblBindGroup);
 
     private static void Encode(
@@ -411,11 +436,11 @@ public sealed partial class PbrRenderer(
 
         state.DepthBindGroup = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
             deviceHandle,
-            depthPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
+            _depthPipeline!.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
             cameraBuffer, instanceBuffer, state.Instances.Capacity));
         state.ForwardBindGroup = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
             deviceHandle,
-            forwardPipeline.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
+            _forwardPipeline!.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
             cameraBuffer, instanceBuffer, state.Instances.Capacity));
 
         if (state.ShadowDrawBindGroups.Length > 0) {
