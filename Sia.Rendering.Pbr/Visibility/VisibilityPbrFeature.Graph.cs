@@ -117,6 +117,29 @@ public sealed partial class VisibilityPbrFeature
         }
     }
 
+    private unsafe Entity OwnTextureBindGroup(Entity layout, ReadOnlySpan<WGPUBindGroupEntry> entries,
+        params ReadOnlySpan<WgpuHandle<WGPUTextureView>> views)
+    {
+        var retained = views.ToArray();
+        var owned = BindGroup(layout, entries);
+        foreach (var view in retained) {
+            WgpuUnsafe.wgpuTextureViewAddRef((WGPUTextureView*)view.DangerousGetHandle());
+        }
+        try {
+            return _world.OwnWgpu(owned, (ref WgpuHandle<WGPUBindGroup> handle) => {
+                Release();
+                handle = default;
+            });
+        }
+        catch { Release(); throw; }
+
+        void Release()
+        {
+            Wgpu.Release(ref owned);
+            for (var i = retained.Length - 1; i >= 0; i--) { Wgpu.Release(ref retained[i]); }
+        }
+    }
+
     private sealed partial class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group,
         Entity workBuffer, Entity indirect, uint4[] workItems, LodViewGpu? lodView)
     {
@@ -184,9 +207,9 @@ public sealed partial class VisibilityPbrFeature
                 var sampler = WGPUBindGroupEntry.Default;
                 sampler.Binding = 3;
                 sampler.Sampler = (WGPUSampler*)Owner._sampler.GetWgpu<WGPUSampler>().DangerousGetHandle();
-                var next = Owner._world.OwnWgpu(Owner.BindGroup(Owner._resolveLayout, [
+                var next = Owner.OwnTextureBindGroup(Owner._resolveLayout, [
                     TextureEntry(0, id), TextureEntry(1, hdr), TextureEntry(2, Owner._albedoView.GetWgpu<WGPUTextureView>()), sampler
-                ]));
+                ], id, hdr);
                 if (_resolveGroup.IsValid) { _resolveGroup.Destroy(); }
                 _resolveGroup = next;
                 _idView = id;
@@ -217,8 +240,8 @@ public sealed partial class VisibilityPbrFeature
         {
             var source = context.GetTextureView(Owner.HdrTarget);
             if (!_outputGroup.IsValid || source != _outputSource) {
-                var next = Owner._world.OwnWgpu(Owner.BindGroup(Owner._output.Layout,
-                    [BufferEntry(0, OutputUniform), TextureEntry(1, source)]));
+                var next = Owner.OwnTextureBindGroup(Owner._output.Layout,
+                    [BufferEntry(0, OutputUniform), TextureEntry(1, source)], source);
                 if (_outputGroup.IsValid) { _outputGroup.Destroy(); }
                 _outputGroup = next;
                 _outputSource = source;
