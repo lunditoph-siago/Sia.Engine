@@ -10,5 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="../Sia.Rendering.Pbr/Sia.Rendering.Pbr.csproj" />
     <PackageReference Include="Sia.WebGPU.Native" Version="0.0.20" />
+    <PackageReference Include="StbImageSharp" Version="2.30.16" />
+    <PackageReference Include="YellowDogMan.Mikktspace.Net" Version="0.1.4" />
   </ItemGroup>
 </Project>
