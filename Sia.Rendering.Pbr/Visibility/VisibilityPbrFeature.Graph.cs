@@ -59,6 +59,7 @@ public sealed partial class VisibilityPbrFeature
         }
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
         if (_gpuLod is not null) { BuildPostOcclusionGraph(ref graph, view); }
+        view.BuildMaterialTiles(ref graph);
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
         if (includeOutput) { graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output); }
         else if (view.Timing is not null) { graph.UseComputePass(new("visibility-timing-resolve"), "visibility-timing-resolve", view.DeclareSurfaceTiming, view.ResolveSurfaceTiming); }
@@ -81,8 +82,8 @@ public sealed partial class VisibilityPbrFeature
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
-            var workItems = _fixedWork ?? (_gpuLod is null ? new uint4[checked((int)TriangleCapacity)] : []);
-            var workBuffer = Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 16ul,
+            uint4[] workItems = _fixedWorkCount.HasValue || _gpuLod is not null ? [] : new uint4[checked((int)TriangleCapacity)];
+            var workBuffer = _fixedWorkBuffer.IsValid ? _fixedWorkBuffer : Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 16ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
             var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[20],
                 WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
@@ -189,6 +190,8 @@ public sealed partial class VisibilityPbrFeature
         public void DeclareResolve(RenderGraphPassDeclarationBuilder declaration)
         {
             ReadGeometry(declaration);
+            declaration.Read(s_MaterialTilesKey, RenderGraphBufferUsage.Storage)
+                .Read(s_MaterialDispatchKey, RenderGraphBufferUsage.Indirect);
             declaration.Read(Owner.VisibilityTarget, RenderGraphTextureUsage.TextureBinding)
                 .Write(Owner.HdrTarget, RenderGraphTextureUsage.StorageBinding)
                 .Write(Owner.BaseColorRoughnessTarget, RenderGraphTextureUsage.StorageBinding)
@@ -209,7 +212,7 @@ public sealed partial class VisibilityPbrFeature
                 try {
                     for (var i = 0; i < next.Length; i++) {
                         var material = Owner._materials[i];
-                        var entries = new WGPUBindGroupEntry[16];
+                        var entries = new WGPUBindGroupEntry[17];
                         entries[0] = TextureEntry(0, id); entries[1] = TextureEntry(1, hdr);
                         for (uint map = 0; map < 5; map++) {
                             entries[2 + map * 2] = TextureEntry(2 + map * 2, material.Maps[map].View.GetWgpu<WGPUTextureView>());
@@ -220,6 +223,7 @@ public sealed partial class VisibilityPbrFeature
                         }
                         entries[12] = BufferEntry(12, material.Uniform);
                         for (uint surface = 0; surface < 3; surface++) { entries[13 + surface] = TextureEntry(13 + surface, surfaces[surface]); }
+                        entries[16] = BufferEntry(16, _materialTileBuffer);
                         next[i] = Owner.OwnTextureBindGroup(Owner._resolveLayout, entries, id, hdr, surfaces[0], surfaces[1], surfaces[2]);
                     }
                 }
@@ -234,9 +238,9 @@ public sealed partial class VisibilityPbrFeature
             try {
                 Wgpu.SetComputePipeline(pass, Owner._resolve.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-                foreach (var material in _resolveGroups) {
-                    Wgpu.SetBindGroup(pass, 1, material.GetWgpu<WGPUBindGroup>());
-                    Wgpu.DispatchWorkgroups(pass, (Width + 7) / 8, (Height + 7) / 8);
+                for (var i = 0; i < _resolveGroups.Length; i++) {
+                    Wgpu.SetBindGroup(pass, 1, _resolveGroups[i].GetWgpu<WGPUBindGroup>());
+                    Wgpu.DispatchWorkgroupsIndirect(pass, _materialDispatchBuffer.GetWgpu<WGPUBuffer>(), (ulong)i * 12);
                 }
             }
             finally {

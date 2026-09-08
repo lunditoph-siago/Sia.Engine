@@ -56,7 +56,7 @@ public sealed partial class VisibilityPbrFeature
         hdr.StorageTexture.Access = WGPUStorageTextureAccess.WriteOnly;
         hdr.StorageTexture.Format = WGPUTextureFormat.RGBA16Float;
         hdr.StorageTexture.ViewDimension = WGPUTextureViewDimension._2D;
-        var entries = new WGPUBindGroupLayoutEntry[16];
+        var entries = new WGPUBindGroupLayoutEntry[17];
         entries[0] = TextureLayout(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute);
         entries[1] = hdr;
         for (uint map = 0; map < 5; map++) {
@@ -69,6 +69,7 @@ public sealed partial class VisibilityPbrFeature
         }
         entries[12] = BufferLayout(12, WGPUBufferBindingType.Uniform, 48, WGPUShaderStage.Compute);
         for (uint i = 13; i < 16; i++) { entries[i] = hdr; entries[i].Binding = i; }
+        entries[16] = BufferLayout(16, WGPUBufferBindingType.ReadOnlyStorage, 4, WGPUShaderStage.Compute);
         return Layout(world, device, entries, acquired);
     }
 

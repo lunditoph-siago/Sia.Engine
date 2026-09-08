@@ -1,31 +1,45 @@
 using Sia.Math;
+using Sia;
 using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class VisibilityPbrFeature
 {
-    private readonly uint4[]? _fixedWork;
+    private readonly int? _fixedWorkCount;
+    private readonly Entity _fixedWorkBuffer;
 
     public static VisibilityPbrFeature CreateFixedScene(in GpuFrame frame, PbrSceneAsset asset,
         ReadOnlySpan<VisibilityInstance> instances, WGPUTextureFormat outputFormat,
         VisibilityDebugMode mode = VisibilityDebugMode.Shaded)
     {
         ArgumentNullException.ThrowIfNull(asset);
-        var trees = asset.Geometry.Span.ToArray().Select(mesh => mesh.Build.Tree).ToArray();
-        var scene = CreateScene(trees, instances, new(int.MaxValue, int.MaxValue, int.MaxValue));
-        var work = new uint4[checked((int)scene.TriangleCapacity)];
+        var geometry = new MeshletRasterData[asset.Geometry.Length];
+        var offsets = new uint[geometry.Length];
+        uint triangleOffset = 0;
+        for (var i = 0; i < geometry.Length; i++) {
+            var (mesh, meshlets) = asset.Geometry.Span[i].Build.Tree.CopyFinestGeometry();
+            geometry[i] = MeshletRasterData.Create(mesh, meshlets);
+            offsets[i] = triangleOffset;
+            triangleOffset = checked(triangleOffset + (uint)geometry[i].Triangles.Length);
+        }
+        var ranges = new uint4[instances.Length];
+        var capacity = 0;
+        for (var i = 0; i < instances.Length; i++) {
+            var index = instances[i].AssetIndex;
+            if ((uint)index >= (uint)geometry.Length) { throw new ArgumentOutOfRangeException(nameof(instances)); }
+            ranges[i] = new(0, 0, 0, (uint)index);
+            capacity = checked(capacity + geometry[index].Triangles.Length);
+        }
+        var work = new uint4[capacity];
         var count = 0;
         for (var instance = 0; instance < instances.Length; instance++) {
-            var range = scene.InstanceRoots[instance];
-            var length = trees[instances[instance].AssetIndex].Nodes.Length;
-            foreach (var patch in scene.Patches.AsSpan((int)range.x, length)) {
-                if (patch.Children.y != 0) { continue; }
-                for (uint triangle = 0; triangle < patch.Geometry.z; triangle++) {
-                    work[count++] = new(patch.Geometry.y + triangle, (uint)instance, 0, 0);
-                }
+            var index = instances[instance].AssetIndex;
+            for (uint triangle = 0; triangle < geometry[index].Triangles.Length; triangle++) {
+                work[count++] = new(offsets[index] + triangle, (uint)instance, 0, 0);
             }
         }
+        var scene = new SceneLodData(MeshletRasterData.Combine(geometry), [], ranges, default, 1, (uint)capacity);
         return Create(in frame, scene.Geometry, instances, null, outputFormat, mode, null, default,
             scene: scene, materials: asset.Materials.Span, fixedWork: work);
     }

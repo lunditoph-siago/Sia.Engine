@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -154,19 +155,16 @@ public sealed partial class MeshPatchAsset
             cancellationToken.ThrowIfCancellationRequested();
             vertices[i] = reader.Vertex(version);
         }
-        var indices = new uint[counts[2]];
-        for (var i = 0; i < indices.Length; i++) { indices[i] = reader.UInt(); }
+        var indices = reader.UIntArray(counts[2]);
         var clusters = new Meshlet[counts[3]];
         for (var i = 0; i < clusters.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
             clusters[i] = new(reader.Int(), reader.Int(), reader.Int(), reader.Int(),
                 new(reader.Box(), reader.Vector(), reader.Float(), reader.Vector(), reader.Float()));
         }
-        var references = new uint[counts[4]];
-        for (var i = 0; i < references.Length; i++) { references[i] = reader.UInt(); }
+        var references = reader.UIntArray(counts[4]);
         var localIndices = reader.Bytes(counts[5]).ToArray();
-        var sourceIndices = new uint[counts[6]];
-        for (var i = 0; i < sourceIndices.Length; i++) { sourceIndices[i] = reader.UInt(); }
+        var sourceIndices = reader.UIntArray(counts[6]);
         var tree = MeshPatchTree.Restore(nodes, roots, finest, new(vertices, indices, bounds),
             new(clusters, references, localIndices, sourceIndices), cancellationToken);
         Require(simplified == nodes.Count(node => node.ChildCount != 0), "Simplification count differs from the patch hierarchy.");
@@ -216,6 +214,14 @@ public sealed partial class MeshPatchAsset
         {
             var vertex = new MeshVertex(Vector(), Vector(), new(Float(), Float()));
             return version == 1 ? vertex : vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
+        }
+        public uint[] UIntArray(int count)
+        {
+            var bytes = Bytes(checked(count * 4));
+            var values = new uint[count];
+            if (BitConverter.IsLittleEndian) { MemoryMarshal.Cast<byte, uint>(bytes).CopyTo(values); }
+            else { for (var i = 0; i < count; i++) { values[i] = BinaryPrimitives.ReadUInt32LittleEndian(bytes[(i * 4)..]); } }
+            return values;
         }
         public ReadOnlySpan<byte> Bytes(int count) { var value = _remaining[..count]; _remaining = _remaining[count..]; return value; }
     }

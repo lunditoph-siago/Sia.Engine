@@ -58,7 +58,7 @@ public sealed partial class MeshPatchTree
             && nextMeshlet == meshlets.Meshlets.Length && leafTriangles == finest, "Incomplete patch forest or geometry stream.");
         Require(nodes.Length != 0 || geometry.Vertices.Length == 0, "Empty patch assets cannot contain unused geometry.");
         ValidateMeshlets(nodes, geometry, meshlets, cancellationToken);
-        var ids = VertexIds(geometry.Vertices, new());
+        var ids = VertexIds(geometry.Vertices, new(geometry.Vertices.Length));
         var boundaries = new Dictionary<(int, int), int>[nodes.Length];
         try {
             for (var i = nodes.Length - 1; i >= 0; i--) {

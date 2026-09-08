@@ -1,3 +1,4 @@
+using System.Buffers;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -156,23 +157,31 @@ public sealed partial class MeshPatchTree
     private static Dictionary<(int, int), int> Boundary(ReadOnlySpan<uint> indices, ReadOnlySpan<int> ids)
     {
         var boundary = new Dictionary<(int, int), int>();
-        var uses = new Dictionary<(int, int), int>();
-        for (var t = 0; t < indices.Length; t += 3) {
-            for (var c = 0; c < 3; c++) {
-                var a = ids[(int)indices[t + c]];
-                var b = ids[(int)indices[t + (c + 1) % 3]];
-                if (a == b) { continue; }
-                var edge = a < b ? (a, b) : (b, a);
-                AddEdge(boundary, edge, a < b ? 1 : -1);
-                var count = uses.GetValueOrDefault(edge) + 1;
-                if (count > 2) { throw new ArgumentException("Patch geometry contains a nonmanifold edge.", nameof(indices)); }
-                uses[edge] = count;
+        var edges = ArrayPool<ulong>.Shared.Rent(indices.Length);
+        try {
+            var count = 0;
+            for (var t = 0; t < indices.Length; t += 3) {
+                for (var c = 0; c < 3; c++) {
+                    var a = ids[(int)indices[t + c]];
+                    var b = ids[(int)indices[t + (c + 1) % 3]];
+                    if (a == b) { continue; }
+                    edges[count++] = ((ulong)(uint)System.Math.Min(a, b) << 32)
+                        | ((ulong)(uint)System.Math.Max(a, b) << 1) | (a < b ? 0ul : 1ul);
+                }
             }
+            edges.AsSpan(0, count).Sort();
+            for (var i = 0; i < count;) {
+                var edge = edges[i] & ~1ul;
+                var end = i + 1;
+                while (end < count && (edges[end] & ~1ul) == edge) { end++; }
+                if (end - i > 2) { throw new ArgumentException("Patch geometry contains a nonmanifold edge.", nameof(indices)); }
+                if (end - i == 1) { boundary.Add(((int)(edge >> 32), (int)((uint)edge >> 1)), (edges[i] & 1) == 0 ? 1 : -1); }
+                else if (edges[i] == edges[i + 1]) { throw new ArgumentException("Patch geometry contains inconsistent edge winding.", nameof(indices)); }
+                i = end;
+            }
+            return boundary;
         }
-        if (boundary.Values.Any(count => System.Math.Abs(count) != 1)) {
-            throw new ArgumentException("Patch geometry contains inconsistent edge winding.", nameof(indices));
-        }
-        return boundary;
+        finally { ArrayPool<ulong>.Shared.Return(edges); }
     }
 
     private static void AddEdge(Dictionary<(int, int), int> edges, (int, int) edge, int value)

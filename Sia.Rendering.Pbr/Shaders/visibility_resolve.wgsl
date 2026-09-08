@@ -22,6 +22,7 @@ struct MaterialParameters {
 @group(1) @binding(13) var base_roughness: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(14) var normal_metallic: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(15) var emissive_occlusion: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(16) var<storage, read> material_tiles: array<u32>;
 
 fn clear_surface(pixel: vec2<i32>) {
     textureStore(base_roughness, pixel, vec4<f32>(0.0));
@@ -43,8 +44,14 @@ fn structure_color(index: u32) -> vec3<f32> {
 }
 
 @compute @workgroup_size(8, 8)
-fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
+fn resolve(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) local: vec3<u32>) {
     let size = visibility_camera.size_counts.xy;
+    let dimensions = (size + 7u) / 8u;
+    let base = u32(material_parameters.texture_factors.w) * (dimensions.x * dimensions.y + 1u);
+    let ordinal = group.x + group.y * 65535u;
+    if (ordinal >= material_tiles[base]) { return; }
+    let tile = material_tiles[base + 1u + ordinal];
+    let thread = vec3<u32>(vec2<u32>(tile % dimensions.x, tile / dimensions.x) * 8u + local.xy, 0u);
     if (any(thread.xy >= size)) { return; }
     let pixel = vec2<i32>(thread.xy);
     let id = textureLoad(visibility, pixel, 0).x;

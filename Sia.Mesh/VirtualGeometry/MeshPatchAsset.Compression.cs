@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Buffers;
 using System.IO.Compression;
 
 namespace Sia.Engine.Mesh;
@@ -24,25 +25,28 @@ public sealed partial class MeshPatchAsset
         return bytes;
     }
 
-    private static byte[] Decompress(ReadOnlySpan<byte> bytes, int maximumDecodedBytes, CancellationToken cancellationToken)
+    private static unsafe byte[] Decompress(ReadOnlySpan<byte> bytes, int maximumDecodedBytes, CancellationToken cancellationToken)
     {
         Require(bytes.Length > 24, "Truncated compressed patch asset.");
         var length = BinaryPrimitives.ReadInt64LittleEndian(bytes[8..]);
         Require(length >= HeaderSize && length <= maximumDecodedBytes, "Invalid compressed patch length or decoded byte limit exceeded.");
         Require(BinaryPrimitives.ReadInt64LittleEndian(bytes[16..]) == bytes.Length, "Compressed patch length mismatch or trailing data.");
-        var raw = new byte[(int)length];
-        using var input = new MemoryStream(bytes[24..].ToArray(), writable: false);
-        using var decoder = new GZipStream(input, CompressionMode.Decompress);
+        var raw = ArrayPool<byte>.Shared.Rent((int)length);
         try {
-            for (var offset = 0; offset < raw.Length; offset += 65536) {
-                cancellationToken.ThrowIfCancellationRequested();
-                decoder.ReadExactly(raw.AsSpan(offset, System.Math.Min(65536, raw.Length - offset)));
+            fixed (byte* pointer = bytes) {
+                using var input = new UnmanagedMemoryStream(pointer + 24, bytes.Length - 24);
+                using var decoder = new GZipStream(input, CompressionMode.Decompress);
+                for (var offset = 0; offset < length; offset += 65536) {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    decoder.ReadExactly(raw.AsSpan(offset, (int)System.Math.Min(65536, length - offset)));
+                }
+                Require(decoder.ReadByte() == -1, "Compressed patch exceeds the declared decoded length.");
             }
-            Require(decoder.ReadByte() == -1, "Compressed patch exceeds the declared decoded length.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return Shuffle(raw.AsSpan(0, (int)length), restore: true, cancellationToken);
         }
         catch (EndOfStreamException error) { throw new InvalidDataException("Truncated compressed patch payload.", error); }
-        cancellationToken.ThrowIfCancellationRequested();
-        return Shuffle(raw, restore: true, cancellationToken);
+        finally { ArrayPool<byte>.Shared.Return(raw); }
     }
 
     private static byte[] Shuffle(ReadOnlySpan<byte> bytes, bool restore, CancellationToken cancellationToken)
