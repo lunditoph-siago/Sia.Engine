@@ -18,7 +18,7 @@ struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: ar
 @group(0) @binding(4) var<storage, read_write> states: array<PatchState>;
 @group(0) @binding(5) var<storage, read_write> heap: array<u32>;
 @group(0) @binding(6) var<storage, read_write> status: Status;
-@group(0) @binding(7) var<storage, read_write> work: array<vec4<u32>>;
+@group(0) @binding(7) var<storage, read_write> work: array<vec2<u32>>;
 @group(1) @binding(2) var<storage, read_write> dispatch: array<u32>;
 @group(1) @binding(0) var<uniform> hierarchy: Hierarchy;
 @group(1) @binding(1) var<storage, read> hzb: array<f32>;
@@ -238,7 +238,7 @@ fn emit_work(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     let source = states[index].node_id - 1u;
     let node = patches[source];
     for (var triangle = lane; triangle < node.geometry.z; triangle += 64u) {
-        work[states[index].offset + triangle] = vec4<u32>(node.geometry.y + triangle, states[index].instance, node.geometry.w, 0u);
+        work[states[index].offset + triangle] = vec2<u32>(node.geometry.y + triangle, states[index].instance);
     }
 }
 
@@ -328,6 +328,6 @@ fn emit_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     let source = states[index].node_id - 1u;
     let node = patches[source];
     for (var triangle = lane; triangle < node.geometry.z; triangle += 64u) {
-        work[states[index].offset + triangle] = vec4<u32>(node.geometry.y + triangle, states[index].instance, node.geometry.w, 0u);
+        work[states[index].offset + triangle] = vec2<u32>(node.geometry.y + triangle, states[index].instance);
     }
 }

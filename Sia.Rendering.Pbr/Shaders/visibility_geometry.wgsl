@@ -8,6 +8,7 @@ struct VisibilityCamera {
     light_radiance: vec4<f32>,
 }
 struct VisibilityVertex { position: vec4<f32>, normal: vec4<f32>, uv: vec4<f32>, tangent: vec4<f32> }
+struct PackedVisibilityVertex { position_normal_x: vec4<f32>, normal_yz_uv: vec4<f32>, tangent: vec4<f32> }
 struct VisibilityInstance {
     transform: mat4x4<f32>,
     normal_transform: mat4x4<f32>,
@@ -17,17 +18,20 @@ struct VisibilityInstance {
     roots: vec4<u32>,
 }
 @group(0) @binding(0) var<uniform> visibility_camera: VisibilityCamera;
-@group(0) @binding(1) var<storage, read> visibility_vertices: array<VisibilityVertex>;
+@group(0) @binding(1) var<storage, read> visibility_vertices: array<PackedVisibilityVertex>;
 @group(0) @binding(2) var<storage, read> visibility_meshlets: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> visibility_indices: array<u32>;
-@group(0) @binding(4) var<storage, read> visibility_triangles: array<vec4<u32>>;
+@group(0) @binding(4) var<storage, read> visibility_triangles: array<vec2<u32>>;
 @group(0) @binding(5) var<storage, read> visibility_instances: array<VisibilityInstance>;
-@group(0) @binding(6) var<storage, read> visibility_work: array<vec4<u32>>;
+@group(0) @binding(6) var<storage, read> visibility_work: array<vec2<u32>>;
 
 fn visibility_vertex(triangle: u32, corner: u32) -> VisibilityVertex {
     let reference = visibility_triangles[triangle];
     let cluster = visibility_meshlets[reference.x];
     let packed = visibility_indices[cluster.y + reference.y];
     let local = (packed >> (corner * 8u)) & 255u;
-    return visibility_vertices[visibility_indices[cluster.x + local]];
+    let vertex = visibility_vertices[visibility_indices[cluster.x + local]];
+    return VisibilityVertex(vec4<f32>(vertex.position_normal_x.xyz, 0.0),
+        vec4<f32>(vertex.position_normal_x.w, vertex.normal_yz_uv.xy, 0.0),
+        vec4<f32>(vertex.normal_yz_uv.zw, 0.0, 0.0), vertex.tangent);
 }
