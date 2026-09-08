@@ -50,7 +50,6 @@ function getCanvasWidth() {
 
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
-  credit.removeAttribute('href');
   credit.textContent = attribution;
   credit.hidden = false;
 }
@@ -108,10 +107,10 @@ try {
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
   if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
   if (parameters.has('lod')) args.push('--lod', parameters.get('lod'));
-  if (parameters.has('scene')) args.push('--scene', new URL(parameters.get('scene'), location.href).href);
+  if (pipeline === 'pbr') args.push('--scene', new URL(parameters.get('scene') ?? 'Assets/Bistro.siapbr', location.href).href);
   if (pipeline === 'bunny' || pipeline === 'pbr') {
     inspection.hidden = false;
-    document.getElementById(`${pipeline}-credit`).hidden = parameters.has('scene');
+    if (pipeline === 'bunny') document.getElementById('bunny-credit').hidden = false;
     document.getElementById('inspection-atmosphere').hidden = pipeline !== 'pbr';
   }
   if (pipeline === 'pbr') {

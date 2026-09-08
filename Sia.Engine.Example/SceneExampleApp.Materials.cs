@@ -11,14 +11,13 @@ internal sealed partial class SceneExampleApp
 {
     private readonly PbrSceneAsset? _materialScene;
     private readonly bool _finest;
-    private readonly bool _externalScene;
     private Aabb _materialBounds;
 
     private void BuildMaterialScene()
     {
         var scene = _materialScene ?? throw new InvalidOperationException("A cooked PBR scene is required.");
 #if BROWSER
-        if (_externalScene) { SetSceneAttribution(scene.Attribution); }
+        SetSceneAttribution(scene.Attribution);
 #endif
         var world = _sceneWorld!;
         _materialBounds = new(new float3(float.PositiveInfinity), new float3(float.NegativeInfinity));
@@ -51,24 +50,19 @@ internal sealed partial class SceneExampleApp
     private void InitializeMaterialRendering()
     {
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
-        var settings = new VisibilityLodSettings(4, new MeshPatchBudget(8192, 16384, 262144) {
+        var scene = _materialScene!;
+        var roots = 0; var meshlets = 0; var triangles = 0;
+        foreach (var instance in scene.Instances.Span) {
+            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
+            roots = checked(roots + tree.RootCount);
+            foreach (var root in tree.Nodes.Span[..tree.RootCount]) {
+                meshlets = checked(meshlets + root.MeshletCount);
+                triangles = checked(triangles + root.TriangleCount);
+            }
+        }
+        var settings = new VisibilityLodSettings(4, new(checked(roots + 8192), checked(meshlets + 16384), checked(triangles + 1048576)) {
             MaxRefinementCandidates = 4096, MaxRefinementNodes = 16384
         });
-        var scene = _materialScene!;
-        if (_externalScene) {
-            var roots = 0; var meshlets = 0; var triangles = 0;
-            foreach (var instance in scene.Instances.Span) {
-                var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
-                roots = checked(roots + tree.RootCount);
-                foreach (var root in tree.Nodes.Span[..tree.RootCount]) {
-                    meshlets = checked(meshlets + root.MeshletCount);
-                    triangles = checked(triangles + root.TriangleCount);
-                }
-            }
-            settings = new(4, new(checked(roots + 8192), checked(meshlets + 16384), checked(triangles + 1048576)) {
-                MaxRefinementCandidates = 4096, MaxRefinementNodes = 16384
-            });
-        }
         _visibilityLod = _finest
             ? VisibilityPbrFeature.CreateFixedScene(in frame, scene, scene.Instances.Span.ToArray().Select(instance =>
                 new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode)

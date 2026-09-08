@@ -10,7 +10,6 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets/bunny.siapatch" LogicalName="Sia.Engine.Example.bunny.siapatch" />
-    <EmbeddedResource Include="Assets/scene.siapbr" LogicalName="Sia.Engine.Example.scene.siapbr" />
     <Compile Remove="obj_browser\**" />
     <EmbeddedResource Remove="obj_browser\**" />
     <None Remove="obj_browser\**" />
@@ -31,4 +30,5 @@
     <PackageReference Include="Sia.GLFW" Version="0.0.4" />
     <PackageReference Include="Sia.GLFW.Native" Version="0.0.4" />
   </ItemGroup>
+  <Import Project="Bistro.targets" />
 </Project>

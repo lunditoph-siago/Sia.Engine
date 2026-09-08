@@ -13,7 +13,7 @@ public static class Program
             var (pipeline, debugMode, distance, scenePath, finest) = ParseOptions(args);
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
             var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath) : null;
-            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, scenePath is not null);
+            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest);
 #if BROWSER
             await app.RunAsync();
 #else
@@ -46,22 +46,13 @@ public static class Program
     private static async Task<PbrSceneAsset> LoadPbrAsync(string? path)
     {
         var timer = Stopwatch.StartNew();
-        byte[] bytes;
-        if (path is not null) {
 #if BROWSER
-            using var client = new HttpClient();
-            bytes = await client.GetByteArrayAsync(path);
+        using var client = new HttpClient();
+        var bytes = await client.GetByteArrayAsync(path ?? throw new ArgumentException("The browser entry point must supply the published scene URL."));
 #else
-            bytes = await File.ReadAllBytesAsync(path);
+        var bytes = await File.ReadAllBytesAsync(path ?? Path.Combine(AppContext.BaseDirectory, "Assets", "Bistro.siapbr"));
 #endif
-        } else {
-            using var stream = typeof(Program).Assembly.GetManifestResourceStream("Sia.Engine.Example.scene.siapbr")
-                ?? throw new FileNotFoundException("The bundled PBR scene is missing.");
-            using var memory = new MemoryStream();
-            await stream.CopyToAsync(memory);
-            bytes = memory.ToArray();
-        }
-        var scene = PbrSceneAsset.Decode(bytes, path is null ? 128 * 1024 * 1024 : 512 * 1024 * 1024);
+        var scene = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
         Console.WriteLine(scene.Attribution);
         Console.WriteLine($"PBR scene: {bytes.Length} bytes; load/decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
             + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");
