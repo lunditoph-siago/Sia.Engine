@@ -166,9 +166,10 @@ internal sealed unsafe partial class SceneExampleApp
             UpdatePatchInspection(deltaTime);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             var size = _materialBounds.Max - _materialBounds.Min;
-            target = new float3(4, 3.5f, 3);
+            target = new float3(.748185f, 4.557473f, 15.934535f);
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
-            eye = target + new float3(-4, 1, 17) * (.6f + .4f * _patchDistance);
+            eye = new float3(.376860f, 4.614639f, 16.861277f);
+            UpdateFreeCamera(deltaTime, ref eye, ref target);
             _camera.Get<CameraComponent>() = new(MathF.PI / 3, .1f, System.Math.Max(100, extent * 4));
         }
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
