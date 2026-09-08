@@ -90,11 +90,12 @@ public sealed partial class VisibilityPbrFeature
     private static unsafe Entity CreateRaster(World world, WgpuHandle<WGPUDevice> device,
         Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false)
     {
-        var first = indexed && !shadow && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
+        var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
+        var first = indexed && !shadow && core;
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityRaster(), "visibility-raster"), acquired);
         var pipelineLayout = PipelineLayout(world, device, [layout], acquired);
         var entry = first ? "indexed_first"u8 : indexed ? (shadow ? "indexed_shadow"u8 : "indexed"u8) : "vertex"u8;
-        var fragmentEntry = first ? "fragment_first"u8 : "fragment"u8;
+        var fragmentEntry = first ? "fragment_first"u8 : core ? "fragment"u8 : "fragment_depth"u8;
         fixed (byte* vertexName = entry)
         fixed (byte* fragmentName = fragmentEntry) {
             var target = WGPUColorTargetState.Default;
