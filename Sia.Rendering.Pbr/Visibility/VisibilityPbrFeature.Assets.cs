@@ -76,5 +76,8 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private sealed record SceneLodData(MeshletRasterData Geometry, PatchGpu[] Patches, uint4[] InstanceRoots,
-        uint3 RootCost, uint StateCapacity, uint TriangleCapacity);
+        uint3 RootCost, uint StateCapacity, uint TriangleCapacity)
+    {
+        public int InstanceCapacity { get; init; } = InstanceRoots.Length;
+    }
 }

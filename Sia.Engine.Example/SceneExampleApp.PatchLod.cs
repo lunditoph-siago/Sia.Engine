@@ -1,3 +1,4 @@
+using Sia;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
@@ -58,7 +59,8 @@ internal sealed partial class SceneExampleApp
         var albedo = new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]);
         var settings = new VisibilityLodSettings(4,
             new MeshPatchBudget(4096, 8192, 262144) { MaxRefinementCandidates = 8192, MaxRefinementNodes = 32768 });
-        _visibilityLod = VisibilityPbrFeature.CreateGpuLod(in frame, [tree, pedestal], instances.ToArray(), albedo,
+        foreach (var instance in instances) { _sceneWorld!.Create(HList.From(instance)); }
+        _visibilityLod = VisibilityPbrFeature.CreateGpuScene(in frame, [tree, pedestal], 512, albedo,
             settings, _surfaceFormat, _patchDebugMode);
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
         Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length + pedestal.Nodes.Length} resident patches across two assets, {instances.Count} instances, "
