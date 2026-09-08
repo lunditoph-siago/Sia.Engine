@@ -39,6 +39,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _pipeline = pipeline;
         _patchAsset = patchAsset;
         _materialScene = materialScene;
+        _materialInstanceCount = materialScene?.Instances.Length ?? 0;
         _finest = finest;
         _initialCamera = camera;
         _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny

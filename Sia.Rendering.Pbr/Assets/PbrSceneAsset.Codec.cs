@@ -68,7 +68,7 @@ public sealed partial class PbrSceneAsset
         return result;
     }
 
-    public static PbrSceneAsset Decode(ReadOnlySpan<byte> bytes, int maximumDecodedBytes = 128 * 1024 * 1024,
+    public static unsafe PbrSceneAsset Decode(ReadOnlySpan<byte> bytes, int maximumDecodedBytes = 128 * 1024 * 1024,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -79,7 +79,8 @@ public sealed partial class PbrSceneAsset
         Require(length >= 13 && length <= maximumDecodedBytes && BinaryPrimitives.ReadInt64LittleEndian(bytes[16..]) == bytes.Length,
             "Invalid PBR scene length or decoded byte budget.");
         var raw = new byte[length];
-        using (var input = new MemoryStream(bytes[HeaderSize..].ToArray(), writable: false)) {
+        fixed (byte* pointer = bytes) {
+            using var input = new UnmanagedMemoryStream(pointer + HeaderSize, bytes.Length - HeaderSize);
             using var compressed = new GZipStream(input, CompressionMode.Decompress);
             try { compressed.ReadExactly(raw); }
             catch (EndOfStreamException error) { throw new InvalidDataException("Truncated PBR scene payload.", error); }
@@ -95,9 +96,11 @@ public sealed partial class PbrSceneAsset
             var geometry = new MeshPatchAsset[Count(reader, 4, 4096)];
             var remaining = maximumDecodedBytes - raw.Length;
             for (var i = 0; i < geometry.Length; i++) {
-                var blob = Blob(reader);
-                var decoded = blob.AsSpan().StartsWith("SIAGZIP1"u8) && blob.Length >= 24
-                    ? BinaryPrimitives.ReadInt64LittleEndian(blob.AsSpan(8)) : blob.Length;
+                var blobLength = Count(reader, 1, int.MaxValue);
+                var blob = raw.AsSpan((int)stream.Position, blobLength);
+                stream.Position += blobLength;
+                var decoded = blob.StartsWith("SIAGZIP1"u8) && blob.Length >= 24
+                    ? BinaryPrimitives.ReadInt64LittleEndian(blob[8..]) : blob.Length;
                 Require(decoded >= 0 && decoded <= remaining, "PBR geometry exceeds the aggregate decoded byte budget.");
                 geometry[i] = MeshPatchAsset.Decode(blob, cancellationToken, remaining);
                 remaining -= (int)decoded;

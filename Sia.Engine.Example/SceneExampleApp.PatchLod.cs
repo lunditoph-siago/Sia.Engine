@@ -130,7 +130,7 @@ internal sealed partial class SceneExampleApp
             _patchDistance = (1 - MathF.Cos(_patchTourPhase)) * 0.5f;
         }
         var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
-            : $"{_materialScene!.Instances.Length} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
+            : $"{_materialInstanceCount} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
         var atmosphere = _pipeline == ScenePipeline.Pbr && _sceneWorld!.AcquireAddon<EnvironmentLighting>().Atmosphere is not null;
         var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
         var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"

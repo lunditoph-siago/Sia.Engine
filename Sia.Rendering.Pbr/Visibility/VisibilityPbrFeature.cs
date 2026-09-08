@@ -45,7 +45,8 @@ public sealed partial class VisibilityPbrFeature :
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
         MaterialGpu[] materials, MaterialTextureGpu[] textures, Entity geometryLayout, Entity resolveLayout,
         Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
-        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod, uint4[]? fixedWork)
+        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod, uint4[]? fixedWork,
+        MaterialTilesGpu materialTiles, Entity fixedWorkBuffer)
     {
         _world = frame.ResourceWorld;
         _device = frame.Device;
@@ -55,7 +56,9 @@ public sealed partial class VisibilityPbrFeature :
         _transforms = transforms;
         _lod = lod;
         _gpuLod = gpuLod;
-        _fixedWork = fixedWork;
+        _fixedWorkCount = fixedWork?.Length;
+        _fixedWorkBuffer = fixedWorkBuffer;
+        _materialTiles = materialTiles;
         _materials = materials;
         _materialTextures = textures;
         _geometryLayout = geometryLayout;
@@ -160,10 +163,13 @@ public sealed partial class VisibilityPbrFeature :
             var resolveLayout = CreateResolveLayout(world, device, acquired);
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
+            var materialTiles = CreateMaterialTiles(world, device, geometryLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
             var gpuLod = scene is not null && fixedWork is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
+            var fixedWorkBuffer = fixedWork is null ? default : Upload<uint4>(world, device, queue, fixedWork,
+                WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
             return new(in frame, buffers, materialGpu, textures, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, fixedWork) {
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, fixedWork, materialTiles, fixedWorkBuffer) {
                 InstanceCapacity = (uint)gpuInstances.Length
             };
         }
@@ -192,6 +198,7 @@ public sealed partial class VisibilityPbrFeature :
         if (viewport.Width <= 0 || viewport.Height <= 0) { throw new InvalidOperationException("Visibility requires a nonempty viewport."); }
         view.Width = (uint)viewport.Width;
         view.Height = (uint)viewport.Height;
+        view.PrepareMaterialTiles();
         view.Frame = context.Frame;
         var camera = context.Frame.Camera.Get<CameraMatrices>();
         if (!Finite(camera.ViewProj)) { throw new ArgumentException("Visibility requires a finite camera projection."); }

@@ -9,7 +9,8 @@ namespace Sia.Engine.Example;
 
 internal sealed partial class SceneExampleApp
 {
-    private readonly PbrSceneAsset? _materialScene;
+    private PbrSceneAsset? _materialScene;
+    private readonly int _materialInstanceCount;
     private readonly bool _finest;
     private Aabb _materialBounds;
 
@@ -69,5 +70,6 @@ internal sealed partial class SceneExampleApp
             : VisibilityPbrFeature.CreateGpuScene(in frame, scene, System.Math.Max(32, scene.Instances.Length), settings, _surfaceFormat, _patchDebugMode);
         InitializeInspectionControls();
         Console.WriteLine($"PBR: {scene.Instances.Length} static instances, {(_finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles. B: toggle atmosphere.");
+        _materialScene = null;
     }
 }

@@ -20,6 +20,10 @@ public sealed partial class MeshPatchAsset
         BuilderVersion = builderVersion;
     }
 
+    public MeshPatchAsset ExtractFinest() => new(
+        new(Build.Tree.ExtractFinest(), Build.SourceTriangleCount, Build.RemovedDegenerateTriangleCount, 0, 0, 0),
+        Settings, SourceHash, BuilderVersion);
+
     public static MeshPatchAsset Cook(MeshData source, MeshPatchBuildSettings? settings = null,
         CancellationToken cancellationToken = default)
     {

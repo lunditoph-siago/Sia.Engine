@@ -178,7 +178,7 @@ try {
   if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
   if (parameters.has('lod')) args.push('--lod', parameters.get('lod'));
   if (parameters.has('camera')) args.push('--camera', parameters.get('camera'));
-  if (pipeline === 'pbr') args.push('--scene', new URL(parameters.get('scene') ?? 'Assets/Bistro.siapbr', location.href).href);
+  if (pipeline === 'pbr') args.push('--scene', new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href).href);
   const { runMain, Module, setModuleImports } = await dotnet.withApplicationArguments(...args).create();
   Module.canvas = canvas;
   Module.print = console.log;

@@ -11,7 +11,7 @@ public static partial class Program
     [JSImport("setSceneReady", "main.js")]
     internal static partial void SetSceneReady();
 
-    private static async Task<byte[]> DownloadSceneAsync(string path)
+    private static async Task<ReadOnlyMemory<byte>> DownloadSceneAsync(string path)
     {
         SetLoadingState("Downloading scene", double.NaN);
         using var client = new HttpClient();
@@ -34,7 +34,7 @@ public static partial class Program
             }
         }
         SetLoadingState("Downloading scene", 1);
-        return bytes.ToArray();
+        return bytes.GetBuffer().AsMemory(0, checked((int)bytes.Length));
     }
 }
 #endif
