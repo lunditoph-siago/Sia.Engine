@@ -42,7 +42,7 @@ public sealed partial class VisibilityPbrFeature
             foreach (var selected in selection.Patches.Span) {
                 var patch = tree.Nodes.Span[selected.Patch];
                 for (var triangle = patch.TriangleOffset; triangle < patch.TriangleOffset + patch.TriangleCount; triangle++) {
-                    view.WorkItems[count++] = new uint4((uint)triangle, (uint)selected.Instance, 0, 0);
+                    view.WorkItems[count++] = new WorkGpu((uint)triangle, (uint)selected.Instance);
                 }
             }
         }
@@ -50,12 +50,12 @@ public sealed partial class VisibilityPbrFeature
             if (view.WorkInitialized) { return; }
             for (uint instance = 0; instance < InstanceCount; instance++) {
                 for (uint triangle = 0; triangle < TriangleCount; triangle++) {
-                    view.WorkItems[count++] = new uint4(triangle, instance, 0, 0);
+                    view.WorkItems[count++] = new WorkGpu(triangle, instance);
                 }
             }
         }
         var queue = _queue.GetWgpu<WGPUQueue>();
-        if (!_fixedWorkCount.HasValue) { Wgpu.WriteBuffer<uint4>(queue, view.WorkBuffer.GetWgpu<WGPUBuffer>(), 0, view.WorkItems.AsSpan(0, count)); }
+        if (!_fixedWorkCount.HasValue) { Wgpu.WriteBuffer<WorkGpu>(queue, view.WorkBuffer.GetWgpu<WGPUBuffer>(), 0, view.WorkItems.AsSpan(0, count)); }
         Wgpu.WriteBuffer<uint>(queue, view.Indirect.GetWgpu<WGPUBuffer>(), 0, [checked((uint)count * 3u), 1, 0, 0]);
         view.WorkCount = (uint)count;
         view.Selection = nextSelection;

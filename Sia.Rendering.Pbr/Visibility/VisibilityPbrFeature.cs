@@ -45,7 +45,7 @@ public sealed partial class VisibilityPbrFeature :
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
         MaterialGpu[] materials, MaterialTextureGpu[] textures, Entity geometryLayout, Entity resolveLayout,
         Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
-        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod, uint4[]? fixedWork,
+        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod, WorkGpu[]? fixedWork,
         MaterialTilesGpu materialTiles, Entity fixedWorkBuffer)
     {
         _world = frame.ResourceWorld;
@@ -116,7 +116,7 @@ public sealed partial class VisibilityPbrFeature :
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo? albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
         bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default,
-        uint4[]? fixedWork = null)
+        WorkGpu[]? fixedWork = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         var sourceMaterials = ValidateMaterials(albedo, materials);
@@ -143,7 +143,7 @@ public sealed partial class VisibilityPbrFeature :
         }
         var queue = frame.Queue.GetWgpu<WGPUQueue>();
         var limits = Wgpu.GetLimits(device);
-        var workSize = System.Math.Max(1u, capacity) * 16ul;
+        var workSize = System.Math.Max(1u, capacity) * 8ul;
         if (workSize > limits.MaxBufferSize || workSize > limits.MaxStorageBufferBindingSize) {
             throw new ArgumentException("The required visibility work list exceeds the device capacity.", nameof(instances));
         }
@@ -152,10 +152,12 @@ public sealed partial class VisibilityPbrFeature :
         var acquired = new List<Entity>();
         try {
             var buffers = new[] {
-                Upload(world, device, queue, geometry.Vertices.Span, WGPUBufferUsage.Storage, limits, acquired),
+                UploadPacked<MeshVertex, PackedVertexGpu>(world, device, queue, geometry.Vertices.Span,
+                    PackedVertexGpu.From, limits, acquired),
                 Upload(world, device, queue, geometry.Meshlets.Span, WGPUBufferUsage.Storage, limits, acquired),
                 Upload(world, device, queue, geometry.Indices.Span, WGPUBufferUsage.Storage, limits, acquired),
-                Upload(world, device, queue, geometry.Triangles.Span, WGPUBufferUsage.Storage, limits, acquired),
+                UploadPacked<uint4, TriangleGpu>(world, device, queue, geometry.Triangles.Span,
+                    static triangle => new(triangle.x, triangle.y), limits, acquired),
                 Upload<InstanceGpu>(world, device, queue, gpuInstances, WGPUBufferUsage.Storage, limits, acquired)
             };
             var (materialGpu, textures) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
@@ -166,7 +168,7 @@ public sealed partial class VisibilityPbrFeature :
             var materialTiles = CreateMaterialTiles(world, device, geometryLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
             var gpuLod = scene is not null && fixedWork is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
-            var fixedWorkBuffer = fixedWork is null ? default : Upload<uint4>(world, device, queue, fixedWork,
+            var fixedWorkBuffer = fixedWork is null ? default : Upload<WorkGpu>(world, device, queue, fixedWork,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
             return new(in frame, buffers, materialGpu, textures, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, fixedWork, materialTiles, fixedWorkBuffer) {

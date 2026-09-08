@@ -31,12 +31,12 @@ public sealed partial class VisibilityPbrFeature
             ranges[i] = new(0, 0, 0, (uint)index);
             capacity = checked(capacity + geometry[index].Triangles.Length);
         }
-        var work = new uint4[capacity];
+        var work = new WorkGpu[capacity];
         var count = 0;
         for (var instance = 0; instance < instances.Length; instance++) {
             var index = instances[instance].AssetIndex;
             for (uint triangle = 0; triangle < geometry[index].Triangles.Length; triangle++) {
-                work[count++] = new(offsets[index] + triangle, (uint)instance, 0, 0);
+                work[count++] = new(offsets[index] + triangle, (uint)instance);
             }
         }
         var scene = new SceneLodData(MeshletRasterData.Combine(geometry), [], ranges, default, 1, (uint)capacity);

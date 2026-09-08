@@ -82,8 +82,8 @@ public sealed partial class VisibilityPbrFeature
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
-            uint4[] workItems = _fixedWorkCount.HasValue || _gpuLod is not null ? [] : new uint4[checked((int)TriangleCapacity)];
-            var workBuffer = _fixedWorkBuffer.IsValid ? _fixedWorkBuffer : Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 16ul,
+            WorkGpu[] workItems = _fixedWorkCount.HasValue || _gpuLod is not null ? [] : new WorkGpu[checked((int)TriangleCapacity)];
+            var workBuffer = _fixedWorkBuffer.IsValid ? _fixedWorkBuffer : Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 8ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
             var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[20],
                 WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
@@ -136,7 +136,7 @@ public sealed partial class VisibilityPbrFeature
         => PbrTextureBindGroups.Create(_world, _device.GetWgpu<WGPUDevice>(), layout, entries, views);
 
     private sealed partial class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group,
-        Entity workBuffer, Entity indirect, uint4[] workItems, LodViewGpu? lodView)
+        Entity workBuffer, Entity indirect, WorkGpu[] workItems, LodViewGpu? lodView)
     {
         public VisibilityPbrFeature Owner { get; } = owner;
         public Entity Uniform { get; } = uniform;
@@ -144,7 +144,7 @@ public sealed partial class VisibilityPbrFeature
         public Entity Group { get; } = group;
         public Entity WorkBuffer { get; } = workBuffer;
         public Entity Indirect { get; } = indirect;
-        public uint4[] WorkItems { get; } = workItems;
+        public WorkGpu[] WorkItems { get; } = workItems;
         public LodViewGpu? Lod { get; } = lodView;
         public uint WorkCount { get; set; }
         public bool WorkInitialized { get; set; }
