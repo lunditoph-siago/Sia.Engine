@@ -27,6 +27,9 @@ public sealed class PbrRenderFeature :
         VisibilityPbrFeature? visibility = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
+        if (visibility is null && !renderer.HasMeshPipelines) {
+            throw new ArgumentException("A renderer without mesh pipelines requires a Visibility feature.", nameof(visibility));
+        }
         Renderer = renderer;
         Options = options ?? new PbrRenderFeatureOptions();
         Visibility = visibility;

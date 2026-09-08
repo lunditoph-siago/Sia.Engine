@@ -12,6 +12,7 @@ public sealed partial class PbrRenderer
 
     internal unsafe void PrepareVisibility(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted, VisibilityDebugMode mode)
     {
+        EnsureSceneLayouts(in frame);
         if (!_visibilityPipeline.IsValid) { CreateVisibilityPipeline(in frame); }
         if (!state.VisibilityUniforms.IsValid) {
             state.VisibilityUniforms = frame.ResourceWorld.CreateWgpuBuffer(frame.Device,
@@ -20,6 +21,17 @@ public sealed partial class PbrRenderer
         var camera = extracted.CameraMatrices;
         Wgpu.WriteBuffer<VisibilityLightingCamera>(frame.Queue.GetWgpu<WGPUQueue>(), state.VisibilityUniforms.GetWgpu<WGPUBuffer>(), 0,
             [new(camera.InvViewProj, new(camera.WorldPosition, 1), new((uint)mode, 0, 0, 0))]);
+    }
+
+    private void EnsureSceneLayouts(in GpuFrame frame)
+    {
+        if (_lightingLayout.IsValid) { return; }
+        var lighting = frame.ResourceWorld.OwnWgpu(PbrLightingBindGroupLayout.Create(frame.Device.GetWgpu<WGPUDevice>()));
+        try {
+            var ibl = frame.ResourceWorld.OwnWgpu(PbrIblBindGroupLayout.Create(frame.Device.GetWgpu<WGPUDevice>()));
+            _lightingLayout = lighting; _iblLayout = ibl;
+        }
+        catch { lighting.Destroy(); throw; }
     }
 
     private unsafe void CreateVisibilityPipeline(in GpuFrame frame)
@@ -45,7 +57,7 @@ public sealed partial class PbrRenderer
             descriptor.EntryCount = 6; descriptor.Entries = entries;
             var layout = Own(Wgpu.CreateBindGroupLayout(device, descriptor));
             var pipelineLayout = Own(PbrObjectBindGroupLayout.CreatePipelineLayout(device, layout.GetWgpu<WGPUBindGroupLayout>(),
-                forwardPipeline.LightingBindGroupLayout.GetWgpu<WGPUBindGroupLayout>(), forwardPipeline.IblBindGroupLayout.GetWgpu<WGPUBindGroupLayout>()));
+                _lightingLayout.GetWgpu<WGPUBindGroupLayout>(), _iblLayout.GetWgpu<WGPUBindGroupLayout>()));
             var shader = Own(Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityLighting(), "visibility-scene-lighting"));
             var pipeline = Own(PbrIblPrecomputePipelines.CreateFullscreenPipeline(device, shader.GetWgpu<WGPUShaderModule>(),
                 pipelineLayout.GetWgpu<WGPUPipelineLayout>(), PbrOutputPipelines.HdrFormat));
