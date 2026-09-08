@@ -6,7 +6,7 @@ using Sia.Math;
 
 namespace Sia.Engine.Example;
 
-public static class Program
+public static partial class Program
 {
     public static async Task<int> Main(string[] args)
     {
@@ -16,6 +16,8 @@ public static class Program
             var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath) : null;
             using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera);
 #if BROWSER
+            SetLoadingState("Preparing graphics", double.NaN);
+            await Task.Delay(20);
             await app.RunAsync();
 #else
             app.Run();
@@ -48,14 +50,17 @@ public static class Program
     {
         var timer = Stopwatch.StartNew();
 #if BROWSER
-        using var client = new HttpClient();
-        var bytes = await client.GetByteArrayAsync(path ?? throw new ArgumentException("The browser entry point must supply the published scene URL."));
+        var bytes = await DownloadSceneAsync(path ?? throw new ArgumentException("The browser entry point must supply the published scene URL."));
+        SetLoadingState("Preparing geometry and textures", double.NaN);
+        await Task.Delay(20);
 #else
         var bytes = await File.ReadAllBytesAsync(path ?? Path.Combine(AppContext.BaseDirectory, "Assets", "Bistro.siapbr"));
 #endif
+        var readMilliseconds = timer.Elapsed.TotalMilliseconds;
+        timer.Restart();
         var scene = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
         Console.WriteLine(scene.Attribution);
-        Console.WriteLine($"PBR scene: {bytes.Length} bytes; load/decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
+        Console.WriteLine($"PBR scene: {bytes.Length} bytes; read {readMilliseconds:F2} ms, decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
             + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");
         return scene;
     }
@@ -111,7 +116,7 @@ public static class Program
         if ((scenePath is not null || finest is not null || camera is not null) && pipeline != ScenePipeline.Pbr) {
             throw new ArgumentException("--scene, --lod and --camera require --pipeline pbr.");
         }
-        return (pipeline, debugMode, distance, scenePath, finest ?? false, camera);
+        return (pipeline, debugMode, distance, scenePath, finest ?? true, camera);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {
