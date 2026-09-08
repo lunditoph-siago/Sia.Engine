@@ -117,6 +117,19 @@
       margin: 8px 0 0;
     }
 
+    #camera-pose {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 6px 0;
+      padding: 6px;
+      color: white;
+      background: #17202e;
+      border: 1px solid #7e93af;
+      font: 12px monospace;
+    }
+
+    [hidden] { display: none !important; }
+
     @media (pointer: coarse), (max-height: 500px) {
       .keyboard-help { display: none; }
     }
@@ -131,7 +144,7 @@
   </nav>
   <fieldset id="inspection" hidden disabled aria-label="Scene controls">
     <div id="inspection-status">Loading scene&hellip;</div>
-    <label class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
+    <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
     <div class="controls">
       <button id="inspection-tour" type="button">Pause tour</button>
       <button id="inspection-material" type="button">Show shaded</button>
@@ -139,7 +152,12 @@
       <button id="inspection-atmosphere" type="button" hidden>Toggle atmosphere</button>
       <button id="inspection-lod" type="button" hidden>Compare finest</button>
     </div>
-    <p class="keyboard-help">W / S or &uarr; / &darr;: near / far &middot; Space: pause &middot; M: material &middot; R: reset</p>
+    <div id="camera-controls" hidden>
+      <label for="camera-pose">Camera: position X/Y/Z, target X/Y/Z</label>
+      <input id="camera-pose" type="text" readonly spellcheck="false" />
+      <div class="controls"><button id="camera-copy" type="button">Copy camera</button></div>
+    </div>
+    <p id="inspection-help" class="keyboard-help">W / S or &uarr; / &darr;: near / far &middot; Space: pause &middot; M: material &middot; R: reset</p>
   </fieldset>
   <a id="bunny-credit" class="asset-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">
     Stanford Bunny &middot; Stanford University Computer Graphics Laboratory

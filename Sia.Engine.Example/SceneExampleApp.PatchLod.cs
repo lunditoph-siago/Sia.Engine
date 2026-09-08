@@ -74,13 +74,18 @@ internal sealed partial class SceneExampleApp
     {
         GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
             if (action == InputAction.Press) {
+                if (_pipeline == ScenePipeline.Pbr) { _cameraPressed.Add(key); }
                 _patchKeys |= key switch {
-                    Key.Space => 1u, Key.M => 2u, Key.R => 4u,
-                    Key.S or Key.Down => 8u, Key.W or Key.Up => 16u, Key.A => 32u, _ => 0u
+                    Key.Space when _pipeline == ScenePipeline.Bunny => 1u, Key.M => 2u, Key.R => 4u,
+                    Key.S or Key.Down when _pipeline == ScenePipeline.Bunny => 8u,
+                    Key.W or Key.Up when _pipeline == ScenePipeline.Bunny => 16u,
+                    Key.B => 32u, Key.P => 64u, _ => 0u
                 };
             }
         });
-        Console.WriteLine("W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
+        Console.WriteLine(_pipeline == ScenePipeline.Pbr
+            ? "WASD: move. Q/E: down/up. Right drag or arrows: look. Shift: fast. C: slow. P: print camera. R: reset. M: material. B: atmosphere."
+            : "W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
     }
 
     private void UpdatePatchInspection(float deltaTime)
@@ -91,12 +96,12 @@ internal sealed partial class SceneExampleApp
 #if BROWSER
         pressed |= (uint)TakeInspectionCommands();
         var distance = TakeInspectionDistance();
-        if (double.IsFinite(distance)) {
+        if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
             _patchDistance = (float)System.Math.Clamp(distance, 0, 1);
             _patchTour = false;
         }
 #endif
-        if ((pressed & 1) != 0) {
+        if (_pipeline == ScenePipeline.Bunny && (pressed & 1) != 0) {
             _patchTour = !_patchTour;
             _patchTourPhase = MathF.Acos(1 - 2 * _patchDistance);
         }
@@ -104,14 +109,19 @@ internal sealed partial class SceneExampleApp
             _visibilityLod!.DebugMode = _visibilityLod.DebugMode == VisibilityDebugMode.Triangles
                 ? VisibilityDebugMode.Shaded : VisibilityDebugMode.Triangles;
         }
-        if ((pressed & 4) != 0) { _patchDistance = 0; _patchTour = false; }
+        if ((pressed & 4) != 0) {
+            if (_pipeline == ScenePipeline.Pbr) { _cameraEye = null; }
+            else { _patchDistance = 0; }
+            _patchTour = false;
+        }
+        if ((pressed & 64) != 0) { _printCamera = true; }
         if (_pipeline == ScenePipeline.Pbr && (pressed & 32) != 0) {
             var environment = _sceneWorld!.AcquireAddon<EnvironmentLighting>();
             environment.Atmosphere = environment.Atmosphere is null ? new SkyAtmosphere() : null;
         }
         var direction = (Down(Key.S) || Down(Key.Down) ? 1 : 0) - (Down(Key.W) || Down(Key.Up) ? 1 : 0);
         var step = ((pressed & 8) != 0 ? 1 : 0) - ((pressed & 16) != 0 ? 1 : 0);
-        if (direction != 0 || step != 0) {
+        if (_pipeline == ScenePipeline.Bunny && (direction != 0 || step != 0)) {
             _patchTour = false;
             _patchDistance = System.Math.Clamp(_patchDistance + direction * deltaTime * 0.25f + step * 0.01f, 0, 1);
         }
@@ -123,7 +133,9 @@ internal sealed partial class SceneExampleApp
             : $"{_materialScene!.Instances.Length} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
         var atmosphere = _pipeline == ScenePipeline.Pbr && _sceneWorld!.AcquireAddon<EnvironmentLighting>().Atmosphere is not null;
         var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
-        var status = $"{scene} | {_visibilityLod!.DebugMode} | Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}{lighting}";
+        var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
+            : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
+        var status = $"{scene} | {_visibilityLod!.DebugMode} | {camera}{lighting}";
         if (_patchStatus != status) {
             _patchStatus = status;
             Glfw.SetTitle(_window, "Sia.Engine - " + status);

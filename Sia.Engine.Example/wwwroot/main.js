@@ -2,6 +2,7 @@ import { dotnet } from './_framework/dotnet.js';
 
 const canvas = document.getElementById('canvas');
 canvas.addEventListener('pointerdown', () => canvas.focus());
+canvas.addEventListener('contextmenu', event => event.preventDefault());
 window.addEventListener('keydown', event => {
   if (event.target !== canvas) event.stopImmediatePropagation();
 }, true);
@@ -14,6 +15,31 @@ const resetControl = document.getElementById('inspection-reset');
 let atmosphereEnabled = new URLSearchParams(location.search).get('atmosphere') === 'on';
 let inspectionCommands = atmosphereEnabled ? 32 : 0;
 let inspectionDistance = NaN;
+let cameraPose = null;
+const cameraOutput = document.getElementById('camera-pose');
+const copyCamera = document.getElementById('camera-copy');
+copyCamera.addEventListener('click', async () => {
+  if (cameraPose === null) return;
+  try {
+    await navigator.clipboard.writeText('--camera ' + cameraPose);
+    copyCamera.textContent = 'Copied';
+  } catch {
+    cameraOutput.focus();
+    cameraOutput.select();
+    copyCamera.textContent = 'Select and copy';
+  }
+});
+
+function setCameraPose(pose) {
+  if (cameraPose === pose) return;
+  cameraPose = pose;
+  cameraOutput.value = '--camera ' + pose;
+  copyCamera.textContent = 'Copy camera';
+}
+
+function hasCameraFocus() {
+  return document.hasFocus() && document.activeElement === canvas;
+}
 distanceControl.addEventListener('input', () => { inspectionDistance = distanceControl.valueAsNumber / 1000; });
 tourControl.addEventListener('click', () => { inspectionCommands |= 1; });
 materialControl.addEventListener('click', () => { inspectionCommands |= 2; });
@@ -107,6 +133,7 @@ try {
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
   if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
   if (parameters.has('lod')) args.push('--lod', parameters.get('lod'));
+  if (parameters.has('camera')) args.push('--camera', parameters.get('camera'));
   if (pipeline === 'pbr') args.push('--scene', new URL(parameters.get('scene') ?? 'Assets/Bistro.siapbr', location.href).href);
   if (pipeline === 'bunny' || pipeline === 'pbr') {
     inspection.hidden = false;
@@ -114,6 +141,11 @@ try {
     document.getElementById('inspection-atmosphere').hidden = pipeline !== 'pbr';
   }
   if (pipeline === 'pbr') {
+    document.getElementById('inspection-distance-row').hidden = true;
+    tourControl.hidden = true;
+    resetControl.textContent = 'Reset camera';
+    document.getElementById('camera-controls').hidden = false;
+    document.getElementById('inspection-help').textContent = 'WASD: move · Q/E: down/up · Right drag / arrows: look · Shift: fast · C: slow · P: print · R: reset · M: material · B: atmosphere';
     const lodControl = document.getElementById('inspection-lod');
     const finest = parameters.get('lod') === 'finest';
     lodControl.hidden = false;
@@ -124,6 +156,7 @@ try {
       url.searchParams.set('distance', distanceControl.valueAsNumber / 1000);
       url.searchParams.set('debug', materialControl.textContent === 'Show shaded' ? 'triangles' : 'shaded');
       url.searchParams.set('atmosphere', atmosphereEnabled ? 'on' : 'off');
+      if (cameraPose !== null) url.searchParams.set('camera', cameraPose);
       location.href = url.href;
     });
   }
@@ -136,7 +169,7 @@ try {
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, takeInspectionCommands, takeInspectionDistance });
+  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, setCameraPose, hasCameraFocus, takeInspectionCommands, takeInspectionDistance });
   canvas.focus();
   await runMain();
 } catch (error) {
