@@ -5,6 +5,29 @@
 @group(1) @binding(1) var hdr: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(2) var albedo: texture_2d<f32>;
 @group(1) @binding(3) var albedo_sampler: sampler;
+@group(1) @binding(4) var normal_map: texture_2d<f32>;
+@group(1) @binding(5) var normal_sampler: sampler;
+@group(1) @binding(6) var metallic_roughness_map: texture_2d<f32>;
+@group(1) @binding(7) var metallic_roughness_sampler: sampler;
+@group(1) @binding(8) var occlusion_map: texture_2d<f32>;
+@group(1) @binding(9) var occlusion_sampler: sampler;
+@group(1) @binding(10) var emissive_map: texture_2d<f32>;
+@group(1) @binding(11) var emissive_sampler: sampler;
+struct MaterialParameters {
+    color_metallic: vec4<f32>,
+    emissive_roughness: vec4<f32>,
+    texture_factors: vec4<f32>,
+};
+@group(1) @binding(12) var<uniform> material_parameters: MaterialParameters;
+@group(1) @binding(13) var base_roughness: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(14) var normal_metallic: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(15) var emissive_occlusion: texture_storage_2d<rgba16float, write>;
+
+fn clear_surface(pixel: vec2<i32>) {
+    textureStore(base_roughness, pixel, vec4<f32>(0.0));
+    textureStore(normal_metallic, pixel, vec4<f32>(0.0));
+    textureStore(emissive_occlusion, pixel, vec4<f32>(0.0));
+}
 
 fn safe_normalize(value: vec3<f32>) -> vec3<f32> {
     return value * inverseSqrt(max(dot(value, value), 1e-20));
@@ -27,16 +50,21 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let id = textureLoad(visibility, pixel, 0).x;
     let triangle_count = visibility_camera.size_counts.z;
     if (id == 0u || triangle_count == 0u) {
+        if (material_parameters.texture_factors.w != 0.0) { return; }
+        clear_surface(pixel);
         textureStore(hdr, pixel, vec4<f32>(0.015, 0.02, 0.03, 1.0));
         return;
     }
     if (id > triangle_count) {
+        if (material_parameters.texture_factors.w != 0.0) { return; }
+        clear_surface(pixel);
         textureStore(hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0));
         return;
     }
     let work = visibility_work[id - 1u];
     let triangle = work.x;
     let instance = visibility_instances[work.y];
+    if (instance.material.z != material_parameters.texture_factors.w) { return; }
     let a = visibility_vertex(triangle, 0u);
     let b = visibility_vertex(triangle, 1u);
     let c = visibility_vertex(triangle, 2u);
@@ -56,6 +84,7 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let weights = vec3<f32>(dot(cofactor_a, q), dot(cofactor_b, q), dot(cofactor_c, q));
     let denominator = dot(weights, vec3<f32>(1.0));
     if (abs(denominator) < 1e-20) {
+        clear_surface(pixel);
         textureStore(hdr, pixel, vec4<f32>(0.0, 0.0, 0.0, 1.0));
         return;
     }
@@ -64,6 +93,7 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let dy = vec3<f32>(cofactor_a.y, cofactor_b.y, cofactor_c.y) * (-2.0 / f32(size.y));
     let mode = visibility_camera.size_counts.w;
     if (mode == 4u) {
+        clear_surface(pixel);
         let gradient_x = (dx - bary * dot(dx, vec3<f32>(1.0))) / denominator;
         let gradient_y = (dy - bary * dot(dy, vec3<f32>(1.0))) / denominator;
         let edge_distance = abs(bary) / max(sqrt(gradient_x * gradient_x + gradient_y * gradient_y), vec3<f32>(1e-20));
@@ -79,15 +109,40 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
         - uv * dot(dx, vec3<f32>(1.0))) / denominator;
     let uv_dy = (a.uv.xy * dy.x + b.uv.xy * dy.y + c.uv.xy * dy.z
         - uv * dot(dy, vec3<f32>(1.0))) / denominator;
-    let base_color = textureSampleGrad(albedo, albedo_sampler, uv, uv_dx, uv_dy).rgb * instance.color.rgb;
+    let base_color = textureSampleGrad(albedo, albedo_sampler, uv, uv_dx, uv_dy).rgb
+        * instance.color.rgb * material_parameters.color_metallic.rgb;
     let local_normal = a.normal.xyz * bary.x + b.normal.xyz * bary.y + c.normal.xyz * bary.z;
-    let normal = safe_normalize((instance.normal_transform * vec4<f32>(local_normal, 0.0)).xyz);
+    var normal = safe_normalize((instance.normal_transform * vec4<f32>(local_normal, 0.0)).xyz);
+    if (material_parameters.texture_factors.z != 0.0) {
+        let local_tangent = a.tangent * bary.x + b.tangent * bary.y + c.tangent * bary.z;
+        let transformed = (instance.transform * vec4<f32>(local_tangent.xyz, 0.0)).xyz;
+        var tangent = transformed - normal * dot(normal, transformed);
+        if (dot(tangent, tangent) < 1e-12) {
+            let axis = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(normal.x) < 0.9);
+            tangent = cross(axis, normal);
+        }
+        tangent = safe_normalize(tangent);
+        let bitangent = cross(normal, tangent) * select(1.0, -1.0, local_tangent.w < 0.0);
+        var sampled_normal = textureSampleGrad(normal_map, normal_sampler, uv, uv_dx, uv_dy).rgb * 2.0 - 1.0;
+        sampled_normal = vec3<f32>(sampled_normal.xy * material_parameters.texture_factors.x, sampled_normal.z);
+        normal = safe_normalize(tangent * sampled_normal.x + bitangent * sampled_normal.y + normal * sampled_normal.z);
+    }
+    let mr = textureSampleGrad(metallic_roughness_map, metallic_roughness_sampler, uv, uv_dx, uv_dy).gb;
+    let metallic = clamp(instance.material.x * material_parameters.color_metallic.w * mr.y, 0.0, 1.0);
+    let roughness = clamp(instance.material.y * material_parameters.emissive_roughness.w * mr.x, 0.045, 1.0);
+    let occlusion = mix(1.0, textureSampleGrad(occlusion_map, occlusion_sampler, uv, uv_dx, uv_dy).r,
+        material_parameters.texture_factors.y);
+    let emissive = textureSampleGrad(emissive_map, emissive_sampler, uv, uv_dx, uv_dy).rgb
+        * material_parameters.emissive_roughness.rgb * instance.emissive.rgb;
+    textureStore(base_roughness, pixel, vec4<f32>(base_color, roughness));
+    textureStore(normal_metallic, pixel, vec4<f32>(normal, metallic));
+    textureStore(emissive_occlusion, pixel, vec4<f32>(emissive, occlusion));
     let position = world_a.xyz * bary.x + world_b.xyz * bary.y + world_c.xyz * bary.z;
     var color = base_color;
     if (mode == 0u) {
         color = direct_lighting(normal, safe_normalize(visibility_camera.eye.xyz - position),
             visibility_camera.light_direction.xyz, visibility_camera.light_radiance.xyz,
-            base_color, instance.material.x, instance.material.y) + instance.emissive.rgb;
+            base_color, metallic, roughness) + emissive;
     } else if (mode == 1u) {
         color = normal * 0.5 + 0.5;
     } else if (mode == 2u) {

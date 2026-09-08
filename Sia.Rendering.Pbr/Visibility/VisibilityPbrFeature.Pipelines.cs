@@ -56,14 +56,20 @@ public sealed partial class VisibilityPbrFeature
         hdr.StorageTexture.Access = WGPUStorageTextureAccess.WriteOnly;
         hdr.StorageTexture.Format = WGPUTextureFormat.RGBA16Float;
         hdr.StorageTexture.ViewDimension = WGPUTextureViewDimension._2D;
-        var sampler = WGPUBindGroupLayoutEntry.Default;
-        sampler.Binding = 3;
-        sampler.Visibility = WGPUShaderStage.Compute;
-        sampler.Sampler.Type = WGPUSamplerBindingType.Filtering;
-        return Layout(world, device, [
-            TextureLayout(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute), hdr,
-            TextureLayout(2, WGPUTextureSampleType.Float, WGPUShaderStage.Compute), sampler
-        ], acquired);
+        var entries = new WGPUBindGroupLayoutEntry[16];
+        entries[0] = TextureLayout(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute);
+        entries[1] = hdr;
+        for (uint map = 0; map < 5; map++) {
+            entries[2 + map * 2] = TextureLayout(2 + map * 2, WGPUTextureSampleType.Float, WGPUShaderStage.Compute);
+            var sampler = WGPUBindGroupLayoutEntry.Default;
+            sampler.Binding = 3 + map * 2;
+            sampler.Visibility = WGPUShaderStage.Compute;
+            sampler.Sampler.Type = WGPUSamplerBindingType.Filtering;
+            entries[3 + map * 2] = sampler;
+        }
+        entries[12] = BufferLayout(12, WGPUBufferBindingType.Uniform, 48, WGPUShaderStage.Compute);
+        for (uint i = 13; i < 16; i++) { entries[i] = hdr; entries[i].Binding = i; }
+        return Layout(world, device, entries, acquired);
     }
 
     private static unsafe Entity PipelineLayout(World world, WgpuHandle<WGPUDevice> device,
