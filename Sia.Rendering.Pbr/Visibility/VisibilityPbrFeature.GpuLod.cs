@@ -21,7 +21,7 @@ public sealed partial class VisibilityPbrFeature
         SceneLodData scene, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired, bool enableTiming)
     {
         var instances = (uint)scene.InstanceRoots.Length;
-        if (System.Math.Max(scene.StateCapacity, instances) > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
+        if (System.Math.Max(scene.StateCapacity, (uint)scene.InstanceCapacity) > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
             throw new ArgumentException("The scene exceeds compute dispatch limits.", nameof(scene));
         }
         var patches = Upload<PatchGpu>(world, device, queue, scene.Patches, WGPUBufferUsage.Storage, limits, acquired);
