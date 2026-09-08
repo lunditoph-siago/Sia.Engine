@@ -25,6 +25,9 @@ public sealed partial class VisibilityPbrFeature
     public RenderGraphTextureKey EmissiveOcclusionTarget { get; } = new("visibility-emissive-occlusion");
 
     public void BuildRenderGraph(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context)
+        => BuildRenderGraph(ref graph, in context, true);
+
+    internal void BuildRenderGraph(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context, bool includeOutput)
     {
         var view = context.View.PersistentResources.GetRequired<ViewState>();
         graph.UseTexture(VisibilityTarget, new RenderGraphTextureDescriptor("visibility-id", RenderGraphTextureFormat.R32Uint,
@@ -52,12 +55,13 @@ public sealed partial class VisibilityPbrFeature
         foreach (var material in _materials) { ImportBuffer(ref graph, material.Key, material.Uniform, RenderGraphBufferUsage.Uniform); }
         if (_gpuLod is { } lod) { BuildLodGraph(ref graph, view, lod); }
         if (view.Timing is { } timing) {
-            ImportBuffer(ref graph, GpuTimingsTarget, timing.Results, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource);
+            ImportBuffer(ref graph, GpuTimingsTarget, timing.Results, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource | RenderGraphBufferUsage.CopyDestination);
         }
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
         if (_gpuLod is not null) { BuildPostOcclusionGraph(ref graph, view); }
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
-        graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output);
+        if (includeOutput) { graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output); }
+        else if (view.Timing is not null) { graph.UseComputePass(new("visibility-timing-resolve"), "visibility-timing-resolve", view.DeclareSurfaceTiming, view.ResolveSurfaceTiming); }
     }
 
     private static void ImportBuffer(ref RenderGraphBuildContext graph, RenderGraphBufferKey key, Entity entity, RenderGraphBufferUsage usage)
@@ -126,28 +130,9 @@ public sealed partial class VisibilityPbrFeature
         }
     }
 
-    private unsafe Entity OwnTextureBindGroup(Entity layout, ReadOnlySpan<WGPUBindGroupEntry> entries,
+    private Entity OwnTextureBindGroup(Entity layout, ReadOnlySpan<WGPUBindGroupEntry> entries,
         params ReadOnlySpan<WgpuHandle<WGPUTextureView>> views)
-    {
-        var retained = views.ToArray();
-        var owned = BindGroup(layout, entries);
-        foreach (var view in retained) {
-            WgpuUnsafe.wgpuTextureViewAddRef((WGPUTextureView*)view.DangerousGetHandle());
-        }
-        try {
-            return _world.OwnWgpu(owned, (ref WgpuHandle<WGPUBindGroup> handle) => {
-                Release();
-                handle = default;
-            });
-        }
-        catch { Release(); throw; }
-
-        void Release()
-        {
-            Wgpu.Release(ref owned);
-            for (var i = retained.Length - 1; i >= 0; i--) { Wgpu.Release(ref retained[i]); }
-        }
-    }
+        => PbrTextureBindGroups.Create(_world, _device.GetWgpu<WGPUDevice>(), layout, entries, views);
 
     private sealed partial class ViewState(VisibilityPbrFeature owner, Entity uniform, Entity outputUniform, Entity group,
         Entity workBuffer, Entity indirect, uint4[] workItems, LodViewGpu? lodView)

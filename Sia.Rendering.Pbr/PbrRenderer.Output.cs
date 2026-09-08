@@ -20,10 +20,10 @@ public sealed partial class PbrRenderer
                 new WGPUBufferDescriptor { Size = 64, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst });
             state.ToneMappingUniforms = frame.ResourceWorld.CreateWgpuBuffer(frame.Device,
                 new WGPUBufferDescriptor { Size = 16, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst });
-            state.SkyboxBindGroup = frame.ResourceWorld.OwnWgpu(CreateOutputBindGroup(frame,
+            state.SkyboxBindGroup = CreateOutputBindGroup(frame,
                 outputPipelines.SkyboxLayout, state.SkyboxUniforms, 64,
                 state.Ibl.PrefilteredSamplingView.GetWgpu<WGPUTextureView>(),
-                state.Ibl.PrefilteredSampler.GetWgpu<WGPUSampler>()));
+                state.Ibl.PrefilteredSampler.GetWgpu<WGPUSampler>());
         }
         Wgpu.WriteBuffer(frame.Queue.GetWgpu<WGPUQueue>(), state.SkyboxUniforms.GetWgpu<WGPUBuffer>(),
             0, [extracted.CameraMatrices.InvViewProj]);
@@ -46,11 +46,9 @@ public sealed partial class PbrRenderer
         WgpuHandle<WGPUTextureView> source, WgpuHandle<WGPURenderPassEncoder> pass)
     {
         if (!state.ToneMappingBindGroup.IsValid || state.ToneMappingSource.DangerousGetHandle() != source.DangerousGetHandle()) {
-            if (state.ToneMappingBindGroup.IsValid) {
-                state.ToneMappingBindGroup.Destroy();
-            }
-            state.ToneMappingBindGroup = frame.ResourceWorld.OwnWgpu(CreateOutputBindGroup(
-                frame, outputPipelines.ToneMappingLayout, state.ToneMappingUniforms, 16, source));
+            var next = CreateOutputBindGroup(frame, outputPipelines.ToneMappingLayout, state.ToneMappingUniforms, 16, source);
+            if (state.ToneMappingBindGroup.IsValid) { state.ToneMappingBindGroup.Destroy(); }
+            state.ToneMappingBindGroup = next;
             state.ToneMappingSource = source;
         }
         Wgpu.SetRenderPipeline(pass, outputPipelines.ToneMappingPipeline.GetWgpu<WGPURenderPipeline>());
@@ -58,7 +56,7 @@ public sealed partial class PbrRenderer
         Wgpu.Draw(pass, 3);
     }
 
-    private static unsafe WgpuHandle<WGPUBindGroup> CreateOutputBindGroup(in GpuFrame frame,
+    private static unsafe Entity CreateOutputBindGroup(in GpuFrame frame,
         Entity layout, Entity uniform, ulong size, WgpuHandle<WGPUTextureView> texture,
         WgpuHandle<WGPUSampler> sampler = default)
     {
@@ -73,10 +71,7 @@ public sealed partial class PbrRenderer
         entries[2] = WGPUBindGroupEntry.Default;
         entries[2].Binding = 2;
         entries[2].Sampler = (WGPUSampler*)sampler.DangerousGetHandle();
-        var descriptor = WGPUBindGroupDescriptor.Default;
-        descriptor.Layout = (WGPUBindGroupLayout*)layout.GetWgpu<WGPUBindGroupLayout>().DangerousGetHandle();
-        descriptor.EntryCount = sampler.IsNull ? 2u : 3u;
-        descriptor.Entries = entries;
-        return Wgpu.CreateBindGroup(frame.Device.GetWgpu<WGPUDevice>(), descriptor);
+        return PbrTextureBindGroups.Create(frame.ResourceWorld, frame.Device.GetWgpu<WGPUDevice>(), layout,
+            new ReadOnlySpan<WGPUBindGroupEntry>(entries, sampler.IsNull ? 2 : 3), texture);
     }
 }

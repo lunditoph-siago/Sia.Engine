@@ -19,18 +19,22 @@ public sealed class PbrRenderFeature :
     public PbrRenderer Renderer { get; }
 
     public PbrRenderFeatureOptions Options { get; }
+    public VisibilityPbrFeature? Visibility { get; }
 
     public PbrRenderFeature(
         PbrRenderer renderer,
-        PbrRenderFeatureOptions? options = null)
+        PbrRenderFeatureOptions? options = null,
+        VisibilityPbrFeature? visibility = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
         Renderer = renderer;
         Options = options ?? new PbrRenderFeatureOptions();
+        Visibility = visibility;
     }
 
     public void Extract(in RenderFeatureContext<RenderFrameContext> context)
     {
+        Visibility?.Extract(in context);
         var frameContext = context.Frame;
         var frame = frameContext.Frame;
         var clusterConfig = frame.MainWorld.AcquireAddon<ClusterGridConfig>();
@@ -53,6 +57,10 @@ public sealed class PbrRenderFeature :
         Renderer.PrepareFrame(state, in frame, extracted);
         Renderer.PrepareLighting(state, in frame, extracted);
         Renderer.PrepareOutput(state, in frame, extracted, Options.ExposureCompensation, Options.ToneMapping);
+        if (Visibility is { } visibility) {
+            visibility.Prepare(in context, sceneLighting: true);
+            Renderer.PrepareVisibility(state, in frame, extracted, visibility.DebugMode);
+        }
     }
 
     public void Queue(in RenderFeatureContext<RenderFrameContext> context)
@@ -94,22 +102,20 @@ public sealed class PbrRenderFeature :
             ref graph, Renderer, state);
         PbrRenderGraphHooks.UseSkyboxPass(
             ref graph, Renderer, state, Options.SkyboxPass, Options.HdrTarget);
-        PbrRenderGraphHooks.UseDepthPrepass(
-            ref graph,
-            Renderer,
-            state,
-            phase,
-            Options.DepthPrepass,
-            frameContext.DepthTarget);
-        PbrRenderGraphHooks.UseForwardPbrPass(
-            ref graph,
-            Renderer,
-            state,
-            phase,
-            Options.ForwardPass,
-            Options.HdrTarget,
-            frameContext.DepthTarget,
-            WGPULoadOp.Load);
+        if (Visibility is { } visibility) {
+            if (Options.HdrTarget == visibility.HdrTarget || Options.HdrTarget == visibility.VisibilityTarget
+                || Options.HdrTarget == visibility.BaseColorRoughnessTarget || Options.HdrTarget == visibility.NormalMetallicTarget
+                || Options.HdrTarget == visibility.EmissiveOcclusionTarget || frameContext.ColorTarget == visibility.HdrTarget) {
+                throw new InvalidOperationException("Visibility surfaces and scene output require distinct HDR targets.");
+            }
+            visibility.BuildRenderGraph(ref graph, in context, includeOutput: false);
+            PbrRenderGraphHooks.UseVisibilityLightingPass(ref graph, Renderer, state, visibility, Options.HdrTarget, in frameContext);
+        } else {
+            PbrRenderGraphHooks.UseDepthPrepass(
+                ref graph, Renderer, state, phase, Options.DepthPrepass, frameContext.DepthTarget);
+            PbrRenderGraphHooks.UseForwardPbrPass(
+                ref graph, Renderer, state, phase, Options.ForwardPass, Options.HdrTarget, frameContext.DepthTarget, WGPULoadOp.Load);
+        }
         var output = PbrRenderGraphHooks.UseAtmosphereComposite(
             ref graph, state, extracted, Options, in frameContext);
         PbrRenderGraphHooks.UseToneMappingPass(

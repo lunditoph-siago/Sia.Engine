@@ -20,13 +20,26 @@ public sealed partial class VisibilityPbrFeature
 
     private TimingGpu CreateTiming(WgpuHandle<WGPUDevice> device, WGPULimits limits, List<Entity> acquired) => new(
         Own(_world, Wgpu.CreateQuerySet(device, WGPUQueryType.Timestamp, (uint)s_TimingStages.Length * 2, "visibility-timings"), acquired),
-        Allocate(_world, device, (ulong)s_TimingStages.Length * 16, WGPUBufferUsage.QueryResolve | WGPUBufferUsage.CopySrc, limits, acquired));
+        Allocate(_world, device, (ulong)s_TimingStages.Length * 16, WGPUBufferUsage.QueryResolve | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst, limits, acquired));
 
     private readonly record struct TimingGpu(Entity Queries, Entity Results);
 
     private sealed partial class ViewState
     {
         public TimingGpu? Timing { get; init; }
+
+        public void DeclareSurfaceTiming(RenderGraphPassDeclarationBuilder declaration) => declaration
+            .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
+            .Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
+
+        public unsafe void ResolveSurfaceTiming(WgpuReactiveRenderGraphPassContext context)
+        {
+            var buffer = context.GetBuffer(Owner.GpuTimingsTarget);
+            Wgpu.ResolveQuerySet(context.CommandEncoder, Timing!.Value.Queries.GetWgpu<WGPUQuerySet>(),
+                0, (uint)(s_TimingStages.Length - 1) * 2, buffer);
+            WgpuUnsafe.wgpuCommandEncoderClearBuffer((WGPUCommandEncoder*)context.CommandEncoder.DangerousGetHandle(),
+                (WGPUBuffer*)buffer.DangerousGetHandle(), (ulong)(s_TimingStages.Length - 1) * 16, 16);
+        }
 
         private uint TimingIndex(WgpuReactiveRenderGraphPassContext context)
         {

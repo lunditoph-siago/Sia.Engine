@@ -52,4 +52,7 @@ public sealed class PbrViewState
     internal Entity ToneMappingUniforms { get; set; }
     internal Entity ToneMappingBindGroup { get; set; }
     internal WgpuHandle<WGPUTextureView> ToneMappingSource { get; set; }
+    internal Entity VisibilityUniforms { get; set; }
+    internal Entity VisibilityBindGroup { get; set; }
+    internal WgpuHandle<WGPUTextureView>[] VisibilitySources { get; set; } = [];
 }

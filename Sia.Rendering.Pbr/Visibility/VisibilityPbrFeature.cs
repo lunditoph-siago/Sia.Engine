@@ -172,6 +172,9 @@ public sealed partial class VisibilityPbrFeature :
     }
 
     public void Prepare(in RenderFeatureContext<RenderFrameContext> context)
+        => Prepare(in context, false);
+
+    internal void Prepare(in RenderFeatureContext<RenderFrameContext> context, bool sceneLighting)
     {
         ValidateFrame(in context);
         PrepareInstances(in context);
@@ -193,7 +196,7 @@ public sealed partial class VisibilityPbrFeature :
         if (_gpuLod is null) { UpdateWork(view, camera.ViewProj); }
         else { PrepareOcclusion(view, camera.ViewProj); }
         var uniform = new CameraGpu(camera.ViewProj, new float4(camera.WorldPosition, 1),
-            new uint4(view.Width, view.Height, _gpuLod is null ? view.WorkCount : TriangleCapacity, (uint)_mode),
+            new uint4(view.Width, view.Height, _gpuLod is null ? view.WorkCount : TriangleCapacity, (uint)_mode | (sceneLighting ? 256u : 0u)),
             new float4(math.normalize(new float3(0.4f, 0.8f, 0.6f)), 0), new float4(4, 4, 4, 0));
         Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0, [uniform]);
     }
