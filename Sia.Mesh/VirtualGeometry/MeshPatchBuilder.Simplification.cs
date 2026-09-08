@@ -91,6 +91,7 @@ public static partial class MeshPatchBuilder
     private static bool CanCollapse(int from, int to, Triangle[] triangles, HashSet<int>[] incident, bool[] locked,
         double3[] positions, MeshVertex[] vertices)
     {
+        if (vertices[from].Tangent.w != vertices[to].Tangent.w) { return false; }
         var fromNeighbors = Neighbors(from);
         var toNeighbors = Neighbors(to);
         if (locked[to] && fromNeighbors.Any(vertex => vertex != to && locked[vertex] && !toNeighbors.Contains(vertex))) {

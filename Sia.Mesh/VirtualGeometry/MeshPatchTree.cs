@@ -143,11 +143,11 @@ public sealed partial class MeshPatchTree
         for (var i = 0; i < ids.Length; i++) {
             var v = vertices[i];
             if (!float.IsFinite(v.Normal.x) || !float.IsFinite(v.Normal.y) || !float.IsFinite(v.Normal.z)
-                || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y)) {
+                || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y) || !v.HasFiniteTangent) {
                 throw new ArgumentException("Patch attributes must be finite.", nameof(vertices));
             }
             var identity = new VertexIdentity(v.Position.x, v.Position.y, v.Position.z,
-                v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y);
+                v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y, v.Tangent.x, v.Tangent.y, v.Tangent.z, v.Tangent.w);
             if (!identities.TryGetValue(identity, out ids[i])) { identities.Add(identity, ids[i] = identities.Count); }
         }
         return ids;
@@ -186,5 +186,6 @@ public sealed partial class MeshPatchTree
         a.Count == b.Count && a.All(entry => b.TryGetValue(entry.Key, out var value) && value == entry.Value);
 
     private readonly record struct BuildPatch(MeshData Geometry, float LocalError, int Parent, int ChildOffset, int ChildCount);
-    private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V);
+    private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V,
+        float Tx, float Ty, float Tz, float Tw);
 }
