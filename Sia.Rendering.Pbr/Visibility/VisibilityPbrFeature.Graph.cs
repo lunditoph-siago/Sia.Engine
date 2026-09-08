@@ -17,10 +17,12 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_IndirectKey = new("visibility-indirect");
     private static readonly RenderGraphBufferKey s_WorkKey = new("visibility-work");
     private static readonly RenderGraphBufferKey s_OutputKey = new("visibility-output-params");
-    private static readonly RenderGraphTextureKey s_AlbedoKey = new("visibility-albedo");
 
     public RenderGraphTextureKey VisibilityTarget { get; } = new("visibility-id");
     public RenderGraphTextureKey HdrTarget { get; } = new("visibility-hdr");
+    public RenderGraphTextureKey BaseColorRoughnessTarget { get; } = new("visibility-base-roughness");
+    public RenderGraphTextureKey NormalMetallicTarget { get; } = new("visibility-normal-metallic");
+    public RenderGraphTextureKey EmissiveOcclusionTarget { get; } = new("visibility-emissive-occlusion");
 
     public void BuildRenderGraph(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context)
     {
@@ -29,6 +31,9 @@ public sealed partial class VisibilityPbrFeature
             view.Width, view.Height));
         graph.UseTexture(HdrTarget, new RenderGraphTextureDescriptor("visibility-hdr", RenderGraphTextureFormat.RGBA16Float,
             view.Width, view.Height));
+        foreach (var key in new[] { BaseColorRoughnessTarget, NormalMetallicTarget, EmissiveOcclusionTarget }) {
+            graph.UseTexture(key, new RenderGraphTextureDescriptor(key.ToString(), RenderGraphTextureFormat.RGBA16Float, view.Width, view.Height));
+        }
         ImportBuffer(ref graph, s_CameraKey, view.Uniform, RenderGraphBufferUsage.Uniform);
         ImportBuffer(ref graph, s_OutputKey, view.OutputUniform, RenderGraphBufferUsage.Uniform);
         ImportBuffer(ref graph, s_IndirectKey, view.Indirect, RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource
@@ -37,10 +42,14 @@ public sealed partial class VisibilityPbrFeature
         for (var i = 0; i < _geometry.Length; i++) {
             ImportBuffer(ref graph, s_GeometryKeys[i], _geometry[i], RenderGraphBufferUsage.Storage);
         }
-        var albedo = Wgpu.GetTextureInfo(_albedoTexture.GetWgpu<WGPUTexture>());
-        graph.UseImportedTexture(s_AlbedoKey, new RenderGraphTextureDescriptor("visibility-albedo", RenderGraphTextureFormat.RGBA8Unorm,
-            albedo.Size.Width, albedo.Size.Height, mipLevelCount: albedo.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
-        graph.BindImportedTexture(s_AlbedoKey, _albedoTexture.GetWgpu<WGPUTexture>());
+        foreach (var texture in _materialTextures) {
+            var info = Wgpu.GetTextureInfo(texture.Texture.GetWgpu<WGPUTexture>());
+            graph.UseImportedTexture(texture.Key, new RenderGraphTextureDescriptor(texture.Key.ToString(),
+                texture.Srgb ? RenderGraphTextureFormat.RGBA8UnormSrgb : RenderGraphTextureFormat.RGBA8Unorm,
+                info.Size.Width, info.Size.Height, mipLevelCount: info.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
+            graph.BindImportedTexture(texture.Key, texture.Texture.GetWgpu<WGPUTexture>());
+        }
+        foreach (var material in _materials) { ImportBuffer(ref graph, material.Key, material.Uniform, RenderGraphBufferUsage.Uniform); }
         if (_gpuLod is { } lod) { BuildLodGraph(ref graph, view, lod); }
         if (view.Timing is { } timing) {
             ImportBuffer(ref graph, GpuTimingsTarget, timing.Results, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource);
@@ -157,10 +166,11 @@ public sealed partial class VisibilityPbrFeature
         public RenderFrameContext Frame { get; set; }
         public uint Width { get; set; }
         public uint Height { get; set; }
-        private Entity _resolveGroup;
+        private Entity[] _resolveGroups = [];
         private Entity _outputGroup;
         private WgpuHandle<WGPUTextureView> _idView;
         private WgpuHandle<WGPUTextureView> _hdrView;
+        private WgpuHandle<WGPUTextureView>[] _surfaceViews = [];
         private WgpuHandle<WGPUTextureView> _outputSource;
 
         private static void ReadGeometry(RenderGraphPassDeclarationBuilder declaration)
@@ -195,32 +205,54 @@ public sealed partial class VisibilityPbrFeature
         {
             ReadGeometry(declaration);
             declaration.Read(Owner.VisibilityTarget, RenderGraphTextureUsage.TextureBinding)
-                .Read(s_AlbedoKey, RenderGraphTextureUsage.TextureBinding)
-                .Write(Owner.HdrTarget, RenderGraphTextureUsage.StorageBinding);
+                .Write(Owner.HdrTarget, RenderGraphTextureUsage.StorageBinding)
+                .Write(Owner.BaseColorRoughnessTarget, RenderGraphTextureUsage.StorageBinding)
+                .Write(Owner.NormalMetallicTarget, RenderGraphTextureUsage.StorageBinding)
+                .Write(Owner.EmissiveOcclusionTarget, RenderGraphTextureUsage.StorageBinding);
+            foreach (var texture in Owner._materialTextures) { declaration.Read(texture.Key, RenderGraphTextureUsage.TextureBinding); }
+            foreach (var material in Owner._materials) { declaration.Read(material.Key, RenderGraphBufferUsage.Uniform); }
         }
 
         public unsafe void Resolve(WgpuReactiveRenderGraphPassContext context)
         {
             var id = context.GetTextureView(Owner.VisibilityTarget);
             var hdr = context.GetTextureView(Owner.HdrTarget);
-            if (!_resolveGroup.IsValid || id != _idView || hdr != _hdrView) {
-                var sampler = WGPUBindGroupEntry.Default;
-                sampler.Binding = 3;
-                sampler.Sampler = (WGPUSampler*)Owner._sampler.GetWgpu<WGPUSampler>().DangerousGetHandle();
-                var next = Owner.OwnTextureBindGroup(Owner._resolveLayout, [
-                    TextureEntry(0, id), TextureEntry(1, hdr), TextureEntry(2, Owner._albedoView.GetWgpu<WGPUTextureView>()), sampler
-                ], id, hdr);
-                if (_resolveGroup.IsValid) { _resolveGroup.Destroy(); }
-                _resolveGroup = next;
+            WgpuHandle<WGPUTextureView>[] surfaces = [context.GetTextureView(Owner.BaseColorRoughnessTarget),
+                context.GetTextureView(Owner.NormalMetallicTarget), context.GetTextureView(Owner.EmissiveOcclusionTarget)];
+            if (_resolveGroups.Length == 0 || !_resolveGroups[0].IsValid || id != _idView || hdr != _hdrView || !_surfaceViews.AsSpan().SequenceEqual(surfaces)) {
+                var next = new Entity[Owner._materials.Length];
+                try {
+                    for (var i = 0; i < next.Length; i++) {
+                        var material = Owner._materials[i];
+                        var entries = new WGPUBindGroupEntry[16];
+                        entries[0] = TextureEntry(0, id); entries[1] = TextureEntry(1, hdr);
+                        for (uint map = 0; map < 5; map++) {
+                            entries[2 + map * 2] = TextureEntry(2 + map * 2, material.Maps[map].View.GetWgpu<WGPUTextureView>());
+                            var sampler = WGPUBindGroupEntry.Default;
+                            sampler.Binding = 3 + map * 2;
+                            sampler.Sampler = (WGPUSampler*)material.Maps[map].Sampler.GetWgpu<WGPUSampler>().DangerousGetHandle();
+                            entries[3 + map * 2] = sampler;
+                        }
+                        entries[12] = BufferEntry(12, material.Uniform);
+                        for (uint surface = 0; surface < 3; surface++) { entries[13 + surface] = TextureEntry(13 + surface, surfaces[surface]); }
+                        next[i] = Owner.OwnTextureBindGroup(Owner._resolveLayout, entries, id, hdr, surfaces[0], surfaces[1], surfaces[2]);
+                    }
+                }
+                catch { foreach (var item in next) { if (item.IsValid) { item.Destroy(); } } throw; }
+                foreach (var item in _resolveGroups) { if (item.IsValid) { item.Destroy(); } }
+                _resolveGroups = next;
                 _idView = id;
                 _hdrView = hdr;
+                _surfaceViews = surfaces;
             }
             var pass = BeginCompute(context);
             try {
                 Wgpu.SetComputePipeline(pass, Owner._resolve.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-                Wgpu.SetBindGroup(pass, 1, _resolveGroup.GetWgpu<WGPUBindGroup>());
-                Wgpu.DispatchWorkgroups(pass, (Width + 7) / 8, (Height + 7) / 8);
+                foreach (var material in _resolveGroups) {
+                    Wgpu.SetBindGroup(pass, 1, material.GetWgpu<WGPUBindGroup>());
+                    Wgpu.DispatchWorkgroups(pass, (Width + 7) / 8, (Height + 7) / 8);
+                }
             }
             finally {
                 Wgpu.EndComputePass(pass);

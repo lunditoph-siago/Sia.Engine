@@ -18,9 +18,8 @@ public sealed partial class VisibilityPbrFeature :
     private readonly float4x4[] _transforms;
     private readonly VisibilityLodSettings _lod;
     private readonly LodGpu? _gpuLod;
-    private readonly Entity _albedoView;
-    private readonly Entity _albedoTexture;
-    private readonly Entity _sampler;
+    private readonly MaterialGpu[] _materials;
+    private readonly MaterialTextureGpu[] _materialTextures;
     private readonly Entity _geometryLayout;
     private readonly Entity _resolveLayout;
     private readonly Entity _raster;
@@ -44,7 +43,7 @@ public sealed partial class VisibilityPbrFeature :
     public uint TriangleCapacity { get; }
 
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
-        Entity albedoTexture, Entity albedoView, Entity sampler, Entity geometryLayout, Entity resolveLayout,
+        MaterialGpu[] materials, MaterialTextureGpu[] textures, Entity geometryLayout, Entity resolveLayout,
         Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
         MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod)
     {
@@ -56,9 +55,8 @@ public sealed partial class VisibilityPbrFeature :
         _transforms = transforms;
         _lod = lod;
         _gpuLod = gpuLod;
-        _albedoView = albedoView;
-        _albedoTexture = albedoTexture;
-        _sampler = sampler;
+        _materials = materials;
+        _materialTextures = textures;
         _geometryLayout = geometryLayout;
         _resolveLayout = resolveLayout;
         _raster = raster;
@@ -111,13 +109,12 @@ public sealed partial class VisibilityPbrFeature :
     }
 
     private static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
-        MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo,
+        MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo? albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
-        bool enableGpuTiming = false, SceneLodData? scene = null)
+        bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default)
     {
         ArgumentNullException.ThrowIfNull(geometry);
-        ArgumentNullException.ThrowIfNull(albedo);
-        ArgumentNullException.ThrowIfNull(albedo.MipLevels);
+        var sourceMaterials = ValidateMaterials(albedo, materials);
         if (!Enum.IsDefined(mode)) { throw new ArgumentOutOfRangeException(nameof(mode)); }
         if (outputFormat is not (WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.BGRA8Unorm
             or WGPUTextureFormat.RGBA8UnormSrgb or WGPUTextureFormat.BGRA8UnormSrgb)) {
@@ -132,7 +129,7 @@ public sealed partial class VisibilityPbrFeature :
             if (scene is null && instances[i].AssetIndex != 0) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "A single geometry input only accepts asset index zero.");
             }
-            gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default);
+            gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default, sourceMaterials.Length);
             transforms[i] = instances[i].Transform;
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
@@ -145,20 +142,7 @@ public sealed partial class VisibilityPbrFeature :
         if (workSize > limits.MaxBufferSize || workSize > limits.MaxStorageBufferBindingSize) {
             throw new ArgumentException("The required visibility work list exceeds the device capacity.", nameof(instances));
         }
-        if (albedo.Width == 0 || albedo.Height == 0 || albedo.Width > limits.MaxTextureDimension2D
-            || albedo.Height > limits.MaxTextureDimension2D || albedo.MipLevels.Length == 0) {
-            throw new ArgumentException("Albedo dimensions/mips exceed the device limits.", nameof(albedo));
-        }
-        var width = albedo.Width;
-        var height = albedo.Height;
-        for (var level = 0; level < albedo.MipLevels.Length; level++) {
-            if (albedo.MipLevels[level].Length != checked((long)width * height * 4)
-                || (level > 0 && (albedo.Width >> (level - 1)) <= 1 && (albedo.Height >> (level - 1)) <= 1)) {
-                throw new ArgumentException("Albedo mip sizes must follow the texture dimensions.", nameof(albedo));
-            }
-            width = System.Math.Max(1, width / 2);
-            height = System.Math.Max(1, height / 2);
-        }
+        ValidateTextureCapacity(sourceMaterials, limits);
         var world = frame.ResourceWorld;
         var acquired = new List<Entity>();
         try {
@@ -169,45 +153,14 @@ public sealed partial class VisibilityPbrFeature :
                 Upload(world, device, queue, geometry.Triangles.Span, WGPUBufferUsage.Storage, limits, acquired),
                 Upload<InstanceGpu>(world, device, queue, gpuInstances, WGPUBufferUsage.Storage, limits, acquired)
             };
-            var textureDescriptor = WGPUTextureDescriptor.Default;
-            textureDescriptor.Dimension = WGPUTextureDimension._2D;
-            textureDescriptor.Size = new WGPUExtent3D { Width = albedo.Width, Height = albedo.Height, DepthOrArrayLayers = 1 };
-            textureDescriptor.Format = WGPUTextureFormat.RGBA8Unorm;
-            textureDescriptor.Usage = WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopyDst;
-            textureDescriptor.MipLevelCount = (uint)albedo.MipLevels.Length;
-            var texture = Own(world, Wgpu.CreateTexture(device, textureDescriptor), acquired);
-            width = albedo.Width;
-            height = albedo.Height;
-            for (var level = 0; level < albedo.MipLevels.Length; level++) {
-                var destination = new WGPUTexelCopyTextureInfo {
-                    Texture = (WGPUTexture*)texture.GetWgpu<WGPUTexture>().DangerousGetHandle(),
-                    MipLevel = (uint)level, Aspect = WGPUTextureAspect.All
-                };
-                var layout = new WGPUTexelCopyBufferLayout { BytesPerRow = width * 4, RowsPerImage = height };
-                var extent = new WGPUExtent3D { Width = width, Height = height, DepthOrArrayLayers = 1 };
-                fixed (byte* pixels = albedo.MipLevels[level].Span) {
-                    WgpuUnsafe.wgpuQueueWriteTexture((WGPUQueue*)queue.DangerousGetHandle(), &destination,
-                        pixels, (nuint)albedo.MipLevels[level].Length, &layout, &extent);
-                }
-                width = System.Math.Max(1, width / 2);
-                height = System.Math.Max(1, height / 2);
-            }
-            var view = Own(world, Wgpu.CreateTextureView(texture.GetWgpu<WGPUTexture>(), WGPUTextureViewDescriptor.Default), acquired);
-            var samplerDescriptor = WGPUSamplerDescriptor.Default;
-            samplerDescriptor.AddressModeU = WGPUAddressMode.Repeat;
-            samplerDescriptor.AddressModeV = WGPUAddressMode.Repeat;
-            samplerDescriptor.MagFilter = WGPUFilterMode.Linear;
-            samplerDescriptor.MinFilter = WGPUFilterMode.Linear;
-            samplerDescriptor.MipmapFilter = WGPUMipmapFilterMode.Linear;
-            samplerDescriptor.LodMaxClamp = albedo.MipLevels.Length - 1;
-            var sampler = Own(world, Wgpu.CreateSampler(device, samplerDescriptor), acquired);
+            var (materialGpu, textures) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
             var geometryLayout = CreateGeometryLayout(world, device, acquired);
             var resolveLayout = CreateResolveLayout(world, device, acquired);
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
             var gpuLod = scene is not null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
-            return new(in frame, buffers, texture, view, sampler, geometryLayout, resolveLayout,
+            return new(in frame, buffers, materialGpu, textures, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod) {
                 InstanceCapacity = (uint)gpuInstances.Length
             };

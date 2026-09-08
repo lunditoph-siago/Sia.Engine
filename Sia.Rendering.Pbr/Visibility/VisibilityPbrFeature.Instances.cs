@@ -18,6 +18,19 @@ public sealed partial class VisibilityPbrFeature
     public static VisibilityPbrFeature CreateGpuScene(in GpuFrame frame, ReadOnlySpan<MeshPatchTree> assets,
         int instanceCapacity, VisibilityAlbedo albedo, VisibilityLodSettings lod,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false)
+        => CreateGpuScene(in frame, assets, instanceCapacity, albedo, [], lod, outputFormat, mode, enableGpuTiming);
+
+    public static VisibilityPbrFeature CreateGpuScene(in GpuFrame frame, PbrSceneAsset asset, int instanceCapacity,
+        VisibilityLodSettings lod, WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        return CreateGpuScene(in frame, asset.Geometry.Span.ToArray().Select(mesh => mesh.Build.Tree).ToArray(), instanceCapacity,
+            null, asset.Materials.Span, lod, outputFormat, mode, enableGpuTiming);
+    }
+
+    private static VisibilityPbrFeature CreateGpuScene(in GpuFrame frame, ReadOnlySpan<MeshPatchTree> assets,
+        int instanceCapacity, VisibilityAlbedo? albedo, ReadOnlySpan<PbrMaterialAsset> materials, VisibilityLodSettings lod,
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, bool enableGpuTiming)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(instanceCapacity);
         ValidateLod(lod);
@@ -51,7 +64,7 @@ public sealed partial class VisibilityPbrFeature
             StateCapacity = checked((uint)System.Math.Max(1ul, roots + refined)),
             TriangleCapacity = checked((uint)System.Math.Min(maxFinest * (uint)instanceCapacity, (uint)lod.Budget.MaxTriangles))
         };
-        var feature = Create(in frame, scene.Geometry, [], albedo, outputFormat, mode, null, lod, enableGpuTiming, scene);
+        var feature = Create(in frame, scene.Geometry, [], albedo, outputFormat, mode, null, lod, enableGpuTiming, scene, materials);
         feature._instanceWorld = frame.MainWorld;
         feature._instanceAssets = ranges;
         return feature;
@@ -76,7 +89,7 @@ public sealed partial class VisibilityPbrFeature
                 throw new ArgumentOutOfRangeException(nameof(source.AssetIndex), "The instance asset index is outside the scene asset table.");
             }
             var asset = _instanceAssets[source.AssetIndex];
-            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex));
+            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex), _materials.Length);
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
@@ -132,10 +145,13 @@ public sealed partial class VisibilityPbrFeature
         _preparedInstances = snapshot;
     }
 
-    private static InstanceGpu ToGpu(VisibilityInstance instance, uint4 roots)
+    private static InstanceGpu ToGpu(VisibilityInstance instance, uint4 roots, int materialCount = 1)
     {
         var transform = instance.Transform;
         var material = instance.Material;
+        if ((uint)instance.MaterialIndex >= (uint)materialCount) {
+            throw new ArgumentOutOfRangeException(nameof(instance), "The instance material index is outside the scene material table.");
+        }
         var determinant = math.determinant(transform);
         if (!Finite(transform) || !float.IsFinite(determinant) || determinant <= 1e-12f
             || transform.c0.w != 0 || transform.c1.w != 0 || transform.c2.w != 0 || transform.c3.w != 1) {
@@ -153,7 +169,7 @@ public sealed partial class VisibilityPbrFeature
             throw new ArgumentException("Instance transforms/materials overflow their GPU representation.", nameof(instance));
         }
         return new(transform, normalTransform, new float4(material.BaseColor, 1),
-            new float4(material.Metallic, MathF.Max(material.Roughness, 0.045f), 0, 0), new float4(emissive, 0), roots);
+            new float4(material.Metallic, material.Roughness, instance.MaterialIndex, 0), new float4(emissive, 0), roots);
     }
 
     private readonly record struct AssetRoots(uint Offset, uint Count, uint Meshlets, uint Triangles);
