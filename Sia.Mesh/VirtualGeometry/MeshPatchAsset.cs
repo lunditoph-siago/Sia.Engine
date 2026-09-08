@@ -4,8 +4,8 @@ namespace Sia.Engine.Mesh;
 
 public sealed partial class MeshPatchAsset
 {
-    public const int FormatVersion = 1;
-    public const int CurrentBuilderVersion = 2;
+    public const int FormatVersion = 2;
+    public const int CurrentBuilderVersion = 3;
 
     public MeshPatchBuildResult Build { get; }
     public MeshPatchBuildSettings Settings { get; }
@@ -31,7 +31,7 @@ public sealed partial class MeshPatchAsset
         var options = settings ?? MeshPatchBuildSettings.Default;
         var build = MeshPatchBuilder.Build(snapshot, options, cancellationToken);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> buffer = stackalloc byte[32];
+        Span<byte> buffer = stackalloc byte[48];
         var writer = new Writer(buffer);
         writer.Int(snapshot.Vertices.Length);
         writer.Int(snapshot.Indices.Length);

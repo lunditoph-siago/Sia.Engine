@@ -48,6 +48,8 @@ public sealed partial class MeshPatchAsset
     private static byte[] Shuffle(ReadOnlySpan<byte> bytes, bool restore, CancellationToken cancellationToken)
     {
         Require(bytes.Length >= HeaderSize, "Truncated patch sections.");
+        var version = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
+        Require(version is 1 or FormatVersion, "Unsupported patch asset format version.");
         var output = new byte[bytes.Length];
         bytes[..HeaderSize].CopyTo(output);
         var offset = HeaderSize;
@@ -55,7 +57,7 @@ public sealed partial class MeshPatchAsset
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = bytes[(160 + section * 16)..];
             var count = BinaryPrimitives.ReadInt32LittleEndian(descriptor[8..]);
-            var stride = Strides[section];
+            var stride = SectionStride(version, section);
             Require(BinaryPrimitives.ReadInt64LittleEndian(descriptor) == offset && count >= 0
                 && BinaryPrimitives.ReadInt32LittleEndian(descriptor[12..]) == stride
                 && (long)count * stride <= bytes.Length - offset, "Invalid compressed patch section.");

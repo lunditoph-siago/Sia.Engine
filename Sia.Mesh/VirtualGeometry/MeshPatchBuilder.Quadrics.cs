@@ -4,7 +4,7 @@ namespace Sia.Engine.Mesh;
 
 public static partial class MeshPatchBuilder
 {
-    private const int k_CoordinateCount = 9;
+    private const int k_CoordinateCount = 12;
     private const int k_QuadricSize = k_CoordinateCount * (k_CoordinateCount + 1) / 2;
 
     private static double[] BuildQuadrics(MeshData mesh, Triangle[] triangles, bool[] locked,
@@ -22,7 +22,8 @@ public static partial class MeshPatchBuilder
             var values = coordinates.AsSpan(v * k_CoordinateCount, k_CoordinateCount);
             values[0] = p.x; values[1] = p.y; values[2] = p.z;
             values[3] = vertex.Normal.x; values[4] = vertex.Normal.y; values[5] = vertex.Normal.z;
-            values[6] = vertex.UV.x; values[7] = vertex.UV.y; values[8] = 1;
+            values[6] = vertex.UV.x; values[7] = vertex.UV.y;
+            values[8] = vertex.Tangent.x; values[9] = vertex.Tangent.y; values[10] = vertex.Tangent.z; values[11] = 1;
         }
         Span<double> plane = stackalloc double[k_CoordinateCount];
         for (var t = 0; t < triangles.Length; t++) {
@@ -43,17 +44,17 @@ public static partial class MeshPatchBuilder
             }
             var normal = cross / area;
             plane.Clear();
-            plane[0] = normal.x; plane[1] = normal.y; plane[2] = normal.z; plane[8] = -math.dot(normal, p);
+            plane[0] = normal.x; plane[1] = normal.y; plane[2] = normal.z; plane[11] = -math.dot(normal, p);
             AddPlane(quadrics, face, plane, area);
             var basis1 = math.cross(e2, cross) / areaSquared;
             var basis2 = math.cross(cross, e1) / areaSquared;
-            for (var attribute = 3; attribute < 8; attribute++) {
-                var weight = attribute < 6 ? settings.NormalWeight : settings.UVWeight;
+            for (var attribute = 3; attribute < 11; attribute++) {
+                var weight = attribute is 6 or 7 ? settings.UVWeight : settings.NormalWeight;
                 if (weight == 0) { continue; }
                 var gradient = basis1 * (b[attribute] - a[attribute]) + basis2 * (c[attribute] - a[attribute]);
                 plane.Clear();
                 plane[0] = gradient.x; plane[1] = gradient.y; plane[2] = gradient.z;
-                plane[attribute] = -1; plane[8] = a[attribute] - math.dot(gradient, p);
+                plane[attribute] = -1; plane[11] = a[attribute] - math.dot(gradient, p);
                 AddPlane(quadrics, face, plane, area * weight * weight);
             }
         }

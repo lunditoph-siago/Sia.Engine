@@ -18,7 +18,7 @@ public static partial class MeshPatchBuilder
             var identity = Identity(v);
             if (!float.IsFinite(identity.X) || !float.IsFinite(identity.Y) || !float.IsFinite(identity.Z)
                 || !float.IsFinite(identity.Nx) || !float.IsFinite(identity.Ny) || !float.IsFinite(identity.Nz)
-                || !float.IsFinite(identity.U) || !float.IsFinite(identity.V)) {
+                || !float.IsFinite(identity.U) || !float.IsFinite(identity.V) || !v.HasFiniteTangent) {
                 throw new ArgumentException("Mesh positions and attributes must be finite.", nameof(mesh));
             }
             if (!identities.TryGetValue(identity, out remap[i])) {

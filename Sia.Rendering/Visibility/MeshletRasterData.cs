@@ -75,7 +75,8 @@ public sealed class MeshletRasterData
         }
         foreach (var vertex in mesh.Vertices) {
             if (!Finite(vertex.Position) || !Finite(vertex.Normal)
-                || !float.IsFinite(vertex.UV.x) || !float.IsFinite(vertex.UV.y)) {
+                || !float.IsFinite(vertex.UV.x) || !float.IsFinite(vertex.UV.y)
+                || !Finite(vertex.Tangent.xyz) || !float.IsFinite(vertex.Tangent.w)) {
                 throw new ArgumentException("Raster vertex attributes must be finite.", nameof(mesh));
             }
         }

@@ -7,7 +7,7 @@ struct VisibilityCamera {
     light_direction: vec4<f32>,
     light_radiance: vec4<f32>,
 }
-struct VisibilityVertex { position: vec4<f32>, normal: vec4<f32>, uv: vec4<f32> }
+struct VisibilityVertex { position: vec4<f32>, normal: vec4<f32>, uv: vec4<f32>, tangent: vec4<f32> }
 struct VisibilityInstance {
     transform: mat4x4<f32>,
     normal_transform: mat4x4<f32>,

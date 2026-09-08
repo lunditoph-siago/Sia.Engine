@@ -9,7 +9,9 @@ public sealed partial class MeshPatchAsset
     private const int HeaderSize = 272;
     private const int HashOffset = 56;
     private const int HashSize = 32;
-    private static ReadOnlySpan<int> Strides => [56, 32, 4, 72, 4, 1, 4];
+    private static ReadOnlySpan<int> Strides => [56, 48, 4, 72, 4, 1, 4];
+
+    private static int SectionStride(int version, int section) => section == 1 && version == 1 ? 32 : Strides[section];
 
     public byte[] Encode(CancellationToken cancellationToken = default)
     {
@@ -104,7 +106,8 @@ public sealed partial class MeshPatchAsset
         cancellationToken.ThrowIfCancellationRequested();
         Require(bytes.Length >= HeaderSize && bytes[..8].SequenceEqual("SIAPATCH"u8), "Invalid patch asset header.");
         var reader = new Reader(bytes[8..]);
-        Require(reader.Int() == FormatVersion, "Unsupported patch asset format version.");
+        var version = reader.Int();
+        Require(version is 1 or FormatVersion, "Unsupported patch asset format version.");
         var builderVersion = reader.Int();
         Require(builderVersion > 0 && reader.Long() == bytes.Length, "Invalid patch asset version or length.");
         Require(CryptographicOperations.FixedTimeEquals(Hash(bytes), bytes.Slice(HashOffset, HashSize)), "Patch asset checksum mismatch.");
@@ -128,8 +131,9 @@ public sealed partial class MeshPatchAsset
         for (var i = 0; i < counts.Length; i++) {
             Require(reader.Long() == offset, "Patch sections must form a contiguous ordered stream.");
             counts[i] = reader.Int();
-            Require(counts[i] >= 0 && reader.Int() == Strides[i], "Invalid patch section count or stride.");
-            offset += (long)counts[i] * Strides[i];
+            var stride = SectionStride(version, i);
+            Require(counts[i] >= 0 && reader.Int() == stride, "Invalid patch section count or stride.");
+            offset += (long)counts[i] * stride;
             Require(offset <= bytes.Length, "Patch section exceeds the asset length.");
         }
         Require(offset == bytes.Length, "Unexpected data after patch sections.");
@@ -148,7 +152,7 @@ public sealed partial class MeshPatchAsset
         var vertices = new MeshVertex[counts[1]];
         for (var i = 0; i < vertices.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
-            vertices[i] = reader.Vertex();
+            vertices[i] = reader.Vertex(version);
         }
         var indices = new uint[counts[2]];
         for (var i = 0; i < indices.Length; i++) { indices[i] = reader.UInt(); }
@@ -191,7 +195,11 @@ public sealed partial class MeshPatchAsset
         public void Float(float value) => Int(BitConverter.SingleToInt32Bits(value));
         public void Vector(float3 value) { Float(value.x); Float(value.y); Float(value.z); }
         public void Box(Aabb value) { Vector(value.Min); Vector(value.Max); }
-        public void Vertex(MeshVertex value) { Vector(value.Position); Vector(value.Normal); Float(value.UV.x); Float(value.UV.y); }
+        public void Vertex(MeshVertex value)
+        {
+            Vector(value.Position); Vector(value.Normal); Float(value.UV.x); Float(value.UV.y);
+            Float(value.Tangent.x); Float(value.Tangent.y); Float(value.Tangent.z); Float(value.Tangent.w);
+        }
         public void Bytes(ReadOnlySpan<byte> value) { value.CopyTo(_remaining); _remaining = _remaining[value.Length..]; }
     }
 
@@ -204,7 +212,11 @@ public sealed partial class MeshPatchAsset
         public float Float() => BitConverter.Int32BitsToSingle(Int());
         public float3 Vector() => new(Float(), Float(), Float());
         public Aabb Box() => new(Vector(), Vector());
-        public MeshVertex Vertex() => new(Vector(), Vector(), new(Float(), Float()));
+        public MeshVertex Vertex(int version)
+        {
+            var vertex = new MeshVertex(Vector(), Vector(), new(Float(), Float()));
+            return version == 1 ? vertex : vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
+        }
         public ReadOnlySpan<byte> Bytes(int count) { var value = _remaining[..count]; _remaining = _remaining[count..]; return value; }
     }
 }
