@@ -18,12 +18,12 @@ public sealed partial class VisibilityPbrFeature :
     private readonly float4x4[] _transforms;
     private readonly VisibilityLodSettings _lod;
     private readonly LodGpu? _gpuLod;
-    private readonly MaterialGpu[] _materials;
+    private readonly MaterialBatchGpu[] _materialBatches;
     private readonly MaterialTextureGpu[] _materialTextures;
     private readonly Entity _geometryLayout;
     private readonly Entity _resolveLayout;
     private readonly Entity _raster;
-    private readonly Entity _resolve;
+    private readonly ResolveGpu _resolve;
     private readonly OutputGpu _output;
     private VisibilityDebugMode _mode;
 
@@ -43,10 +43,10 @@ public sealed partial class VisibilityPbrFeature :
     public uint TriangleCapacity { get; }
 
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
-        MaterialGpu[] materials, MaterialTextureGpu[] textures, Entity geometryLayout, Entity resolveLayout,
-        Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
-        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod, WorkGpu[]? fixedWork,
-        MaterialTilesGpu materialTiles, Entity fixedWorkBuffer)
+        MaterialBatchGpu[] materials, MaterialTextureGpu[] textures, Entity materialParameters, int materialCount, Entity geometryLayout, Entity resolveLayout,
+        Entity raster, ResolveGpu resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
+        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod,
+        MaterialTilesGpu materialTiles, FixedGeometryGpu? fixedGeometry)
     {
         _world = frame.ResourceWorld;
         _device = frame.Device;
@@ -56,10 +56,11 @@ public sealed partial class VisibilityPbrFeature :
         _transforms = transforms;
         _lod = lod;
         _gpuLod = gpuLod;
-        _fixedWorkCount = fixedWork?.Length;
-        _fixedWorkBuffer = fixedWorkBuffer;
+        _fixedGeometry = fixedGeometry;
         _materialTiles = materialTiles;
-        _materials = materials;
+        _materialBatches = materials;
+        _materialParameters = materialParameters;
+        MaterialCount = materialCount;
         _materialTextures = textures;
         _geometryLayout = geometryLayout;
         _resolveLayout = resolveLayout;
@@ -116,7 +117,7 @@ public sealed partial class VisibilityPbrFeature :
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo? albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
         bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default,
-        WorkGpu[]? fixedWork = null)
+        FixedClusterGpu[]? fixedClusters = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         var sourceMaterials = ValidateMaterials(albedo, materials);
@@ -143,7 +144,7 @@ public sealed partial class VisibilityPbrFeature :
         }
         var queue = frame.Queue.GetWgpu<WGPUQueue>();
         var limits = Wgpu.GetLimits(device);
-        var workSize = System.Math.Max(1u, capacity) * 8ul;
+        var workSize = System.Math.Max(1u, (uint?)fixedClusters?.Length ?? capacity) * 8ul;
         if (workSize > limits.MaxBufferSize || workSize > limits.MaxStorageBufferBindingSize) {
             throw new ArgumentException("The required visibility work list exceeds the device capacity.", nameof(instances));
         }
@@ -154,24 +155,25 @@ public sealed partial class VisibilityPbrFeature :
             var buffers = new[] {
                 UploadPacked<MeshVertex, PackedVertexGpu>(world, device, queue, geometry.Vertices.Span,
                     PackedVertexGpu.From, limits, acquired),
-                Upload(world, device, queue, geometry.Meshlets.Span, WGPUBufferUsage.Storage, limits, acquired),
                 Upload(world, device, queue, geometry.Indices.Span, WGPUBufferUsage.Storage, limits, acquired),
                 UploadPacked<uint4, TriangleGpu>(world, device, queue, geometry.Triangles.Span,
-                    static triangle => new(triangle.x, triangle.y), limits, acquired),
+                    triangle => {
+                        var meshlet = geometry.Meshlets.Span[(int)triangle.x];
+                        return new(meshlet.x, geometry.Indices.Span[checked((int)(meshlet.y + triangle.y))]);
+                    }, limits, acquired),
                 Upload<InstanceGpu>(world, device, queue, gpuInstances, WGPUBufferUsage.Storage, limits, acquired)
             };
-            var (materialGpu, textures) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
+            var (materialGpu, textures, materialParameters) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
             var geometryLayout = CreateGeometryLayout(world, device, acquired);
             var resolveLayout = CreateResolveLayout(world, device, acquired);
-            var raster = CreateRaster(world, device, geometryLayout, acquired);
+            var raster = CreateRaster(world, device, geometryLayout, acquired, indexed: fixedClusters is not null);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
-            var materialTiles = CreateMaterialTiles(world, device, geometryLayout, acquired);
+            var materialTiles = CreateMaterialTiles(world, device, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
-            var gpuLod = scene is not null && fixedWork is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
-            var fixedWorkBuffer = fixedWork is null ? default : Upload<WorkGpu>(world, device, queue, fixedWork,
-                WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
-            return new(in frame, buffers, materialGpu, textures, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, fixedWork, materialTiles, fixedWorkBuffer) {
+            var gpuLod = scene is not null && fixedClusters is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
+            var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired);
+            return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry) {
                 InstanceCapacity = (uint)gpuInstances.Length
             };
         }
@@ -202,13 +204,14 @@ public sealed partial class VisibilityPbrFeature :
         view.Height = (uint)viewport.Height;
         view.PrepareMaterialTiles();
         view.Frame = context.Frame;
+        view.ResolvePipeline = sceneLighting && _mode == VisibilityDebugMode.Shaded ? _resolve.Surface : _resolve.Debug;
         var camera = context.Frame.Camera.Get<CameraMatrices>();
         if (!Finite(camera.ViewProj)) { throw new ArgumentException("Visibility requires a finite camera projection."); }
         if (_gpuLod is null) { UpdateWork(view, camera.ViewProj); }
-        else { PrepareOcclusion(view, camera.ViewProj); }
+        if (_gpuLod is not null || _fixedGeometry is not null) { PrepareOcclusion(view, camera.ViewProj); }
         var uniform = new CameraGpu(camera.ViewProj, new float4(camera.WorldPosition, 1),
             new uint4(view.Width, view.Height, _gpuLod is null ? view.WorkCount : TriangleCapacity, (uint)_mode | (sceneLighting ? 256u : 0u)),
-            new float4(math.normalize(new float3(0.4f, 0.8f, 0.6f)), 0), new float4(4, 4, 4, 0));
+            new float4(math.normalize(new float3(0.4f, 0.8f, 0.6f)), 0), new float4(4, 4, 4, 0), RasterConfig, RasterOrigin(camera.ViewProj));
         Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0, [uniform]);
     }
 
@@ -247,5 +250,5 @@ public sealed partial class VisibilityPbrFeature :
 
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct CameraGpu(float4x4 ViewProjection, float4 Eye, uint4 SizeCounts,
-        float4 LightDirection, float4 LightRadiance);
+        float4 LightDirection, float4 LightRadiance, uint4 Raster, float4 RasterOrigin);
 }

@@ -89,7 +89,7 @@ public sealed partial class VisibilityPbrFeature
                 throw new ArgumentOutOfRangeException(nameof(source.AssetIndex), "The instance asset index is outside the scene asset table.");
             }
             var asset = _instanceAssets[source.AssetIndex];
-            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex), _materials.Length);
+            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex), MaterialCount);
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
@@ -127,7 +127,7 @@ public sealed partial class VisibilityPbrFeature
             if (previous is not null && start < previous.Instances.Length && instances[start] == previous.Instances[start]) { start++; continue; }
             var end = start + 1;
             while (end < instances.Length && (previous is null || end >= previous.Instances.Length || instances[end] != previous.Instances[end])) { end++; }
-            Wgpu.WriteBuffer<InstanceGpu>(queue, _geometry[4].GetWgpu<WGPUBuffer>(), (ulong)start * 192, instances.AsSpan(start, end - start));
+            Wgpu.WriteBuffer<InstanceGpu>(queue, _geometry[3].GetWgpu<WGPUBuffer>(), (ulong)start * 192, instances.AsSpan(start, end - start));
             for (var i = start; i < end && !changed; i++) {
                 changed = previous is null || i >= previous.Instances.Length
                     || !instances[i].Transform.Equals(previous.Instances[i].Transform) || !instances[i].Roots.Equals(previous.Instances[i].Roots);

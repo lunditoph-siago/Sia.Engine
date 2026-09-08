@@ -20,7 +20,7 @@ public sealed partial class VisibilityPbrFeature
         foreach (var layer in shadows.SpotShadowLayerByEntity.Values) { layers.Add(layer); }
         if (layers.Count > 0 && !_shadowRaster.IsValid) {
             var acquired = new List<Entity>();
-            try { _shadowRaster = CreateRaster(_world, _device.GetWgpu<WGPUDevice>(), _geometryLayout, acquired, shadow: true); }
+            try { _shadowRaster = CreateRaster(_world, _device.GetWgpu<WGPUDevice>(), _geometryLayout, acquired, shadow: true, indexed: _fixedGeometry is not null); }
             catch { for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); } throw; }
         }
         var additions = new List<ShadowView>();
@@ -43,7 +43,8 @@ public sealed partial class VisibilityPbrFeature
             view.Width = config.TileResolution; view.Height = config.TileResolution;
             var projection = shadows.LayerViewProj(layer);
             Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0,
-                [new(projection, default, new(config.TileResolution, config.TileResolution, TriangleCount, 0), default, default)]);
+                [new(projection, default, new(config.TileResolution, config.TileResolution, TriangleCount, 0), default, default,
+                    RasterConfig with { w = _fixedGeometry is null ? 0u : 2u }, RasterOrigin(projection))]);
             if (_gpuLod is null) { UpdateWork(view, in projection); }
         }
     }
@@ -72,6 +73,10 @@ public sealed partial class VisibilityPbrFeature
         {
             declaration.ReadWrite(ShadowAtlas, RenderGraphTextureUsage.RenderAttachment);
             foreach (var key in s_GeometryKeys) { declaration.Read(key, RenderGraphBufferUsage.Storage); }
+            if (Owner._fixedGeometry is not null) {
+                declaration.Read(s_FixedClustersKey, RenderGraphBufferUsage.Storage)
+                    .ReadWrite(s_ClusterIndicesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
+            }
             if (Owner._gpuLod is not null) {
                 declaration.Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform);
             }
@@ -81,6 +86,7 @@ public sealed partial class VisibilityPbrFeature
         {
             foreach (var shadow in Shadows.Values.OrderBy(static value => value.Layer)) {
                 var view = shadow.View;
+                if (Owner._fixedGeometry is not null) { view.CullClusters(context); }
                 if (Owner._gpuLod is not null) {
                     view.ProjectLod(context); view.SelectLod(context); view.CompactMain(context); view.EmitLod(context);
                 }
@@ -96,7 +102,10 @@ public sealed partial class VisibilityPbrFeature
                 try {
                     Wgpu.SetRenderPipeline(pass, Owner._shadowRaster.GetWgpu<WGPURenderPipeline>());
                     Wgpu.SetBindGroup(pass, 0, view.Group.GetWgpu<WGPUBindGroup>());
-                    Wgpu.DrawIndirect(pass, view.Indirect.GetWgpu<WGPUBuffer>());
+                    if (Owner._fixedGeometry is { } geometry) {
+                        Wgpu.SetIndexBuffer(pass, geometry.Indices.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
+                        Wgpu.DrawIndexedIndirect(pass, view.Indirect.GetWgpu<WGPUBuffer>());
+                    } else { Wgpu.DrawIndirect(pass, view.Indirect.GetWgpu<WGPUBuffer>()); }
                 }
                 finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }
             }

@@ -28,9 +28,9 @@ public sealed partial class VisibilityPbrFeature
     {
         var count = 0;
         MeshPatchSelection? nextSelection = null;
-        if (_fixedWorkCount is { } fixedCount) {
-            if (view.WorkInitialized) { return; }
-            count = fixedCount;
+        if (_fixedGeometry is { } geometry) {
+            view.WorkCount = checked(geometry.Count * geometry.Stride);
+            return;
         }
         else if (_patchTree is { } tree) {
             var matrices = new float4x4[_transforms.Length];
@@ -55,7 +55,7 @@ public sealed partial class VisibilityPbrFeature
             }
         }
         var queue = _queue.GetWgpu<WGPUQueue>();
-        if (!_fixedWorkCount.HasValue) { Wgpu.WriteBuffer<WorkGpu>(queue, view.WorkBuffer.GetWgpu<WGPUBuffer>(), 0, view.WorkItems.AsSpan(0, count)); }
+        Wgpu.WriteBuffer<WorkGpu>(queue, view.WorkBuffer.GetWgpu<WGPUBuffer>(), 0, view.WorkItems.AsSpan(0, count));
         Wgpu.WriteBuffer<uint>(queue, view.Indirect.GetWgpu<WGPUBuffer>(), 0, [checked((uint)count * 3u), 1, 0, 0]);
         view.WorkCount = (uint)count;
         view.Selection = nextSelection;

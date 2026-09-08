@@ -12,21 +12,26 @@ public sealed partial class VisibilityPbrFeature
     private readonly MaterialTilesGpu _materialTiles;
 
     private static MaterialTilesGpu CreateMaterialTiles(World world, WgpuHandle<WGPUDevice> device,
-        Entity geometry, List<Entity> acquired)
+        List<Entity> acquired)
     {
+        var geometry = Layout(world, device, [BufferLayout(0, WGPUBufferBindingType.Uniform, 160, WGPUShaderStage.Compute),
+            BufferLayout(5, WGPUBufferBindingType.ReadOnlyStorage, 192, WGPUShaderStage.Compute),
+            BufferLayout(6, WGPUBufferBindingType.ReadOnlyStorage, 8, WGPUShaderStage.Compute)], acquired);
         var group = Layout(world, device, [TextureLayout(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute),
             BufferLayout(1, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
-            BufferLayout(2, WGPUBufferBindingType.Storage, 12, WGPUShaderStage.Compute)], acquired);
+            BufferLayout(2, WGPUBufferBindingType.Storage, 12, WGPUShaderStage.Compute),
+            BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 80, WGPUShaderStage.Compute)], acquired);
         var layout = PipelineLayout(world, device, [geometry, group], acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityMaterialTiles()), acquired);
-        return new(group, ComputePipeline(world, device, shader, layout, "reset", acquired),
+        return new(geometry, group, ComputePipeline(world, device, shader, layout, "reset", acquired),
             ComputePipeline(world, device, shader, layout, "classify", acquired));
     }
 
-    private readonly record struct MaterialTilesGpu(Entity Layout, Entity Reset, Entity Classify);
+    private readonly record struct MaterialTilesGpu(Entity GeometryLayout, Entity Layout, Entity Reset, Entity Classify);
 
     private sealed partial class ViewState
     {
+        public Entity MaterialGeometryGroup { get; init; }
         private Entity _materialTileBuffer;
         private Entity _materialDispatchBuffer;
         private Entity _materialTileGroup;
@@ -34,7 +39,7 @@ public sealed partial class VisibilityPbrFeature
 
         public void PrepareMaterialTiles()
         {
-            var size = checked((((ulong)Width + 7) / 8 * (((ulong)Height + 7) / 8) + 1) * (uint)Owner._materials.Length * 4);
+            var size = checked((((ulong)Width + 7) / 8 * (((ulong)Height + 7) / 8) + 1) * (uint)Owner._materialBatches.Length * 4);
             if (_materialTileBuffer.IsValid && Wgpu.GetBufferSize(_materialTileBuffer.GetWgpu<WGPUBuffer>()) == size) { return; }
             var acquired = new List<Entity>();
             var device = Owner._device.GetWgpu<WGPUDevice>();
@@ -42,7 +47,7 @@ public sealed partial class VisibilityPbrFeature
             Entity tiles, dispatch;
             try {
                 tiles = Allocate(Owner._world, device, size, WGPUBufferUsage.Storage, limits, acquired);
-                dispatch = Allocate(Owner._world, device, (ulong)Owner._materials.Length * 12,
+                dispatch = Allocate(Owner._world, device, (ulong)Owner._materialBatches.Length * 12,
                     WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect, limits, acquired);
             }
             catch { foreach (var entity in acquired) { entity.Destroy(); } throw; }
@@ -67,6 +72,7 @@ public sealed partial class VisibilityPbrFeature
         {
             ReadGeometry(declaration);
             declaration.Read(Owner.VisibilityTarget, RenderGraphTextureUsage.TextureBinding)
+                .Read(s_MaterialParametersKey, RenderGraphBufferUsage.Storage)
                 .Write(s_MaterialTilesKey, RenderGraphBufferUsage.Storage)
                 .Write(s_MaterialDispatchKey, RenderGraphBufferUsage.Storage);
         }
@@ -76,17 +82,18 @@ public sealed partial class VisibilityPbrFeature
             var id = context.GetTextureView(Owner.VisibilityTarget);
             if (!_materialTileGroup.IsValid || _materialIdView != id) {
                 var next = Owner.OwnTextureBindGroup(Owner._materialTiles.Layout,
-                    [TextureEntry(0, id), BufferEntry(1, _materialTileBuffer), BufferEntry(2, _materialDispatchBuffer)], id);
+                    [TextureEntry(0, id), BufferEntry(1, _materialTileBuffer), BufferEntry(2, _materialDispatchBuffer),
+                        BufferEntry(3, Owner._materialParameters)], id);
                 if (_materialTileGroup.IsValid) { _materialTileGroup.Destroy(); }
                 _materialTileGroup = next;
                 _materialIdView = id;
             }
             var pass = BeginCompute(context);
             try {
-                Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
+                Wgpu.SetBindGroup(pass, 0, MaterialGeometryGroup.GetWgpu<WGPUBindGroup>());
                 Wgpu.SetBindGroup(pass, 1, _materialTileGroup.GetWgpu<WGPUBindGroup>());
                 Wgpu.SetComputePipeline(pass, Owner._materialTiles.Reset.GetWgpu<WGPUComputePipeline>());
-                Wgpu.DispatchWorkgroups(pass, ((uint)Owner._materials.Length + 63) / 64);
+                Wgpu.DispatchWorkgroups(pass, ((uint)Owner._materialBatches.Length + 63) / 64);
                 Wgpu.SetComputePipeline(pass, Owner._materialTiles.Classify.GetWgpu<WGPUComputePipeline>());
                 Wgpu.DispatchWorkgroups(pass, (Width + 7) / 8, (Height + 7) / 8);
             }

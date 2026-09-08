@@ -101,7 +101,7 @@ function setInspectionStatus(status, distance, touring, triangles, atmosphere) {
 
 function getCanvasWidth() { return Math.max(1, Math.round(window.innerWidth)); }
 function getCanvasHeight() { return Math.max(1, Math.round(window.innerHeight)); }
-function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'compatibility'; }
+function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
   credit.textContent = attribution;
