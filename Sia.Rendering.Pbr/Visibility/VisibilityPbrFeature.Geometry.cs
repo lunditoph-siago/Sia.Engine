@@ -13,7 +13,7 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct WorkGpu(uint Triangle, uint Instance);
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct TriangleGpu(uint Meshlet, uint Triangle);
+    private readonly record struct TriangleGpu(uint VertexOffset, uint PackedCorners);
 
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct PackedVertexGpu(float4 PositionNormalX, float4 NormalYZUv, float4 Tangent)

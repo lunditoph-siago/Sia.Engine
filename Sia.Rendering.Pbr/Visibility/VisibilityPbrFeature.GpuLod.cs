@@ -85,7 +85,7 @@ public sealed partial class VisibilityPbrFeature
         var dispatch = Allocate(_world, _device.GetWgpu<WGPUDevice>(), 72,
             WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc, limits, acquired);
         var group = Own(_world, BindGroup(lod.Layout, [BufferEntry(0, camera), BufferEntry(1, lod.Parameters),
-            BufferEntry(2, lod.Patches), BufferEntry(3, _geometry[4]), BufferEntry(4, state), BufferEntry(5, heap),
+            BufferEntry(2, lod.Patches), BufferEntry(3, _geometry[3]), BufferEntry(4, state), BufferEntry(5, heap),
             BufferEntry(6, indirect), BufferEntry(7, work)]), acquired);
         var dispatchGroup = Own(_world, BindGroup(lod.DispatchLayout, [BufferEntry(2, dispatch)]), acquired);
         return new(state, heap, dispatch, group, dispatchGroup, CreateCompactionView(lod, state, heap, indirect, limits, acquired));
@@ -101,10 +101,10 @@ public sealed partial class VisibilityPbrFeature
         ImportBuffer(ref graph, s_LodDispatchKey, state.Dispatch, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource);
         graph.UseComputePass(new("visibility-lod-project"), "visibility-lod-project", declaration => declaration
             .Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform)
-            .Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_GeometryKeys[4], RenderGraphBufferUsage.Storage)
+            .Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_GeometryKeys[3], RenderGraphBufferUsage.Storage)
             .Write(s_LodStateKey, RenderGraphBufferUsage.Storage), view.ProjectLod);
         graph.UseComputePass(new("visibility-lod-select"), "visibility-lod-select", declaration => declaration
-            .Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_GeometryKeys[4], RenderGraphBufferUsage.Storage)
+            .Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_GeometryKeys[3], RenderGraphBufferUsage.Storage)
             .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
             .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage).Write(s_LodHeapKey, RenderGraphBufferUsage.Storage)
             .Write(s_LodDispatchKey, RenderGraphBufferUsage.Storage)
