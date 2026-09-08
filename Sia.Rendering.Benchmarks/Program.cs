@@ -82,7 +82,7 @@ if (scenePath is not null) {
     var watch = Stopwatch.StartNew();
     var scene = GltfScene.Read(sourcePath, textureSize, attribution, buildSettings);
     var bytes = scene.Encode();
-    var decoded = PbrSceneAsset.Decode(bytes);
+    var decoded = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
     WriteAsset(scenePath, bytes);
     Console.WriteLine(JsonSerializer.Serialize(new {
         Path = Path.GetFullPath(scenePath), Bytes = bytes.Length, Geometry = decoded.Geometry.Length,

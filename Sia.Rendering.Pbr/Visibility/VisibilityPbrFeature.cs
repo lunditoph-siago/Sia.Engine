@@ -45,7 +45,7 @@ public sealed partial class VisibilityPbrFeature :
     private VisibilityPbrFeature(in GpuFrame frame, Entity[] geometry,
         MaterialGpu[] materials, MaterialTextureGpu[] textures, Entity geometryLayout, Entity resolveLayout,
         Entity raster, Entity resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
-        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod)
+        MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod, uint4[]? fixedWork)
     {
         _world = frame.ResourceWorld;
         _device = frame.Device;
@@ -55,6 +55,7 @@ public sealed partial class VisibilityPbrFeature :
         _transforms = transforms;
         _lod = lod;
         _gpuLod = gpuLod;
+        _fixedWork = fixedWork;
         _materials = materials;
         _materialTextures = textures;
         _geometryLayout = geometryLayout;
@@ -111,7 +112,8 @@ public sealed partial class VisibilityPbrFeature :
     private static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo? albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
-        bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default)
+        bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default,
+        uint4[]? fixedWork = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         var sourceMaterials = ValidateMaterials(albedo, materials);
@@ -159,9 +161,9 @@ public sealed partial class VisibilityPbrFeature :
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
-            var gpuLod = scene is not null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
+            var gpuLod = scene is not null && fixedWork is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
             return new(in frame, buffers, materialGpu, textures, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod) {
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, fixedWork) {
                 InstanceCapacity = (uint)gpuInstances.Length
             };
         }

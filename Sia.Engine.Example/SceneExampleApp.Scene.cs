@@ -164,11 +164,12 @@ internal sealed unsafe partial class SceneExampleApp
             eye = PatchEye(aspect, target);
         } else if (_pipeline == ScenePipeline.Pbr) {
             UpdatePatchInspection(deltaTime);
-            UpdateMaterialScene(deltaTime);
-            target = math.lerp(new float3(0, 1.5f, 3), new float3(0, 1.1f, 0), _patchDistance);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
-            var distance = 3f * MathF.Pow(System.Math.Max(16, 9 / aspect) / 3f, _patchDistance);
-            eye = target + math.normalize(new float3(8, 4.4f, 11)) * distance;
+            var size = _materialBounds.Max - _materialBounds.Min;
+            target = new float3(4, 3.5f, 3);
+            var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
+            eye = target + new float3(-4, 1, 17) * (.6f + .4f * _patchDistance);
+            _camera.Get<CameraComponent>() = new(MathF.PI / 3, .1f, System.Math.Max(100, extent * 4));
         }
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 

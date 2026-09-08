@@ -85,7 +85,10 @@ internal sealed partial class SceneExampleApp
     private static partial int GetCanvasHeight();
 
     [JSImport("setInspectionStatus", "main.js")]
-    private static partial void SetInspectionStatus(string status, double distance, bool touring, bool triangles);
+    private static partial void SetInspectionStatus(string status, double distance, bool touring, bool triangles, bool atmosphere);
+
+    [JSImport("setSceneAttribution", "main.js")]
+    private static partial void SetSceneAttribution(string attribution);
 
     [JSImport("takeInspectionCommands", "main.js")]
     private static partial int TakeInspectionCommands();

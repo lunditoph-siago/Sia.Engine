@@ -10,10 +10,10 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         try {
-            var (pipeline, debugMode, distance) = ParseOptions(args);
+            var (pipeline, debugMode, distance, scenePath, finest) = ParseOptions(args);
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
-            var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync() : null;
-            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene);
+            var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath) : null;
+            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest);
 #if BROWSER
             await app.RunAsync();
 #else
@@ -43,29 +43,36 @@ public static class Program
         return asset;
     }
 
-    private static async Task<PbrSceneAsset> LoadPbrAsync()
+    private static async Task<PbrSceneAsset> LoadPbrAsync(string? path)
     {
         var timer = Stopwatch.StartNew();
-        using var stream = typeof(Program).Assembly.GetManifestResourceStream("Sia.Engine.Example.scene.siapbr")
-            ?? throw new FileNotFoundException("The bundled PBR scene is missing.");
-        using var memory = new MemoryStream();
-        await stream.CopyToAsync(memory);
-        var bytes = memory.ToArray();
-        var scene = PbrSceneAsset.Decode(bytes);
+#if BROWSER
+        using var client = new HttpClient();
+        var bytes = await client.GetByteArrayAsync(path ?? throw new ArgumentException("The browser entry point must supply the published scene URL."));
+#else
+        var bytes = await File.ReadAllBytesAsync(path ?? Path.Combine(AppContext.BaseDirectory, "Assets", "Bistro.siapbr"));
+#endif
+        var scene = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
         Console.WriteLine(scene.Attribution);
         Console.WriteLine($"PBR scene: {bytes.Length} bytes; load/decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
             + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");
         return scene;
     }
 
-    private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance) ParseOptions(string[] args)
+    private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool Finest) ParseOptions(string[] args)
     {
         var pipeline = ScenePipeline.Pbr;
         VisibilityDebugMode? debugMode = null;
         float? distance = null;
+        string? scenePath = null;
+        bool? finest = null;
         for (var i = 0; i < args.Length; i += 2) {
             if (i + 1 == args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
+            else if (args[i] == "--scene") { scenePath = args[i + 1]; }
+            else if (args[i] == "--lod") { finest = args[i + 1] switch {
+                "auto" => false, "finest" => true, _ => throw new ArgumentException("Expected --lod auto|finest.")
+            }; }
             else if (args[i] == "--debug") { debugMode = args[i + 1] switch {
                 "shaded" => VisibilityDebugMode.Shaded,
                 "triangles" => VisibilityDebugMode.Triangles,
@@ -83,7 +90,10 @@ public static class Program
         if ((debugMode is not null || distance is not null) && pipeline == ScenePipeline.Unlit) {
             throw new ArgumentException("--debug and --distance require --pipeline bunny|pbr.");
         }
-        return (pipeline, debugMode, distance);
+        if ((scenePath is not null || finest is not null) && pipeline != ScenePipeline.Pbr) {
+            throw new ArgumentException("--scene and --lod require --pipeline pbr.");
+        }
+        return (pipeline, debugMode, distance, scenePath, finest ?? false);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {
