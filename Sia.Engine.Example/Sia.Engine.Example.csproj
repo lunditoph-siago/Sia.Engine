@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets/bunny.siapatch" LogicalName="Sia.Engine.Example.bunny.siapatch" />
+    <EmbeddedResource Include="Assets/scene.siapbr" LogicalName="Sia.Engine.Example.scene.siapbr" />
     <Compile Remove="obj_browser\**" />
     <EmbeddedResource Remove="obj_browser\**" />
     <None Remove="obj_browser\**" />

@@ -104,7 +104,7 @@
       outline-offset: 2px;
     }
 
-    #bunny-credit {
+    .asset-credit {
       position: fixed;
       bottom: max(8px, env(safe-area-inset-bottom));
       left: max(12px, env(safe-area-inset-left));
@@ -129,18 +129,22 @@
     <a href="?pipeline=pbr">PBR</a>
     <a href="?pipeline=unlit">Unlit</a>
   </nav>
-  <fieldset id="inspection" hidden disabled aria-label="Bunny controls">
-    <div id="inspection-status">Loading Bunny&hellip;</div>
+  <fieldset id="inspection" hidden disabled aria-label="Scene controls">
+    <div id="inspection-status">Loading scene&hellip;</div>
     <label class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
     <div class="controls">
       <button id="inspection-tour" type="button">Pause tour</button>
       <button id="inspection-material" type="button">Show shaded</button>
       <button id="inspection-reset" type="button">Return near</button>
+      <button id="inspection-atmosphere" type="button" hidden>Toggle atmosphere</button>
     </div>
     <p class="keyboard-help">W / S or &uarr; / &darr;: near / far &middot; Space: pause &middot; M: material &middot; R: reset</p>
   </fieldset>
-  <a id="bunny-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">
+  <a id="bunny-credit" class="asset-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">
     Stanford Bunny &middot; Stanford University Computer Graphics Laboratory
+  </a>
+  <a id="pbr-credit" class="asset-credit" hidden href="https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/AntiqueCamera">
+    Antique Camera &middot; UX3D / Maximillan Kamps &middot; CC0
   </a>
 </body>
 </html>
