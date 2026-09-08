@@ -18,6 +18,7 @@ string? assetPath = null;
 string? cookPath = null;
 string? sourcePath = null;
 string? scenePath = null;
+string? stripScenePath = null;
 var textureSize = 256;
 var attribution = "";
 var compress = false;
@@ -28,6 +29,7 @@ var buildSettings = MeshPatchBuildSettings.Default;
 if (args.Contains("--help")) {
     Console.WriteLine("""
         Cook without creating a GPU device:
+          --strip-scene-lod OUTPUT.siapbr --source INPUT.siapbr
           --cook-scene OUTPUT.siapbr --source SCENE.gltf|SCENE.glb [--texture-size 256 --attribution TEXT]
           --cook PATH --fixture grid|terrain|plane --size N
           [--leaf-triangles N --children N --ratio F --normal-weight F --uv-weight F]
@@ -61,6 +63,7 @@ for (var i = 0; i < args.Length; i++) {
         case "--cook": cookPath = args[i]; break;
         case "--source": sourcePath = args[i]; break;
         case "--cook-scene": scenePath = args[i]; break;
+        case "--strip-scene-lod": stripScenePath = args[i]; break;
         case "--texture-size": textureSize = int.Parse(args[i]); break;
         case "--attribution": attribution = args[i]; break;
         case "--view": view = args[i]; break;
@@ -73,6 +76,20 @@ for (var i = 0; i < args.Length; i++) {
         case "--uv-weight": buildSettings = buildSettings with { UVWeight = float.Parse(args[i], CultureInfo.InvariantCulture) }; break;
         default: throw new ArgumentException("Unknown option: " + name);
     }
+}
+if (stripScenePath is not null) {
+    if (sourcePath is null || args.Any(option => option.StartsWith("--", StringComparison.Ordinal)
+        && option is not ("--strip-scene-lod" or "--source"))) {
+        throw new ArgumentException("--strip-scene-lod requires only --source INPUT.siapbr.");
+    }
+    var source = PbrSceneAsset.Decode(File.ReadAllBytes(sourcePath), 512 * 1024 * 1024);
+    var geometry = source.Geometry.ToArray().Select(asset => asset.ExtractFinest()).ToArray();
+    var scene = PbrSceneAsset.Create(geometry, source.Materials.Span, source.Instances.Span, source.Attribution);
+    var bytes = scene.Encode();
+    _ = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
+    WriteAsset(stripScenePath, bytes);
+    Console.WriteLine(JsonSerializer.Serialize(new { Path = Path.GetFullPath(stripScenePath), Bytes = bytes.Length }));
+    return;
 }
 if (scenePath is not null) {
     if (sourcePath is null || args.Any(option => option.StartsWith("--", StringComparison.Ordinal) && option is not

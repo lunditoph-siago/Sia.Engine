@@ -13,8 +13,9 @@ public static partial class Program
         try {
             var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
-            var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath) : null;
+            var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath, finest) : null;
             using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera);
+            scene = null;
 #if BROWSER
             SetLoadingState("Preparing graphics", double.NaN);
             await Task.Delay(20);
@@ -46,7 +47,7 @@ public static partial class Program
         return asset;
     }
 
-    private static async Task<PbrSceneAsset> LoadPbrAsync(string? path)
+    private static async Task<PbrSceneAsset> LoadPbrAsync(string? path, bool finest)
     {
         var timer = Stopwatch.StartNew();
 #if BROWSER
@@ -54,11 +55,11 @@ public static partial class Program
         SetLoadingState("Preparing geometry and textures", double.NaN);
         await Task.Delay(20);
 #else
-        var bytes = await File.ReadAllBytesAsync(path ?? Path.Combine(AppContext.BaseDirectory, "Assets", "Bistro.siapbr"));
+        ReadOnlyMemory<byte> bytes = await File.ReadAllBytesAsync(path ?? Path.Combine(AppContext.BaseDirectory, "Assets", finest ? "BistroFinest.siapbr" : "Bistro.siapbr"));
 #endif
         var readMilliseconds = timer.Elapsed.TotalMilliseconds;
         timer.Restart();
-        var scene = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
+        var scene = PbrSceneAsset.Decode(bytes.Span, 512 * 1024 * 1024);
         Console.WriteLine(scene.Attribution);
         Console.WriteLine($"PBR scene: {bytes.Length} bytes; read {readMilliseconds:F2} ms, decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
             + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");

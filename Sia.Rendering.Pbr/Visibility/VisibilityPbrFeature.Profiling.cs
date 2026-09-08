@@ -11,7 +11,7 @@ public sealed partial class VisibilityPbrFeature
         "visibility-lod-project", "visibility-lod-select", "visibility-cull-main", "visibility-compact-main",
         "visibility-lod-emit", "visibility-raster", "visibility-hzb-main", "visibility-cull-post",
         "visibility-compact-post", "visibility-emit-post", "visibility-raster-post", "visibility-hzb-final",
-        "visibility-resolve", "visibility-output"
+        "visibility-material-tiles", "visibility-resolve", "visibility-output"
     ];
 
     public static ReadOnlySpan<string> GpuTimingStages => s_TimingStages;
