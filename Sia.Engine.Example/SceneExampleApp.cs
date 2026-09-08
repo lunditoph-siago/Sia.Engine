@@ -33,11 +33,13 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     public SceneExampleApp(ScenePipeline pipeline, Sia.Engine.Mesh.MeshPatchAsset? patchAsset = null,
         Sia.Engine.Rendering.Pbr.VisibilityDebugMode? debugMode = null, float? distance = null,
-        Sia.Engine.Rendering.Pbr.PbrSceneAsset? materialScene = null)
+        Sia.Engine.Rendering.Pbr.PbrSceneAsset? materialScene = null, bool finest = false, bool externalScene = false)
     {
         _pipeline = pipeline;
         _patchAsset = patchAsset;
         _materialScene = materialScene;
+        _finest = finest;
+        _externalScene = externalScene;
         _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny
             ? Sia.Engine.Rendering.Pbr.VisibilityDebugMode.Triangles : Sia.Engine.Rendering.Pbr.VisibilityDebugMode.Shaded);
         _patchDistance = distance ?? (pipeline == ScenePipeline.Pbr ? 1 : 0);

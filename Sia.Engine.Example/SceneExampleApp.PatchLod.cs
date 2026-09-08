@@ -119,13 +119,16 @@ internal sealed partial class SceneExampleApp
             _patchTourPhase = (_patchTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;
             _patchDistance = (1 - MathF.Cos(_patchTourPhase)) * 0.5f;
         }
-        var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies" : "9 cameras";
-        var status = $"{scene} | {_visibilityLod!.DebugMode} | Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
+        var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
+            : $"{_materialScene!.Instances.Length} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
+        var atmosphere = _pipeline == ScenePipeline.Pbr && _sceneWorld!.AcquireAddon<EnvironmentLighting>().Atmosphere is not null;
+        var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
+        var status = $"{scene} | {_visibilityLod!.DebugMode} | Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}{lighting}";
         if (_patchStatus != status) {
             _patchStatus = status;
             Glfw.SetTitle(_window, "Sia.Engine - " + status);
 #if BROWSER
-            SetInspectionStatus(status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles);
+            SetInspectionStatus(status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
 #endif
         }
     }
