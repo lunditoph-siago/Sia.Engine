@@ -8,160 +8,102 @@
   <script type="importmap"></script>
   <script type="module" src="main#[.{fingerprint}].js"></script>
   <style>
-    html,
-    body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-      background: #000;
-    }
-
-    #canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-    }
-
-    nav {
-      position: fixed;
-      top: max(12px, env(safe-area-inset-top));
-      left: max(12px, env(safe-area-inset-left));
-      display: flex;
-      flex-wrap: wrap;
-      right: 12px;
-      gap: 8px;
-      padding: 4px;
-      background: #17202ee6;
-      border-radius: 8px;
-      font: 14px system-ui, sans-serif;
-    }
-
-    nav a {
-      color: #fff;
-      padding: 12px 16px;
-      border-radius: 6px;
-    }
-
-    nav a[aria-current="page"] {
-      background: #34445c;
-      text-decoration: none;
-    }
-
-    #inspection {
-      position: fixed;
-      bottom: calc(44px + env(safe-area-inset-bottom));
-      left: max(12px, env(safe-area-inset-left));
-      right: max(12px, env(safe-area-inset-right));
-      max-width: 560px;
-      min-width: 0;
-      margin: 0;
-      padding: 12px;
-      border: 0;
-      border-radius: 8px;
-      background: #17202ee6;
-      color: white;
-      font: 13px system-ui, sans-serif;
-    }
-
-    #inspection-status {
-      margin-bottom: 4px;
-    }
-
-    .distance {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    #inspection-distance {
-      flex: 1;
-      min-width: 0;
-      height: 44px;
-      margin: 0;
-      accent-color: #96c8ff;
-    }
-
-    .controls {
-      display: flex;
-      gap: 8px;
-    }
-
-    .controls button {
-      flex: 1;
-      min-height: 44px;
-      padding: 8px;
-      border: 1px solid #7e93af;
-      border-radius: 6px;
-      color: white;
-      background: #34445c;
-      font: inherit;
-      touch-action: manipulation;
-    }
-
-    :focus-visible {
-      outline: 2px solid #96c8ff;
-      outline-offset: 2px;
-    }
-
-    .asset-credit {
-      position: fixed;
-      bottom: max(8px, env(safe-area-inset-bottom));
-      left: max(12px, env(safe-area-inset-left));
-      right: max(12px, env(safe-area-inset-right));
-      color: white;
-      font: 11px system-ui, sans-serif;
-    }
-
-    .keyboard-help {
-      margin: 8px 0 0;
-    }
-
-    #camera-pose {
-      box-sizing: border-box;
-      width: 100%;
-      margin: 6px 0;
-      padding: 6px;
-      color: white;
-      background: #17202e;
-      border: 1px solid #7e93af;
-      font: 12px monospace;
-    }
-
+    :root { color-scheme: dark; font: 14px system-ui, sans-serif; color: #edf2f7; background: #101419; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    #canvas { display: block; width: 100vw; height: 100vh; outline-offset: -3px; }
+    button, a, summary, input { -webkit-tap-highlight-color: transparent; }
+    button, a, summary { touch-action: manipulation; }
+    button { color: inherit; font: inherit; cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .5; }
     [hidden] { display: none !important; }
-
-    @media (pointer: coarse), (max-height: 500px) {
-      .keyboard-help { display: none; }
+    :focus-visible { outline: 2px solid #a8d2ef; outline-offset: 3px; }
+    .glass { background: #141b23ec; border: 1px solid #ffffff20; border-radius: 12px; box-shadow: 0 8px 30px #0003; }
+    .toolbar { position: fixed; z-index: 11; top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); right: max(16px, env(safe-area-inset-right)); display: flex; justify-content: space-between; gap: 12px; align-items: start; pointer-events: none; }
+    .toolbar > * { pointer-events: auto; }
+    nav { display: flex; align-items: center; gap: 4px; padding: 4px; }
+    .brand { padding: 0 16px; font-size: 12px; font-weight: 750; letter-spacing: .18em; color: #aab9c7; }
+    nav a { min-height: 40px; padding: 10px 14px; color: #b5c1cc; text-decoration: none; border-radius: 8px; }
+    nav a:hover, nav a[aria-current="page"] { background: #ffffff14; color: white; }
+    #settings-toggle { min-height: 48px; padding: 0 18px; }
+    #inspection { position: fixed; top: calc(max(16px, env(safe-area-inset-top)) + 62px); right: max(16px, env(safe-area-inset-right)); width: min(340px, calc(100vw - 32px)); max-height: calc(100dvh - 156px); overflow-y: auto; margin: 0; padding: 20px; }
+    .panel-title { margin: 0 0 16px; font-size: 17px; font-weight: 600; }
+    #inspection-status { margin: 0 0 16px; color: #aab9c7; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+    .controls { display: grid; gap: 8px; }
+    .controls button, #retry { min-height: 44px; padding: 10px 14px; background: #ffffff0a; border: 1px solid #ffffff24; border-radius: 8px; text-align: left; }
+    .controls button:hover, #retry:hover { background: #ffffff18; }
+    .distance { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: #b5c1cc; }
+    #inspection-distance { flex: 1; min-width: 0; height: 44px; accent-color: #9dc8e5; }
+    .help { margin-top: 20px; padding-top: 16px; border-top: 1px solid #ffffff18; }
+    summary { cursor: pointer; min-height: 32px; }
+    #inspection-help { line-height: 1.8; color: #b5c1cc; font-size: 12px; }
+    #explore-hint { position: fixed; left: max(20px, env(safe-area-inset-left)); bottom: max(20px, env(safe-area-inset-bottom)); margin: 0; padding: 8px 12px; border-radius: 8px; color: #e0e7ed; background: #101419b8; font-size: 12px; pointer-events: none; }
+    #credits { position: fixed; right: max(20px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); max-width: min(360px, calc(100vw - 40px)); color: #bdc9d3; font-size: 11px; background: #101419d9; border-radius: 8px; padding: 8px 12px; }
+    #credits summary { min-height: auto; text-align: right; }
+    .asset-credit { display: block; margin-top: 10px; color: inherit; line-height: 1.65; overflow-wrap: anywhere; }
+    #loading { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: #101419f5; padding: 32px; }
+    .loading-card { width: min(400px, 100%); }
+    .eyebrow { color: #8fa4b5; font-size: 11px; font-weight: 650; letter-spacing: .2em; text-transform: uppercase; }
+    #loading-title { margin: 14px 0 28px; font-size: clamp(30px, 6vw, 44px); font-weight: 500; letter-spacing: -.04em; }
+    .loading-line { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; }
+    #loading-progress { width: 100%; height: 5px; margin: 16px 0; accent-color: #a8d2ef; }
+    #loading-note { color: #94a4b2; font-size: 12px; line-height: 1.8; }
+    #retry { margin-top: 16px; text-align: center; }
+    #error-details { margin-top: 16px; color: #e5b5af; }
+    #error-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; font-size: 11px; }
+    @media (max-width: 560px) {
+      .toolbar { top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; gap: 8px; }
+      .brand { display: none; }
+      nav a { padding-inline: 12px; }
+      #settings-toggle { padding-inline: 12px; }
+      #inspection { top: 70px; right: 10px; width: calc(100vw - 20px); }
+      #explore-hint { display: none; }
     }
   </style>
 </head>
 <body>
   <canvas id="canvas" width="1280" height="720" tabindex="0" aria-label="Interactive rendering viewport"></canvas>
-  <nav aria-label="Examples">
-    <a href="?pipeline=bunny">Bunny</a>
-    <a href="?pipeline=pbr">PBR</a>
-    <a href="?pipeline=unlit">Unlit</a>
-  </nav>
-  <fieldset id="inspection" hidden disabled aria-label="Scene controls">
-    <div id="inspection-status">Loading scene&hellip;</div>
+  <div class="toolbar">
+    <nav class="glass" aria-label="Examples">
+      <span class="brand">SIA</span>
+      <a href="?pipeline=bunny">Bunny</a>
+      <a href="?pipeline=pbr">Bistro</a>
+      <a href="?pipeline=unlit">Unlit</a>
+    </nav>
+    <button id="settings-toggle" class="glass" type="button" aria-expanded="false" aria-controls="inspection" disabled>Settings</button>
+  </div>
+  <fieldset id="inspection" class="glass" hidden disabled aria-label="Scene settings">
+    <div class="panel-title">Scene settings</div>
+    <p id="inspection-status"></p>
     <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
     <div class="controls">
       <button id="inspection-tour" type="button">Pause tour</button>
-      <button id="inspection-material" type="button">Show shaded</button>
       <button id="inspection-reset" type="button">Return near</button>
-      <button id="inspection-atmosphere" type="button" hidden>Toggle atmosphere</button>
-      <button id="inspection-lod" type="button" hidden>Compare finest</button>
+      <button id="inspection-material" type="button">Show triangles</button>
+      <button id="inspection-atmosphere" type="button" hidden>Enable atmosphere</button>
+      <button id="inspection-lod" type="button" hidden>Compare automatic LOD</button>
     </div>
-    <div id="camera-controls" hidden>
-      <label for="camera-pose">Camera: position X/Y/Z, target X/Y/Z</label>
-      <input id="camera-pose" type="text" readonly spellcheck="false" />
-      <div class="controls"><button id="camera-copy" type="button">Copy camera</button></div>
-    </div>
-    <p id="inspection-help" class="keyboard-help">W / S or &uarr; / &darr;: near / far &middot; Space: pause &middot; M: material &middot; R: reset</p>
+    <details class="help">
+      <summary>Controls</summary>
+      <p id="inspection-help">W / S or ↑ / ↓: near / far · Space: pause · M: material · R: reset</p>
+    </details>
   </fieldset>
-  <a id="bunny-credit" class="asset-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">
-    Stanford Bunny &middot; Stanford University Computer Graphics Laboratory
-  </a>
-  <div id="pbr-credit" class="asset-credit" hidden></div>
+  <p id="explore-hint" hidden>WASD to move · Right-drag to look</p>
+  <details id="credits" hidden>
+    <summary>Credits</summary>
+    <a id="bunny-credit" class="asset-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">Stanford Bunny · Stanford University Computer Graphics Laboratory</a>
+    <div id="pbr-credit" class="asset-credit" hidden></div>
+  </details>
+  <section id="loading" role="status" aria-live="polite" aria-busy="true">
+    <div class="loading-card">
+      <div class="eyebrow">Sia Engine / Interactive scene</div>
+      <h1 id="loading-title">Bistro</h1>
+      <div class="loading-line"><span id="loading-stage">Starting engine</span><span id="loading-percent"></span></div>
+      <progress id="loading-progress" max="1" aria-label="Scene loading progress"></progress>
+      <p id="loading-note">The first visit downloads and prepares the scene. This may take a minute.</p>
+      <button id="retry" type="button" hidden>Try again</button>
+      <details id="error-details" hidden><summary>Error details</summary><pre id="error-output"></pre></details>
+    </div>
+  </section>
 </body>
 </html>
