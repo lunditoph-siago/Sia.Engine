@@ -23,12 +23,6 @@ internal sealed unsafe partial class SceneExampleApp
 
     private World? _sceneWorld;
     private SystemStage? _sceneStage;
-    private PbrDepthPrepassPipeline? _depthPipeline;
-    private ForwardPbrPipeline? _forwardPipeline;
-    private PipelineCache<RenderPipelineKey, ForwardPbrPipeline>? _forwardPipelineCache;
-    private PbrClusterLightCullingPipeline? _cullingPipeline;
-    private PbrShadowDepthPipeline? _shadowDepthPipeline;
-    private PbrIblPrecomputePipelines? _iblPipelines;
     private PbrRenderer? _sceneRenderer;
     private RenderWorld? _renderWorld;
     private RenderFeaturePipeline<RenderFrameContext>? _renderPipeline;
@@ -75,21 +69,9 @@ internal sealed unsafe partial class SceneExampleApp
             return;
         }
 
-        _depthPipeline = PbrDepthPrepassPipeline.Create(
-            _renderGraphWorld!, _renderDevice, WGPUTextureFormat.Depth32Float);
-        _forwardPipelineCache = new PipelineCache<RenderPipelineKey, ForwardPbrPipeline>();
-        _forwardPipeline = ForwardPbrPipeline.GetOrCreate(
-            _forwardPipelineCache,
-            _renderGraphWorld!,
-            _renderDevice,
-            PbrOutputPipelines.HdrFormat,
-            WGPUTextureFormat.Depth32Float,
-            ForwardPbrPipelineDescriptor.Default);
-        _cullingPipeline = PbrClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice);
-        _shadowDepthPipeline = PbrShadowDepthPipeline.Create(_renderGraphWorld!, _renderDevice);
-        _iblPipelines = PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice);
         _sceneRenderer = new PbrRenderer(
-            _depthPipeline, _forwardPipeline, _cullingPipeline, _shadowDepthPipeline, _iblPipelines,
+            PbrClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
+            PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice),
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
         InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
@@ -213,12 +195,6 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld = null;
         _renderWorld?.Dispose();
         _renderWorld = null;
-        _depthPipeline = null;
-        _forwardPipeline = null;
-        _forwardPipelineCache?.Dispose();
-        _forwardPipelineCache = null;
-        _cullingPipeline = null;
-        _shadowDepthPipeline = null;
         _sceneRenderer = null;
         _renderPipeline = null;
     }
