@@ -91,7 +91,7 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     let bary = weights / denominator;
     let dx = vec3<f32>(cofactor_a.x, cofactor_b.x, cofactor_c.x) * (2.0 / f32(size.x));
     let dy = vec3<f32>(cofactor_a.y, cofactor_b.y, cofactor_c.y) * (-2.0 / f32(size.y));
-    let mode = visibility_camera.size_counts.w;
+    let mode = visibility_camera.size_counts.w & 255u;
     if (mode == 4u) {
         clear_surface(pixel);
         let gradient_x = (dx - bary * dot(dx, vec3<f32>(1.0))) / denominator;
@@ -139,7 +139,7 @@ fn resolve(@builtin(global_invocation_id) thread: vec3<u32>) {
     textureStore(emissive_occlusion, pixel, vec4<f32>(emissive, occlusion));
     let position = world_a.xyz * bary.x + world_b.xyz * bary.y + world_c.xyz * bary.z;
     var color = base_color;
-    if (mode == 0u) {
+    if (mode == 0u && (visibility_camera.size_counts.w & 256u) == 0u) {
         color = direct_lighting(normal, safe_normalize(visibility_camera.eye.xyz - position),
             visibility_camera.light_direction.xyz, visibility_camera.light_radiance.xyz,
             base_color, metallic, roughness) + emissive;

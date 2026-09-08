@@ -71,9 +71,11 @@ internal sealed partial class AtmosphereGpuState
     {
         if (!_compositeGroup.IsValid || source.DangerousGetHandle() != _compositeSource.DangerousGetHandle()
             || depth.DangerousGetHandle() != _compositeDepth.DangerousGetHandle()) {
+            var next = PbrTextureBindGroups.Create(frame.ResourceWorld, frame.Device.GetWgpu<WGPUDevice>(), _pipelines.CompositeLayout,
+                [TextureEntry(0, source), TextureEntry(1, depth), TextureEntry(2, _views[3].GetWgpu<WGPUTextureView>()),
+                    TextureEntry(3, _views[4].GetWgpu<WGPUTextureView>())], source, depth);
             if (_compositeGroup.IsValid) { _compositeGroup.Destroy(); }
-            _compositeGroup = BindGroup(frame, _pipelines.CompositeLayout, [TextureEntry(0, source), TextureEntry(1, depth),
-                TextureEntry(2, _views[3].GetWgpu<WGPUTextureView>()), TextureEntry(3, _views[4].GetWgpu<WGPUTextureView>())]);
+            _compositeGroup = next;
             _compositeSource = source;
             _compositeDepth = depth;
         }
