@@ -39,7 +39,7 @@ public sealed partial class VisibilityPbrFeature
             BufferLayout(4, WGPUBufferBindingType.Storage, 20, WGPUShaderStage.Compute),
             BufferLayout(5, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
             BufferLayout(6, WGPUBufferBindingType.Storage, 80, WGPUShaderStage.Compute),
-            BufferLayout(7, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute)
+            BufferLayout(7, WGPUBufferBindingType.Storage, 8, WGPUShaderStage.Compute)
         ], acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityLod(), "visibility-lod"), acquired);
         var pipelineLayout = PipelineLayout(world, device, [layout], acquired);
