@@ -25,6 +25,7 @@ struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: ar
 var<private> heap_size: u32;
 var<private> heap_peak: u32;
 var<workgroup> frontier: vec4<u32>;
+var<workgroup> heap_cache: array<vec4<u32>, 256>;
 
 fn finite(value: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(value) & vec4<u32>(0x7f800000u)) != vec4<u32>(0x7f800000u));
@@ -91,43 +92,61 @@ fn project_node(node_id: u32, instance: u32) -> PatchState {
     return PatchState(projected_error(node, matrix), node_id + 1u, 0u, 0u, instance);
 }
 
-fn precedes(a: u32, b: u32) -> bool {
-    let same_instance = states[a].instance == states[b].instance;
-    let earlier = states[a].instance < states[b].instance || (same_instance && states[a].node_id < states[b].node_id);
-    return states[a].error > states[b].error || (states[a].error == states[b].error && earlier);
+fn heap_item(index: u32) -> vec4<u32> {
+    let state = states[index];
+    return vec4<u32>(index, state.error, state.instance, state.node_id);
+}
+
+fn read_heap(position: u32) -> vec4<u32> {
+    if (position < 256u) { return heap_cache[position]; }
+    return heap_item(heap[position]);
+}
+
+fn write_heap(position: u32, item: vec4<u32>) {
+    if (position < 256u) { heap_cache[position] = item; }
+    else { heap[position] = item.x; }
+}
+
+fn precedes(a: vec4<u32>, b: vec4<u32>) -> bool {
+    let earlier = a.z < b.z || (a.z == b.z && a.w < b.w);
+    return a.y > b.y || (a.y == b.y && earlier);
 }
 
 fn push(index: u32) {
-    if (patches[states[index].node_id - 1u].children.y == 0u || states[index].error <= parameters.budget.w) { return; }
+    let item = heap_item(index);
+    if (item.y <= parameters.budget.w || patches[item.w - 1u].children.y == 0u) { return; }
     var position = heap_size;
     heap_size++;
     heap_peak = max(heap_peak, heap_size);
     while (position > 0u) {
         let parent = (position - 1u) / 2u;
-        if (!precedes(index, heap[parent])) { break; }
-        heap[position] = heap[parent];
+        let parent_item = read_heap(parent);
+        if (!precedes(item, parent_item)) { break; }
+        write_heap(position, parent_item);
         position = parent;
     }
-    heap[position] = index;
+    write_heap(position, item);
 }
 
 fn pop() -> u32 {
-    let result = heap[0];
+    let result = read_heap(0u).x;
     heap_size--;
     if (heap_size == 0u) { return result; }
-    let last = heap[heap_size];
+    let last = read_heap(heap_size);
     var position = 0u;
     loop {
         var child = position * 2u + 1u;
         if (child >= heap_size) { break; }
+        var child_item = read_heap(child);
         if (child + 1u < heap_size) {
-            if (precedes(heap[child + 1u], heap[child])) { child++; }
+            let right = read_heap(child + 1u);
+            if (precedes(right, child_item)) { child++; child_item = right; }
         }
-        if (!precedes(heap[child], last)) { break; }
-        heap[position] = heap[child];
+        if (!precedes(child_item, last)) { break; }
+        write_heap(position, child_item);
         position = child;
     }
-    heap[position] = last;
+    write_heap(position, last);
     return result;
 }
 
