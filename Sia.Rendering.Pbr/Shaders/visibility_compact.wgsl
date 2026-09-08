@@ -1,8 +1,9 @@
 struct Patch { minimum_error: vec4<f32>, maximum: vec4<f32>, children: vec4<u32>, geometry: vec4<u32> }
+struct PatchState { error: u32, node_id: u32, offset: u32, visibility: u32, instance: u32 }
 struct Parameters { counts: vec4<u32>, range: vec4<u32> }
 @group(0) @binding(0) var<uniform> parameters: Parameters;
 @group(0) @binding(1) var<storage, read> patches: array<Patch>;
-@group(0) @binding(2) var<storage, read_write> states: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> states: array<PatchState>;
 @group(0) @binding(3) var<storage, read_write> scratch: array<u32>;
 @group(0) @binding(4) var<storage, read_write> status: array<atomic<u32>>;
 var<workgroup> partial: array<vec4<u32>, 256>;
@@ -28,17 +29,17 @@ fn local_prefix(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocati
     var value = vec4<u32>(0u);
     if (index < atomicLoad(&status[16])) {
         let state = states[index];
-        if (state.y != 0u) {
-            let triangles = patches[(state.y - 1u) % parameters.counts.y].geometry.z;
+        if (state.node_id != 0u) {
+            let triangles = patches[state.node_id - 1u].geometry.z;
             if (parameters.counts.w == 0u) {
-                value = vec4<u32>(select(0u, triangles, state.w == 0u), u32(state.w == 1u), u32(state.w == 2u), state.x);
+                value = vec4<u32>(select(0u, triangles, state.visibility == 0u), u32(state.visibility == 1u), u32(state.visibility == 2u), state.error);
             } else {
-                value = vec4<u32>(select(0u, triangles, state.w == 4u), u32(state.w == 4u), 0u, 0u);
+                value = vec4<u32>(select(0u, triangles, state.visibility == 4u), u32(state.visibility == 4u), 0u, 0u);
             }
         }
     }
     let total = prefix(value, lane);
-    if (value.x != 0u) { states[index].z = total.x - value.x; }
+    if (value.x != 0u) { states[index].offset = total.x - value.x; }
     if (lane == 255u) {
         scratch[block] = total.x;
         if (parameters.counts.w == 0u) {
@@ -88,10 +89,10 @@ fn finish(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_ind
     if (parameters.counts.w != 0u) { start = atomicLoad(&status[0]) / 3u; }
     if (index < atomicLoad(&status[16])) {
         let state = states[index];
-        if (state.y != 0u && state.w == select(0u, 4u, parameters.counts.w != 0u)) {
+        if (state.node_id != 0u && state.visibility == select(0u, 4u, parameters.counts.w != 0u)) {
             var offset = start;
             if (parameters.counts.x > 256u) { offset += scratch[block]; }
-            states[index].z += offset;
+            states[index].offset += offset;
         }
     }
     if (index == 0u) {

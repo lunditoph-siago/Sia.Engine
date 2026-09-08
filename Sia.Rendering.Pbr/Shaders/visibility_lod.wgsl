@@ -4,9 +4,10 @@ struct Camera {
 }
 struct Instance {
     transform: mat4x4<f32>, normal_transform: mat4x4<f32>,
-    color: vec4<f32>, material: vec4<f32>, emissive: vec4<f32>,
+    color: vec4<f32>, material: vec4<f32>, emissive: vec4<f32>, roots: vec4<u32>,
 }
 struct Patch { minimum_error: vec4<f32>, maximum: vec4<f32>, children: vec4<u32>, geometry: vec4<u32> }
+struct PatchState { error: u32, node_id: u32, offset: u32, visibility: u32, instance: u32 }
 struct Parameters { counts: vec4<u32>, budget: vec4<u32>, traversal: vec4<u32> }
 struct Status { draw: vec4<u32>, selection: vec4<u32>, post_draw: vec4<u32>, culling: vec4<u32>, traversal: vec4<u32> }
 struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: array<vec4<u32>, 32> }
@@ -14,7 +15,7 @@ struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: ar
 @group(0) @binding(1) var<uniform> parameters: Parameters;
 @group(0) @binding(2) var<storage, read> patches: array<Patch>;
 @group(0) @binding(3) var<storage, read> instances: array<Instance>;
-@group(0) @binding(4) var<storage, read_write> states: array<vec4<u32>>;
+@group(0) @binding(4) var<storage, read_write> states: array<PatchState>;
 @group(0) @binding(5) var<storage, read_write> heap: array<u32>;
 @group(0) @binding(6) var<storage, read_write> status: Status;
 @group(0) @binding(7) var<storage, read_write> work: array<vec4<u32>>;
@@ -75,24 +76,29 @@ fn projected_error(node: Patch, source_matrix: mat4x4<f32>) -> u32 {
 
 @compute @workgroup_size(64)
 fn project(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
-    let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
-    if (index >= parameters.counts.y * parameters.counts.z) { return; }
-    states[index] = project_node((index / parameters.counts.y) * parameters.counts.x + index % parameters.counts.y);
+    let instance = group.y * parameters.counts.w + group.x;
+    if (instance >= parameters.counts.z) { return; }
+    let roots = instances[instance].roots;
+    for (var root = lane; root < roots.y; root += 64u) {
+        states[roots.z + root] = project_node(roots.x + root, instance);
+    }
 }
 
-fn project_node(index: u32) -> vec4<u32> {
-    let node = patches[index % parameters.counts.x];
-    let matrix = camera.view_projection * instances[index / parameters.counts.x].transform;
-    if (outside_frustum(node, matrix)) { return vec4<u32>(0u, index + 1u, 0u, 1u); }
-    return vec4<u32>(projected_error(node, matrix), index + 1u, 0u, 0u);
+fn project_node(node_id: u32, instance: u32) -> PatchState {
+    let node = patches[node_id];
+    let matrix = camera.view_projection * instances[instance].transform;
+    if (outside_frustum(node, matrix)) { return PatchState(0u, node_id + 1u, 0u, 1u, instance); }
+    return PatchState(projected_error(node, matrix), node_id + 1u, 0u, 0u, instance);
 }
 
 fn precedes(a: u32, b: u32) -> bool {
-    return states[a].x > states[b].x || (states[a].x == states[b].x && states[a].y < states[b].y);
+    let same_instance = states[a].instance == states[b].instance;
+    let earlier = states[a].instance < states[b].instance || (same_instance && states[a].node_id < states[b].node_id);
+    return states[a].error > states[b].error || (states[a].error == states[b].error && earlier);
 }
 
 fn push(index: u32) {
-    if (patches[(states[index].y - 1u) % parameters.counts.x].children.y == 0u || states[index].x <= parameters.budget.w) { return; }
+    if (patches[states[index].node_id - 1u].children.y == 0u || states[index].error <= parameters.budget.w) { return; }
     var position = heap_size;
     heap_size++;
     heap_peak = max(heap_peak, heap_size);
@@ -137,9 +143,11 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
         heap_size = 0u;
         heap_peak = 0u;
         for (var instance = 0u; instance < parameters.counts.z; instance++) {
-            for (var root = 0u; root < parameters.counts.y; root++) {
-                let index = instance * parameters.counts.y + root;
-                totals += vec3<u32>(1u, patches[root].geometry.x, patches[root].geometry.z);
+            let roots = instances[instance].roots;
+            for (var root = 0u; root < roots.y; root++) {
+                let index = roots.z + root;
+                let node = patches[roots.x + root];
+                totals += vec3<u32>(1u, node.geometry.x, node.geometry.z);
                 push(index);
             }
         }
@@ -153,8 +161,8 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
                 if (candidates == parameters.traversal.x) { limited = true; break; }
                 let index = pop();
                 candidates++;
-                let source = states[index].y - 1u;
-                let node = patches[source % parameters.counts.x];
+                let source = states[index].node_id - 1u;
+                let node = patches[source];
                 let next = totals - vec3<u32>(1u, node.geometry.x, node.geometry.z)
                     + vec3<u32>(node.children.y, node.children.z, node.children.w);
                 if (any(next > parameters.budget.xyz) || node.children.y > parameters.traversal.y - refined_nodes) {
@@ -163,8 +171,8 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
                 }
                 totals = next;
                 refinements++;
-                frontier = vec4<u32>(index, (source / parameters.counts.x) * parameters.counts.x + node.children.x,
-                    node.children.y, parameters.counts.y * parameters.counts.z + refined_nodes);
+                frontier = vec4<u32>(index, node.children.x,
+                    node.children.y, parameters.counts.y + refined_nodes);
                 refined_nodes += node.children.y;
                 break;
             }
@@ -172,11 +180,11 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
         let next = workgroupUniformLoad(&frontier);
         if (next.z == 0u) { break; }
         for (var child = lane; child < next.z; child += 64u) {
-            states[next.w + child] = project_node(next.y + child);
+            states[next.w + child] = project_node(next.y + child, states[next.x].instance);
         }
         storageBarrier();
         if (lane == 0u) {
-            states[next.x].y = 0u;
+            states[next.x].node_id = 0u;
             for (var child = 0u; child < next.z; child++) { push(next.w + child); }
         }
     }
@@ -185,7 +193,7 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
         status.post_draw = vec4<u32>(0u, 1u, 0u, 0u);
         status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), 0u);
         status.culling = vec4<u32>(totals.z, 0u, 0u, 0u);
-        status.traversal = vec4<u32>(parameters.counts.y * parameters.counts.z + refined_nodes, candidates, refinements, heap_peak);
+        status.traversal = vec4<u32>(parameters.counts.y + refined_nodes, candidates, refinements, heap_peak);
         dispatch_size(0u, (status.traversal.x + 63u) / 64u);
         dispatch_size(3u, status.traversal.x);
         var count = status.traversal.x;
@@ -207,11 +215,11 @@ fn dispatch_size(offset: u32, size: u32) {
 fn emit_work(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = group.y * parameters.counts.w + group.x;
     if (index >= status.traversal.x) { return; }
-    if (states[index].y == 0u || states[index].w != 0u) { return; }
-    let source = states[index].y - 1u;
-    let node = patches[source % parameters.counts.x];
+    if (states[index].node_id == 0u || states[index].visibility != 0u) { return; }
+    let source = states[index].node_id - 1u;
+    let node = patches[source];
     for (var triangle = lane; triangle < node.geometry.z; triangle += 64u) {
-        work[states[index].z + triangle] = vec4<u32>(node.geometry.y + triangle, source / parameters.counts.x, 0u, 0u);
+        work[states[index].offset + triangle] = vec4<u32>(node.geometry.y + triangle, states[index].instance, node.geometry.w, 0u);
     }
 }
 
@@ -274,12 +282,12 @@ fn occluded(node: Patch, matrix: mat4x4<f32>) -> bool {
 fn cull_main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
     if (index >= status.traversal.x) { return; }
-    if (states[index].y == 0u || states[index].w == 1u) { return; }
-    let source = states[index].y - 1u;
-    let node = patches[source % parameters.counts.x];
-    let transform = instances[source / parameters.counts.x].transform;
+    if (states[index].node_id == 0u || states[index].visibility == 1u) { return; }
+    let source = states[index].node_id - 1u;
+    let node = patches[source];
+    let transform = instances[states[index].instance].transform;
     if (hierarchy.size.w != 0u) {
-        if (occluded(node, hierarchy.previous_projection * transform)) { states[index].w = 2u; }
+        if (occluded(node, hierarchy.previous_projection * transform)) { states[index].visibility = 2u; }
     }
 }
 
@@ -287,20 +295,20 @@ fn cull_main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
 fn cull_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
     if (index >= status.traversal.x) { return; }
-    if (states[index].y == 0u || states[index].w != 2u) { return; }
-    let source = states[index].y - 1u;
-    let matrix = camera.view_projection * instances[source / parameters.counts.x].transform;
-    states[index].w = select(4u, 3u, occluded(patches[source % parameters.counts.x], matrix));
+    if (states[index].node_id == 0u || states[index].visibility != 2u) { return; }
+    let source = states[index].node_id - 1u;
+    let matrix = camera.view_projection * instances[states[index].instance].transform;
+    states[index].visibility = select(4u, 3u, occluded(patches[source], matrix));
 }
 
 @compute @workgroup_size(64)
 fn emit_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = group.y * parameters.counts.w + group.x;
     if (index >= status.traversal.x) { return; }
-    if (states[index].y == 0u || states[index].w != 4u) { return; }
-    let source = states[index].y - 1u;
-    let node = patches[source % parameters.counts.x];
+    if (states[index].node_id == 0u || states[index].visibility != 4u) { return; }
+    let source = states[index].node_id - 1u;
+    let node = patches[source];
     for (var triangle = lane; triangle < node.geometry.z; triangle += 64u) {
-        work[states[index].z + triangle] = vec4<u32>(node.geometry.y + triangle, source / parameters.counts.x, 0u, 0u);
+        work[states[index].offset + triangle] = vec4<u32>(node.geometry.y + triangle, states[index].instance, node.geometry.w, 0u);
     }
 }

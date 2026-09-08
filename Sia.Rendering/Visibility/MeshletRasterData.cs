@@ -18,6 +18,47 @@ public sealed class MeshletRasterData
         Triangles = triangles;
     }
 
+    public static MeshletRasterData Combine(ReadOnlySpan<MeshletRasterData> assets)
+    {
+        int vertexCount = 0, meshletCount = 0, indexCount = 0, triangleCount = 0;
+        foreach (var asset in assets) {
+            ArgumentNullException.ThrowIfNull(asset);
+            vertexCount = checked(vertexCount + asset.Vertices.Length);
+            meshletCount = checked(meshletCount + asset.Meshlets.Length);
+            indexCount = checked(indexCount + asset.Indices.Length);
+            triangleCount = checked(triangleCount + asset.Triangles.Length);
+        }
+        var vertices = new MeshVertex[vertexCount];
+        var meshlets = new uint4[meshletCount];
+        var indices = new uint[indexCount];
+        var triangles = new uint4[triangleCount];
+        int vertexOffset = 0, meshletOffset = 0, indexOffset = 0, triangleOffset = 0;
+        foreach (var asset in assets) {
+            asset.Vertices.Span.CopyTo(vertices.AsSpan(vertexOffset));
+            var references = asset.Indices.Length - asset.Triangles.Length;
+            var packedOffset = indexCount - triangleCount + triangleOffset;
+            for (var i = 0; i < references; i++) {
+                indices[indexOffset + i] = checked(asset.Indices.Span[i] + (uint)vertexOffset);
+            }
+            asset.Indices.Span[references..].CopyTo(indices.AsSpan(packedOffset));
+            for (var i = 0; i < asset.Meshlets.Length; i++) {
+                var meshlet = asset.Meshlets.Span[i];
+                meshlets[meshletOffset + i] = meshlet with {
+                    x = checked(meshlet.x + (uint)indexOffset),
+                    y = checked(meshlet.y - (uint)references + (uint)packedOffset)
+                };
+            }
+            for (var i = 0; i < asset.Triangles.Length; i++) {
+                triangles[triangleOffset + i] = asset.Triangles.Span[i] + new uint4((uint)meshletOffset, 0, 0, 0);
+            }
+            vertexOffset += asset.Vertices.Length;
+            meshletOffset += asset.Meshlets.Length;
+            indexOffset += references;
+            triangleOffset += asset.Triangles.Length;
+        }
+        return new(vertices, meshlets, indices, triangles);
+    }
+
     public static MeshletRasterData Create(MeshData mesh, MeshletData meshlets)
     {
         ArgumentNullException.ThrowIfNull(mesh);

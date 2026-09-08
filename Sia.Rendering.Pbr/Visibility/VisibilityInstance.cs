@@ -2,7 +2,10 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-public readonly record struct VisibilityInstance(float4x4 Transform, PbrMaterial Material);
+public readonly record struct VisibilityInstance(float4x4 Transform, PbrMaterial Material)
+{
+    public int AssetIndex { get; init; }
+}
 
 public enum VisibilityDebugMode
 {
