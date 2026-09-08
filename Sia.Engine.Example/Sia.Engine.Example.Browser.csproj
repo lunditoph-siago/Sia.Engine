@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets/bunny.siapatch" LogicalName="Sia.Engine.Example.bunny.siapatch" />
+    <EmbeddedResource Include="Assets/scene.siapbr" LogicalName="Sia.Engine.Example.scene.siapbr" />
     <Compile Remove="obj_desktop\**" />
     <EmbeddedResource Remove="obj_desktop\**" />
     <None Remove="obj_desktop\**" />

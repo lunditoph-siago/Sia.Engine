@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Sia.GLFW;
 using Sia.Input;
 using Sia.WebGPU;
@@ -27,15 +29,19 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private bool _surfaceConfigured;
     private bool _disposed;
     private readonly ScenePipeline _pipeline;
+    private static string? _gpuError;
 
     public SceneExampleApp(ScenePipeline pipeline, Sia.Engine.Mesh.MeshPatchAsset? patchAsset = null,
-        Sia.Engine.Rendering.Pbr.VisibilityDebugMode? debugMode = null, float? distance = null)
+        Sia.Engine.Rendering.Pbr.VisibilityDebugMode? debugMode = null, float? distance = null,
+        Sia.Engine.Rendering.Pbr.PbrSceneAsset? materialScene = null)
     {
         _pipeline = pipeline;
         _patchAsset = patchAsset;
-        _patchDebugMode = debugMode ?? Sia.Engine.Rendering.Pbr.VisibilityDebugMode.Triangles;
-        _patchDistance = distance ?? 0;
-        _patchTour = distance is null;
+        _materialScene = materialScene;
+        _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny
+            ? Sia.Engine.Rendering.Pbr.VisibilityDebugMode.Triangles : Sia.Engine.Rendering.Pbr.VisibilityDebugMode.Shaded);
+        _patchDistance = distance ?? (pipeline == ScenePipeline.Pbr ? 1 : 0);
+        _patchTour = distance is null && pipeline == ScenePipeline.Bunny;
     }
 
     public void Run()
@@ -48,6 +54,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         var previousTime = clock.Elapsed.TotalSeconds;
 
         while (!Glfw.ShouldClose(_window)) {
+            ThrowGpuError();
             Glfw.PollEvents();
 
             var currentTime = clock.Elapsed.TotalSeconds;
@@ -92,7 +99,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
 
-        _device = Wgpu.RequestDevice(_adapter);
+        _device = Wgpu.RequestDevice(_adapter, CreateDeviceDescriptor());
         _queue = Wgpu.GetQueue(_device);
 
         InitializeRenderGraph();
@@ -112,6 +119,44 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         BackendType = WGPUBackendType.Undefined,
         CompatibleSurface = Pointer(_surface),
     };
+
+    private static WGPUDeviceDescriptor CreateDeviceDescriptor()
+    {
+        var descriptor = WGPUDeviceDescriptor.Default;
+#if BROWSER
+        descriptor.UncapturedErrorCallbackInfo.Callback =
+            (delegate* unmanaged[Cdecl]<WGPUDevice**, WGPUErrorType, WGPUStringView, void*, void*, void>)
+            (delegate* unmanaged[Cdecl]<WGPUDevice**, WGPUErrorType, WGPUStringView*, void*, void*, void>)&OnBrowserGpuError;
+#else
+        descriptor.UncapturedErrorCallbackInfo.Callback = &OnGpuError;
+#endif
+        return descriptor;
+    }
+
+#if BROWSER
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnBrowserGpuError(WGPUDevice** device, WGPUErrorType type, WGPUStringView* message, void* userdata1, void* userdata2)
+    {
+        ReportGpuError(type, *message);
+    }
+#else
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnGpuError(WGPUDevice** device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2)
+    {
+        ReportGpuError(type, message);
+    }
+#endif
+
+    private static void ReportGpuError(WGPUErrorType type, WGPUStringView message)
+    {
+        var error = $"WebGPU {type}: {Marshal.PtrToStringUTF8((nint)message.Data, checked((int)message.Length))}";
+        if (Interlocked.CompareExchange(ref _gpuError, error, null) is null) Console.Error.WriteLine(error);
+    }
+
+    private static void ThrowGpuError()
+    {
+        if (Volatile.Read(ref _gpuError) is { } error) throw new WgpuException(error);
+    }
 
     private static WgpuHandle<WGPUSurface> CreateSurface(
         WgpuHandle<WGPUInstance> instance,

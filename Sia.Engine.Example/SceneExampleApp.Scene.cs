@@ -91,8 +91,9 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneRenderer = new PbrRenderer(
             _depthPipeline, _forwardPipeline, _cullingPipeline, _shadowDepthPipeline, _iblPipelines,
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
+        InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer))
+            .Add(new PbrRenderFeature(_sceneRenderer, visibility: _visibilityLod))
             .Build();
     }
 
@@ -108,6 +109,7 @@ internal sealed unsafe partial class SceneExampleApp
             new Node<SceneGraph>(null),
             CameraMatrices.Identity));
         if (_pipeline == ScenePipeline.Bunny) { return; }
+        if (_pipeline == ScenePipeline.Pbr) { BuildMaterialScene(); return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
         var groundHandle = meshRegistry.Register(groundMesh);
@@ -119,15 +121,11 @@ internal sealed unsafe partial class SceneExampleApp
             new WorldBounds(groundMesh.Bounds),
             new MeshComponent(groundHandle),
             new UnlitMaterial(new float4(0.12f, 0.16f, 0.22f, 1.0f)),
-            new PbrMaterial(
-                new float3(0.35f, 0.38f, 0.42f), Metallic: 0.0f, Roughness: 0.9f,
-                EmissiveColor: float3.zero, EmissiveStrength: 0.0f),
             new MeshRenderer()));
 
         var sphereMesh = ProceduralMesh.Sphere(radius: 0.45f);
         var sphereHandle = meshRegistry.Register(sphereMesh);
         var gridSteps = _gridExtent * 2;
-        var baseColor = new float3(0.8f, 0.8f, 0.8f);
 
         for (var gx = -_gridExtent; gx <= _gridExtent; gx++) {
             for (var gz = -_gridExtent; gz <= _gridExtent; gz++) {
@@ -147,22 +145,9 @@ internal sealed unsafe partial class SceneExampleApp
                         0.15f + 0.8f * roughness,
                         0.85f - 0.55f * metallic,
                         1.0f)),
-                    new PbrMaterial(
-                        baseColor, Metallic: metallic, Roughness: System.MathF.Max(roughness, 0.045f),
-                        EmissiveColor: float3.zero, EmissiveStrength: 0.0f),
                     new MeshRenderer()));
             }
         }
-
-        var sunDirection = math.normalize(new float3(0.4f, 1.0f, 0.3f));
-        var sunRotation = quaternion.LookRotation(math.normalize(sunDirection), new float3(0, 1, 0));
-        world.Create(HList.From(
-            new DirectionalLight(),
-            new ShadowCaster(),
-            new LightColor(new float3(1.0f, 0.96f, 0.9f), 2.0f),
-            new Transform(float3.zero, sunRotation, new float3(1, 1, 1)),
-            GlobalTransform.Identity,
-            new Node<SceneGraph>(null)));
 
         var occluderMesh = ProceduralMesh.Cube(size: 1.6f);
         var occluderHandle = meshRegistry.Register(occluderMesh);
@@ -174,24 +159,7 @@ internal sealed unsafe partial class SceneExampleApp
             new WorldBounds(occluderMesh.Bounds),
             new MeshComponent(occluderHandle),
             new UnlitMaterial(new float4(1.0f, 0.55f, 0.12f, 1.0f)),
-            new PbrMaterial(
-                new float3(0.8f, 0.8f, 0.8f), Metallic: 0.0f, Roughness: 0.7f,
-                EmissiveColor: float3.zero, EmissiveStrength: 0.0f),
             new MeshRenderer()));
-
-        CreatePointLight(world, new float3(-5.0f, 4.0f, -5.0f), new float3(1.0f, 0.25f, 0.2f), 24.0f, 16.0f);
-        CreatePointLight(world, new float3(5.0f, 4.0f, -5.0f), new float3(0.2f, 1.0f, 0.3f), 24.0f, 16.0f);
-        CreatePointLight(world, new float3(-5.0f, 4.0f, 5.0f), new float3(0.25f, 0.4f, 1.0f), 24.0f, 16.0f);
-        CreatePointLight(world, new float3(5.0f, 4.0f, 5.0f), new float3(1.0f, 0.95f, 0.7f), 24.0f, 16.0f);
-
-        var spotRotation = quaternion.LookRotation(math.normalize(new float3(0.0f, 1.0f, -0.15f)), new float3(0, 0, 1));
-        world.Create(HList.From(
-            new SpotLight(Range: 8.0f, InnerAngle: 0.25f, OuterAngle: 0.45f),
-            new ShadowCaster(),
-            new LightColor(new float3(0.4f, 0.7f, 1.0f), 10.0f),
-            new Transform(new float3(0.0f, 3.5f, 2.2f), spotRotation, new float3(1, 1, 1)),
-            GlobalTransform.Identity,
-            new Node<SceneGraph>(null)));
 
     }
 
@@ -212,6 +180,13 @@ internal sealed unsafe partial class SceneExampleApp
             target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = PatchEye(aspect, target);
+        } else if (_pipeline == ScenePipeline.Pbr) {
+            UpdatePatchInspection(deltaTime);
+            UpdateMaterialScene(deltaTime);
+            target = math.lerp(new float3(0, 1.5f, 3), new float3(0, 1.1f, 0), _patchDistance);
+            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
+            var distance = 3f * MathF.Pow(System.Math.Max(16, 9 / aspect) / 3f, _patchDistance);
+            eye = target + math.normalize(new float3(8, 4.4f, 11)) * distance;
         }
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 

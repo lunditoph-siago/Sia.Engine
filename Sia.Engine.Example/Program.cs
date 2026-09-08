@@ -12,7 +12,8 @@ public static class Program
         try {
             var (pipeline, debugMode, distance) = ParseOptions(args);
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
-            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance);
+            var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync() : null;
+            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene);
 #if BROWSER
             await app.RunAsync();
 #else
@@ -42,6 +43,21 @@ public static class Program
         return asset;
     }
 
+    private static async Task<PbrSceneAsset> LoadPbrAsync()
+    {
+        var timer = Stopwatch.StartNew();
+        using var stream = typeof(Program).Assembly.GetManifestResourceStream("Sia.Engine.Example.scene.siapbr")
+            ?? throw new FileNotFoundException("The bundled PBR scene is missing.");
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+        var bytes = memory.ToArray();
+        var scene = PbrSceneAsset.Decode(bytes);
+        Console.WriteLine(scene.Attribution);
+        Console.WriteLine($"PBR scene: {bytes.Length} bytes; load/decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
+            + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");
+        return scene;
+    }
+
     private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance) ParseOptions(string[] args)
     {
         var pipeline = ScenePipeline.Pbr;
@@ -64,8 +80,8 @@ public static class Program
             }
             else { throw new ArgumentException("Unknown option: " + args[i]); }
         }
-        if ((debugMode is not null || distance is not null) && pipeline != ScenePipeline.Bunny) {
-            throw new ArgumentException("--debug and --distance require --pipeline bunny.");
+        if ((debugMode is not null || distance is not null) && pipeline == ScenePipeline.Unlit) {
+            throw new ArgumentException("--debug and --distance require --pipeline bunny|pbr.");
         }
         return (pipeline, debugMode, distance);
     }

@@ -20,6 +20,7 @@ internal sealed partial class SceneExampleApp
 
     private bool RenderAnimationFrame(double timestampMilliseconds)
     {
+        ThrowGpuError();
         if (Glfw.ShouldClose(_window)) return false;
         ResizeWindowToCanvas();
         Glfw.PollEvents();
@@ -128,9 +129,9 @@ internal sealed partial class SceneExampleApp
         if (WgpuUnsafe.wgpuAdapterGetLimits((WGPUAdapter*)_adapter.DangerousGetHandle(), &supported) != WGPUStatus.Success) {
             throw new WgpuException("The browser adapter did not report its device limits.");
         }
-        var vertexStorage = _pipeline == ScenePipeline.Bunny ? 6u : 1u;
+        var vertexStorage = _pipeline != ScenePipeline.Unlit ? 6u : 1u;
         var fragmentStorage = _pipeline == ScenePipeline.Pbr ? 5u : 4u;
-        var workgroupSize = _pipeline == ScenePipeline.Bunny ? 256u : 128u;
+        var workgroupSize = _pipeline != ScenePipeline.Unlit ? 256u : 128u;
         if (supportedStages.MaxStorageBuffersInVertexStage == uint.MaxValue
             || supportedStages.MaxStorageBuffersInVertexStage < vertexStorage
             || supportedStages.MaxStorageBuffersInFragmentStage == uint.MaxValue
@@ -149,7 +150,7 @@ internal sealed partial class SceneExampleApp
         required.NextInChain = &requiredStages.Chain;
         required.MaxComputeWorkgroupSizeX = workgroupSize;
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
-        var descriptor = WGPUDeviceDescriptor.Default;
+        var descriptor = CreateDeviceDescriptor();
         descriptor.RequiredLimits = &required;
         return Wgpu.RequestDeviceAsync(_adapter, descriptor);
     }

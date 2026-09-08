@@ -38,7 +38,7 @@ public sealed partial class PbrRenderer
                 entries[i] = WGPUBindGroupLayoutEntry.Default;
                 entries[i].Binding = i;
                 entries[i].Visibility = WGPUShaderStage.Fragment;
-                entries[i].Texture.SampleType = i == 1 ? WGPUTextureSampleType.Depth : WGPUTextureSampleType.Float;
+                entries[i].Texture.SampleType = i == 1 ? WGPUTextureSampleType.UnfilterableFloat : WGPUTextureSampleType.Float;
                 entries[i].Texture.ViewDimension = WGPUTextureViewDimension._2D;
             }
             var descriptor = WGPUBindGroupLayoutDescriptor.Default;

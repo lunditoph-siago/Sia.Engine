@@ -66,15 +66,20 @@ internal sealed partial class SceneExampleApp
         Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length + pedestal.Nodes.Length} resident patches across two assets, {instances.Count} instances, "
             + $"{_visibilityLod.TriangleCapacity} work triangles; target {settings.TargetPixelError} px, "
             + $"triangle budget {settings.Budget.MaxTriangles}; setup/upload {started.Elapsed.TotalMilliseconds:F2} ms.");
+        InitializeInspectionControls();
+        Console.WriteLine($"Bunny wall: 15 x 9 bunnies and pedestals, {(long)build.SourceTriangleCount * 135:N0} Bunny source triangles, two shared geometry assets.");
+    }
+
+    private unsafe void InitializeInspectionControls()
+    {
         GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
             if (action == InputAction.Press) {
                 _patchKeys |= key switch {
                     Key.Space => 1u, Key.M => 2u, Key.R => 4u,
-                    Key.S or Key.Down => 8u, Key.W or Key.Up => 16u, _ => 0u
+                    Key.S or Key.Down => 8u, Key.W or Key.Up => 16u, Key.A => 32u, _ => 0u
                 };
             }
         });
-        Console.WriteLine($"Bunny wall: 15 x 9 bunnies and pedestals, {(long)build.SourceTriangleCount * 135:N0} Bunny source triangles, two shared geometry assets.");
         Console.WriteLine("W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
     }
 
@@ -100,6 +105,10 @@ internal sealed partial class SceneExampleApp
                 ? VisibilityDebugMode.Shaded : VisibilityDebugMode.Triangles;
         }
         if ((pressed & 4) != 0) { _patchDistance = 0; _patchTour = false; }
+        if (_pipeline == ScenePipeline.Pbr && (pressed & 32) != 0) {
+            var environment = _sceneWorld!.AcquireAddon<EnvironmentLighting>();
+            environment.Atmosphere = environment.Atmosphere is null ? new SkyAtmosphere() : null;
+        }
         var direction = (Down(Key.S) || Down(Key.Down) ? 1 : 0) - (Down(Key.W) || Down(Key.Up) ? 1 : 0);
         var step = ((pressed & 8) != 0 ? 1 : 0) - ((pressed & 16) != 0 ? 1 : 0);
         if (direction != 0 || step != 0) {
@@ -110,7 +119,8 @@ internal sealed partial class SceneExampleApp
             _patchTourPhase = (_patchTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;
             _patchDistance = (1 - MathF.Cos(_patchTourPhase)) * 0.5f;
         }
-        var status = $"135 bunnies | {_visibilityLod!.DebugMode} | Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
+        var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies" : "9 cameras";
+        var status = $"{scene} | {_visibilityLod!.DebugMode} | Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
         if (_patchStatus != status) {
             _patchStatus = status;
             Glfw.SetTitle(_window, "Sia.Engine - " + status);

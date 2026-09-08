@@ -17,6 +17,7 @@ distanceControl.addEventListener('input', () => { inspectionDistance = distanceC
 tourControl.addEventListener('click', () => { inspectionCommands |= 1; });
 materialControl.addEventListener('click', () => { inspectionCommands |= 2; });
 resetControl.addEventListener('click', () => { inspectionCommands |= 4; });
+document.getElementById('inspection-atmosphere').addEventListener('click', () => { inspectionCommands |= 32; });
 
 function takeInspectionCommands() {
   const commands = inspectionCommands;
@@ -60,7 +61,7 @@ function showError(message) {
     overlay.setAttribute('aria-live', 'assertive');
     document.body.appendChild(overlay);
   }
-  overlay.textContent += message + '\n\n';
+  overlay.textContent = (overlay.textContent + message + '\n\n').slice(-16000);
   overlay.scrollTop = overlay.scrollHeight;
 }
 
@@ -94,9 +95,10 @@ try {
   const args = ['--pipeline', pipeline];
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
   if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
-  if (pipeline === 'bunny') {
+  if (pipeline === 'bunny' || pipeline === 'pbr') {
     inspection.hidden = false;
-    document.getElementById('bunny-credit').hidden = false;
+    document.getElementById(`${pipeline}-credit`).hidden = false;
+    document.getElementById('inspection-atmosphere').hidden = pipeline !== 'pbr';
   }
   for (const link of document.querySelectorAll('nav a')) {
     if (new URL(link.href).searchParams.get('pipeline') === pipeline) link.setAttribute('aria-current', 'page');

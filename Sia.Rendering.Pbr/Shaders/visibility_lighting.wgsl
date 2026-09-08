@@ -7,7 +7,7 @@ struct SurfaceCamera {
 };
 
 @group(0) @binding(0) var<uniform> surface_camera: SurfaceCamera;
-@group(0) @binding(1) var depth: texture_depth_2d;
+@group(0) @binding(1) var depth: texture_2d<f32>;
 @group(0) @binding(2) var base_roughness: texture_2d<f32>;
 @group(0) @binding(3) var normal_metallic: texture_2d<f32>;
 @group(0) @binding(4) var emissive_occlusion: texture_2d<f32>;
@@ -22,7 +22,7 @@ fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 @fragment
 fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let pixel = vec2<i32>(position.xy);
-    let z = textureLoad(depth, pixel, 0);
+    let z = textureLoad(depth, pixel, 0).r;
     if (z >= 1.0) { discard; }
     if (surface_camera.mode.x != 0u) { return textureLoad(debug_color, pixel, 0); }
     let size = vec2<f32>(textureDimensions(depth));
