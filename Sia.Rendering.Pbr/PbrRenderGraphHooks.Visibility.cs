@@ -6,6 +6,9 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public static partial class PbrRenderGraphHooks
 {
+    internal static void UseVisibilityShadowPasses(ref RenderGraphBuildContext graph, VisibilityPbrFeature visibility,
+        in RenderFeatureContext<RenderFrameContext> context) => visibility.BuildShadowGraph(ref graph, in context, _shadowAtlasKey);
+
     internal static void UseVisibilityLightingPass(ref RenderGraphBuildContext graph, PbrRenderer renderer,
         PbrViewState view, VisibilityPbrFeature visibility, RenderGraphTextureKey color, in RenderFrameContext frame)
     {

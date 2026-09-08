@@ -71,9 +71,9 @@ public sealed partial class VisibilityPbrFeature
         graph.BindImportedBuffer(key, buffer);
     }
 
-    private ViewState CreateView()
+    private ViewState CreateView(List<Entity>? resources = null, bool enableTiming = true)
     {
-        var acquired = new List<Entity>();
+        var acquired = resources ?? new List<Entity>();
         var device = _device.GetWgpu<WGPUDevice>();
         var queue = _queue.GetWgpu<WGPUQueue>();
         var limits = Wgpu.GetLimits(device);
@@ -92,7 +92,7 @@ public sealed partial class VisibilityPbrFeature
             entries[6] = BufferEntry(6, workBuffer);
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
             var lodView = _gpuLod is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
-            var timing = _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
+            var timing = enableTiming && _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
             return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView) { Timing = timing };
         }
         catch {
