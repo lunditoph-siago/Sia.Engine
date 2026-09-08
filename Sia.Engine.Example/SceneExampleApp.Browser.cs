@@ -64,6 +64,7 @@ internal sealed partial class SceneExampleApp
         ResizeIfNeeded(force: true);
         UpdateScene(0f);
         RenderFrame();
+        Program.SetSceneReady();
     }
 
     private void ResizeWindowToCanvas()
