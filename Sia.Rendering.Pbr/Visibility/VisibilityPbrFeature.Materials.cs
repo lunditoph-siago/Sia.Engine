@@ -9,7 +9,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class VisibilityPbrFeature
 {
-    public const int MaximumMaterialCount = 64;
+    public const int MaximumMaterialCount = 128;
     public const ulong MaximumMaterialTextureBytes = 128 * 1024 * 1024;
     public int MaterialCount => _materials.Length;
 
@@ -20,7 +20,7 @@ public sealed partial class VisibilityPbrFeature
     private static PbrMaterialAsset[] ValidateMaterials(VisibilityAlbedo? albedo, ReadOnlySpan<PbrMaterialAsset> materials)
     {
         if (materials.Length > MaximumMaterialCount) {
-            throw new ArgumentOutOfRangeException(nameof(materials), "Visibility supports at most 64 resident material batches.");
+            throw new ArgumentOutOfRangeException(nameof(materials), $"Visibility supports at most {MaximumMaterialCount} resident material batches.");
         }
         if (!materials.IsEmpty) { return PbrSceneAsset.Create([], materials, []).Materials.ToArray(); }
         ArgumentNullException.ThrowIfNull(albedo);

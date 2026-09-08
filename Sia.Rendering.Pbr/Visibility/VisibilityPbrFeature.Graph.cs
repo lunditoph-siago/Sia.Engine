@@ -81,7 +81,7 @@ public sealed partial class VisibilityPbrFeature
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
-            var workItems = _gpuLod is null ? new uint4[checked((int)TriangleCapacity)] : [];
+            var workItems = _fixedWork ?? (_gpuLod is null ? new uint4[checked((int)TriangleCapacity)] : []);
             var workBuffer = Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 16ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
             var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[20],

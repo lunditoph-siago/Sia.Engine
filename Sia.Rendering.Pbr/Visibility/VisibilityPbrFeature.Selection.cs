@@ -28,7 +28,11 @@ public sealed partial class VisibilityPbrFeature
     {
         var count = 0;
         MeshPatchSelection? nextSelection = null;
-        if (_patchTree is { } tree) {
+        if (_fixedWork is { } fixedWork) {
+            if (view.WorkInitialized) { return; }
+            count = fixedWork.Length;
+        }
+        else if (_patchTree is { } tree) {
             var matrices = new float4x4[_transforms.Length];
             for (var i = 0; i < matrices.Length; i++) { matrices[i] = math.mul(viewProjection, _transforms[i]); }
             var selection = MeshPatchSelector.Select(tree, matrices, view.Width, view.Height, _lod.TargetPixelError, _lod.Budget);
