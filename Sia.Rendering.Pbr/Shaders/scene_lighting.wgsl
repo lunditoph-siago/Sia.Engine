@@ -55,6 +55,7 @@ fn scene_lighting(world_position: vec3<f32>, normal: vec3<f32>, view_dir: vec3<f
     for (var i = 0u; i < directional_count; i = i + 1u) {
         let light = directional_lights.lights[i];
         let light_dir = normalize(-light.direction_pad.xyz);
+        if (dot(normal, light_dir) <= 0.0) { continue; }
         let radiance = light.color_intensity.rgb * light.color_intensity.a;
 
         var visibility = 1.0;
@@ -89,6 +90,7 @@ fn scene_lighting(world_position: vec3<f32>, normal: vec3<f32>, view_dir: vec3<f
             continue;
         }
         let light_dir = to_light / max(distance, 1e-4);
+        if (dot(normal, light_dir) <= 0.0) { continue; }
 
         var attenuation = 1.0 / max(distance * distance, 1e-4);
         let window = clamp(1.0 - pow(distance / range, 4.0), 0.0, 1.0);
@@ -103,6 +105,7 @@ fn scene_lighting(world_position: vec3<f32>, normal: vec3<f32>, view_dir: vec3<f
             let spot_factor = clamp((cos_angle - outer_cos) / max(inner_cos - outer_cos, 1e-4), 0.0, 1.0);
             attenuation *= spot_factor * spot_factor;
         }
+        if (attenuation == 0.0) { continue; }
 
         var visibility = 1.0;
         let shadow_layer = i32(light.spot_angles.z);

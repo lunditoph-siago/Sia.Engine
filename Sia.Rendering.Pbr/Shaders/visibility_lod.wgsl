@@ -1,3 +1,5 @@
+#import pbr::occlusion
+
 struct Camera {
     view_projection: mat4x4<f32>, eye: vec4<f32>, size_counts: vec4<u32>,
     light_direction: vec4<f32>, light_radiance: vec4<f32>,
@@ -10,7 +12,6 @@ struct Patch { minimum_error: vec4<f32>, maximum: vec4<f32>, children: vec4<u32>
 struct PatchState { error: u32, node_id: u32, offset: u32, visibility: u32, instance: u32 }
 struct Parameters { counts: vec4<u32>, budget: vec4<u32>, traversal: vec4<u32> }
 struct Status { draw: vec4<u32>, selection: vec4<u32>, post_draw: vec4<u32>, culling: vec4<u32>, traversal: vec4<u32> }
-struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: array<vec4<u32>, 32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> parameters: Parameters;
 @group(0) @binding(2) var<storage, read> patches: array<Patch>;
@@ -20,8 +21,6 @@ struct Hierarchy { previous_projection: mat4x4<f32>, size: vec4<u32>, levels: ar
 @group(0) @binding(6) var<storage, read_write> status: Status;
 @group(0) @binding(7) var<storage, read_write> work: array<vec2<u32>>;
 @group(1) @binding(2) var<storage, read_write> dispatch: array<u32>;
-@group(1) @binding(0) var<uniform> hierarchy: Hierarchy;
-@group(1) @binding(1) var<storage, read> hzb: array<f32>;
 var<private> heap_size: u32;
 var<private> heap_peak: u32;
 var<workgroup> frontier: vec4<u32>;
@@ -259,44 +258,6 @@ fn outside_frustum(node: Patch, matrix: mat4x4<f32>) -> bool {
     return any(outside_xy) || any(outside_z);
 }
 
-fn occluded(node: Patch, matrix: mat4x4<f32>) -> bool {
-    var low = vec3<f32>(3.402823466e+38);
-    var high = -low;
-    for (var corner = 0u; corner < 8u; corner++) {
-        let point = select(node.minimum_error.xyz, node.maximum.xyz,
-            (vec3<u32>(corner) & vec3<u32>(1u, 2u, 4u)) != vec3<u32>(0u));
-        let clip = matrix * vec4<f32>(point, 1.0);
-        if (!finite(clip) || clip.w <= 0.0 || clip.z <= 0.0) { return false; }
-        let ndc = clip.xyz / clip.w;
-        if (!finite(vec4<f32>(ndc, 1.0))) { return false; }
-        low = min(low, ndc);
-        high = max(high, ndc);
-    }
-    let size = vec2<f32>(hierarchy.size.xy);
-    let minimum = floor((vec2<f32>(low.x, -high.y) * 0.5 + 0.5) * size) - 2.0;
-    let maximum = ceil((vec2<f32>(high.x, -low.y) * 0.5 + 0.5) * size) + 2.0;
-    if (any(minimum < vec2<f32>(0.0)) || any(maximum >= size)) { return false; }
-    var level = 0u;
-    var factor = hierarchy.size.z;
-    var first = vec2<u32>(minimum) / factor;
-    var last = vec2<u32>(maximum) / factor;
-    while (any(last - first > vec2<u32>(1u)) && level < 31u) {
-        if (all(hierarchy.levels[level].xy == vec2<u32>(1u))) { break; }
-        level++;
-        factor *= 2u;
-        first = vec2<u32>(minimum) / factor;
-        last = vec2<u32>(maximum) / factor;
-    }
-    let mip = hierarchy.levels[level];
-    var farthest = 0.0;
-    for (var y = first.y; y <= last.y; y++) {
-        for (var x = first.x; x <= last.x; x++) {
-            farthest = max(farthest, hzb[mip.z + y * mip.x + x]);
-        }
-    }
-    return low.z > farthest + 1e-5;
-}
-
 @compute @workgroup_size(64)
 fn cull_main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * parameters.counts.w + group.x) * 64u + lane;
@@ -306,7 +267,7 @@ fn cull_main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     let node = patches[source];
     let transform = instances[states[index].instance].transform;
     if (hierarchy.size.w != 0u) {
-        if (occluded(node, hierarchy.previous_projection * transform)) { states[index].visibility = 2u; }
+        if (occluded(node.minimum_error.xyz, node.maximum.xyz, hierarchy.previous_projection * transform)) { states[index].visibility = 2u; }
     }
 }
 
@@ -317,7 +278,7 @@ fn cull_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     if (states[index].node_id == 0u || states[index].visibility != 2u) { return; }
     let source = states[index].node_id - 1u;
     let matrix = camera.view_projection * instances[states[index].instance].transform;
-    states[index].visibility = select(4u, 3u, occluded(patches[source], matrix));
+    states[index].visibility = select(4u, 3u, occluded(patches[source].minimum_error.xyz, patches[source].maximum.xyz, matrix));
 }
 
 @compute @workgroup_size(64)

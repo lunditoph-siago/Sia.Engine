@@ -10,7 +10,7 @@ namespace Sia.Engine.Rendering.Pbr;
 public sealed partial class VisibilityPbrFeature
 {
     private static readonly RenderGraphBufferKey[] s_GeometryKeys = [
-        new("visibility-vertices"), new("visibility-meshlets"), new("visibility-indices"),
+        new("visibility-vertices"), new("visibility-indices"),
         new("visibility-triangles"), new("visibility-instances")
     ];
     private static readonly RenderGraphBufferKey s_CameraKey = new("visibility-camera");
@@ -33,15 +33,16 @@ public sealed partial class VisibilityPbrFeature
         graph.UseTexture(VisibilityTarget, new RenderGraphTextureDescriptor("visibility-id", RenderGraphTextureFormat.R32Uint,
             view.Width, view.Height));
         graph.UseTexture(HdrTarget, new RenderGraphTextureDescriptor("visibility-hdr", RenderGraphTextureFormat.RGBA16Float,
-            view.Width, view.Height));
+            view.ResolvePipeline == _resolve.Surface ? 1u : view.Width, view.ResolvePipeline == _resolve.Surface ? 1u : view.Height));
         foreach (var key in new[] { BaseColorRoughnessTarget, NormalMetallicTarget, EmissiveOcclusionTarget }) {
             graph.UseTexture(key, new RenderGraphTextureDescriptor(key.ToString(), RenderGraphTextureFormat.RGBA16Float, view.Width, view.Height));
         }
         ImportBuffer(ref graph, s_CameraKey, view.Uniform, RenderGraphBufferUsage.Uniform);
         ImportBuffer(ref graph, s_OutputKey, view.OutputUniform, RenderGraphBufferUsage.Uniform);
         ImportBuffer(ref graph, s_IndirectKey, view.Indirect, RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource
-            | (_gpuLod is null ? 0 : RenderGraphBufferUsage.Storage));
+            | (_gpuLod is null && _fixedGeometry is null ? 0 : RenderGraphBufferUsage.Storage));
         ImportBuffer(ref graph, s_WorkKey, view.WorkBuffer, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.CopySource);
+        ImportBuffer(ref graph, s_MaterialParametersKey, _materialParameters, RenderGraphBufferUsage.Storage);
         for (var i = 0; i < _geometry.Length; i++) {
             ImportBuffer(ref graph, s_GeometryKeys[i], _geometry[i], RenderGraphBufferUsage.Storage);
         }
@@ -49,16 +50,19 @@ public sealed partial class VisibilityPbrFeature
             var info = Wgpu.GetTextureInfo(texture.Texture.GetWgpu<WGPUTexture>());
             graph.UseImportedTexture(texture.Key, new RenderGraphTextureDescriptor(texture.Key.ToString(),
                 texture.Srgb ? RenderGraphTextureFormat.RGBA8UnormSrgb : RenderGraphTextureFormat.RGBA8Unorm,
-                info.Size.Width, info.Size.Height, mipLevelCount: info.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
+                info.Size.Width, info.Size.Height, depthOrArrayLayers: info.Size.DepthOrArrayLayers,
+                mipLevelCount: info.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
             graph.BindImportedTexture(texture.Key, texture.Texture.GetWgpu<WGPUTexture>());
         }
-        foreach (var material in _materials) { ImportBuffer(ref graph, material.Key, material.Uniform, RenderGraphBufferUsage.Uniform); }
+        foreach (var material in _materialBatches) { ImportBuffer(ref graph, material.Key, material.Uniform, RenderGraphBufferUsage.Uniform); }
         if (_gpuLod is { } lod) { BuildLodGraph(ref graph, view, lod); }
+        if (_fixedGeometry is not null) { view.BuildClusterGraph(ref graph); }
         if (view.Timing is { } timing) {
             ImportBuffer(ref graph, GpuTimingsTarget, timing.Results, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource | RenderGraphBufferUsage.CopyDestination);
         }
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
         if (_gpuLod is not null) { BuildPostOcclusionGraph(ref graph, view); }
+        if (_fixedGeometry is not null) { view.BuildClusterPostGraph(ref graph); }
         view.BuildMaterialTiles(ref graph);
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
         if (includeOutput) { graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output); }
@@ -82,19 +86,23 @@ public sealed partial class VisibilityPbrFeature
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
-            WorkGpu[] workItems = _fixedWorkCount.HasValue || _gpuLod is not null ? [] : new WorkGpu[checked((int)TriangleCapacity)];
-            var workBuffer = _fixedWorkBuffer.IsValid ? _fixedWorkBuffer : Allocate(_world, device, System.Math.Max(1u, TriangleCapacity) * 8ul,
+            WorkGpu[] workItems = _fixedGeometry is not null || _gpuLod is not null ? [] : new WorkGpu[checked((int)TriangleCapacity)];
+            var workBuffer = Allocate(_world, device, System.Math.Max(1u, _fixedGeometry?.Count ?? TriangleCapacity) * 8ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
-            var indirect = Upload<uint>(_world, device, queue, _gpuLod is null ? [0, 1, 0, 0] : new uint[20],
-                WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
-            var entries = new WGPUBindGroupEntry[7];
-            entries[0] = BufferEntry(0, uniform);
-            for (var i = 0; i < _geometry.Length; i++) { entries[i + 1] = BufferEntry((uint)i + 1, _geometry[i]); }
-            entries[6] = BufferEntry(6, workBuffer);
+            var indirect = Upload<uint>(_world, device, queue, _gpuLod is not null ? new uint[20] :
+                _fixedGeometry is not null ? [0, 1, 0, 0, 0, 0, 0, 0] : [0, 1, 0, 0],
+                WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null && _fixedGeometry is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
+            WGPUBindGroupEntry[] entries = [BufferEntry(0, uniform), BufferEntry(1, _geometry[0]),
+                BufferEntry(3, _geometry[1]), BufferEntry(4, _geometry[2]), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)];
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
             var lodView = _gpuLod is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
             var timing = enableTiming && _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
-            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView) { Timing = timing };
+            var clusters = _fixedGeometry is { } fixedGeometry ? CreateClusterView(fixedGeometry, uniform, workBuffer, indirect, limits, acquired) : (ClusterViewGpu?)null;
+            var materialGroup = Own(_world, BindGroup(_materialTiles.GeometryLayout,
+                [BufferEntry(0, uniform), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)]), acquired);
+            return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView) {
+                Timing = timing, Clusters = clusters, MaterialGeometryGroup = materialGroup
+            };
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -153,6 +161,7 @@ public sealed partial class VisibilityPbrFeature
         public uint Width { get; set; }
         public uint Height { get; set; }
         private Entity[] _resolveGroups = [];
+        public Entity ResolvePipeline { get; set; }
         private Entity _outputGroup;
         private WgpuHandle<WGPUTextureView> _idView;
         private WgpuHandle<WGPUTextureView> _hdrView;
@@ -169,6 +178,7 @@ public sealed partial class VisibilityPbrFeature
         public void DeclareRaster(RenderGraphPassDeclarationBuilder declaration)
         {
             ReadGeometry(declaration);
+            if (Owner._fixedGeometry is not null) { declaration.Read(s_ClusterIndicesKey, RenderGraphBufferUsage.Index); }
             declaration.Read(s_IndirectKey, RenderGraphBufferUsage.Indirect)
                 .Write(Owner.VisibilityTarget, RenderGraphTextureUsage.RenderAttachment)
                 .Write(Frame.DepthTarget, RenderGraphTextureUsage.RenderAttachment);
@@ -184,12 +194,16 @@ public sealed partial class VisibilityPbrFeature
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear));
             Wgpu.SetRenderPipeline(pass, Owner._raster.GetWgpu<WGPURenderPipeline>());
             Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-            Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), post ? 32ul : 0ul);
+            if (Owner._fixedGeometry is { } geometry) {
+                Wgpu.SetIndexBuffer(pass, geometry.Indices.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
+                Wgpu.DrawIndexedIndirect(pass, Indirect.GetWgpu<WGPUBuffer>());
+            } else { Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), post ? 32ul : 0ul); }
         }
 
         public void DeclareResolve(RenderGraphPassDeclarationBuilder declaration)
         {
             ReadGeometry(declaration);
+            declaration.Read(s_MaterialParametersKey, RenderGraphBufferUsage.Storage);
             declaration.Read(s_MaterialTilesKey, RenderGraphBufferUsage.Storage)
                 .Read(s_MaterialDispatchKey, RenderGraphBufferUsage.Indirect);
             declaration.Read(Owner.VisibilityTarget, RenderGraphTextureUsage.TextureBinding)
@@ -198,7 +212,7 @@ public sealed partial class VisibilityPbrFeature
                 .Write(Owner.NormalMetallicTarget, RenderGraphTextureUsage.StorageBinding)
                 .Write(Owner.EmissiveOcclusionTarget, RenderGraphTextureUsage.StorageBinding);
             foreach (var texture in Owner._materialTextures) { declaration.Read(texture.Key, RenderGraphTextureUsage.TextureBinding); }
-            foreach (var material in Owner._materials) { declaration.Read(material.Key, RenderGraphBufferUsage.Uniform); }
+            foreach (var material in Owner._materialBatches) { declaration.Read(material.Key, RenderGraphBufferUsage.Uniform); }
         }
 
         public unsafe void Resolve(WgpuReactiveRenderGraphPassContext context)
@@ -208,11 +222,11 @@ public sealed partial class VisibilityPbrFeature
             WgpuHandle<WGPUTextureView>[] surfaces = [context.GetTextureView(Owner.BaseColorRoughnessTarget),
                 context.GetTextureView(Owner.NormalMetallicTarget), context.GetTextureView(Owner.EmissiveOcclusionTarget)];
             if (_resolveGroups.Length == 0 || !_resolveGroups[0].IsValid || id != _idView || hdr != _hdrView || !_surfaceViews.AsSpan().SequenceEqual(surfaces)) {
-                var next = new Entity[Owner._materials.Length];
+                var next = new Entity[Owner._materialBatches.Length];
                 try {
                     for (var i = 0; i < next.Length; i++) {
-                        var material = Owner._materials[i];
-                        var entries = new WGPUBindGroupEntry[17];
+                        var material = Owner._materialBatches[i];
+                        var entries = new WGPUBindGroupEntry[18];
                         entries[0] = TextureEntry(0, id); entries[1] = TextureEntry(1, hdr);
                         for (uint map = 0; map < 5; map++) {
                             entries[2 + map * 2] = TextureEntry(2 + map * 2, material.Maps[map].View.GetWgpu<WGPUTextureView>());
@@ -224,6 +238,7 @@ public sealed partial class VisibilityPbrFeature
                         entries[12] = BufferEntry(12, material.Uniform);
                         for (uint surface = 0; surface < 3; surface++) { entries[13 + surface] = TextureEntry(13 + surface, surfaces[surface]); }
                         entries[16] = BufferEntry(16, _materialTileBuffer);
+                        entries[17] = BufferEntry(17, Owner._materialParameters);
                         next[i] = Owner.OwnTextureBindGroup(Owner._resolveLayout, entries, id, hdr, surfaces[0], surfaces[1], surfaces[2]);
                     }
                 }
@@ -236,7 +251,7 @@ public sealed partial class VisibilityPbrFeature
             }
             var pass = BeginCompute(context);
             try {
-                Wgpu.SetComputePipeline(pass, Owner._resolve.GetWgpu<WGPUComputePipeline>());
+                Wgpu.SetComputePipeline(pass, ResolvePipeline.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
                 for (var i = 0; i < _resolveGroups.Length; i++) {
                     Wgpu.SetBindGroup(pass, 1, _resolveGroups[i].GetWgpu<WGPUBindGroup>());
