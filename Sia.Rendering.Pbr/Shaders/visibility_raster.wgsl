@@ -20,6 +20,16 @@ fn fragment(input: RasterOutput) -> @location(0) u32 {
     return input.id;
 }
 
+struct DepthRasterOutput {
+    @location(0) id: u32,
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn fragment_depth(input: RasterOutput) -> DepthRasterOutput {
+    return DepthRasterOutput(input.id, input.position.z);
+}
+
 fn shared_position(index: u32) -> vec4<f32> {
     let vertex = index >> 1u;
     let work = visibility_work[vertex / 256u];
