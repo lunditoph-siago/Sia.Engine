@@ -96,6 +96,12 @@ internal sealed partial class SceneExampleApp
     [JSImport("takeInspectionDistance", "main.js")]
     private static partial double TakeInspectionDistance();
 
+    [JSImport("setCameraPose", "main.js")]
+    private static partial void SetCameraPose(string pose);
+
+    [JSImport("hasCameraFocus", "main.js")]
+    private static partial bool HasCameraFocus();
+
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
         if (GetBrowserFeatureLevel() == "compatibility") {
