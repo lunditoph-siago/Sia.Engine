@@ -18,30 +18,15 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_LodDispatchKey = new("visibility-lod-dispatch");
 
     private static LodGpu CreateLodGpu(World world, WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue,
-        MeshPatchTree tree, uint instances, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired, bool enableTiming)
+        SceneLodData scene, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired, bool enableTiming)
     {
-        var count = checked((uint)tree.Nodes.Length * instances);
-        if (count > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
-            throw new ArgumentException("The patch/instance count exceeds compute dispatch limits.", nameof(instances));
+        var instances = (uint)scene.InstanceRoots.Length;
+        if (System.Math.Max(scene.StateCapacity, instances) > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
+            throw new ArgumentException("The scene exceeds compute dispatch limits.", nameof(scene));
         }
-        var source = tree.Nodes.Span;
-        var nodes = new PatchGpu[source.Length];
-        uint maxChildren = 0;
-        for (var i = 0; i < source.Length; i++) {
-            var node = source[i];
-            maxChildren = System.Math.Max(maxChildren, (uint)node.ChildCount);
-            uint childMeshlets = 0, childTriangles = 0;
-            for (var child = node.ChildOffset; child < node.ChildOffset + node.ChildCount; child++) {
-                childMeshlets = checked(childMeshlets + (uint)source[child].MeshletCount);
-                childTriangles = checked(childTriangles + (uint)source[child].TriangleCount);
-            }
-            nodes[i] = new(new float4(node.Bounds.Min, node.EstimatedSpatialError), new float4(node.Bounds.Max, 0),
-                new uint4((uint)node.ChildOffset, (uint)node.ChildCount, childMeshlets, childTriangles),
-                new uint4((uint)node.MeshletCount, (uint)node.TriangleOffset, (uint)node.TriangleCount, 0));
-        }
-        var patches = Upload<PatchGpu>(world, device, queue, nodes, WGPUBufferUsage.Storage, limits, acquired);
+        var patches = Upload<PatchGpu>(world, device, queue, scene.Patches, WGPUBufferUsage.Storage, limits, acquired);
         var parameters = Upload<LodParamsGpu>(world, device, queue, [new(
-            new uint4((uint)source.Length, (uint)tree.RootCount, instances, limits.MaxComputeWorkgroupsPerDimension),
+            new uint4((uint)scene.Patches.Length, scene.RootCost.x, instances, limits.MaxComputeWorkgroupsPerDimension),
             new uint4((uint)settings.Budget.MaxPatches, (uint)settings.Budget.MaxMeshlets, (uint)settings.Budget.MaxTriangles,
                 BitConverter.SingleToUInt32Bits(settings.TargetPixelError == 0 ? 0 : settings.TargetPixelError)),
             new uint4((uint)settings.Budget.MaxRefinementCandidates, (uint)settings.Budget.MaxRefinementNodes, 0, 0))],
@@ -50,8 +35,8 @@ public sealed partial class VisibilityPbrFeature
             BufferLayout(0, WGPUBufferBindingType.Uniform, 128, WGPUShaderStage.Compute),
             BufferLayout(1, WGPUBufferBindingType.Uniform, 48, WGPUShaderStage.Compute),
             BufferLayout(2, WGPUBufferBindingType.ReadOnlyStorage, 64, WGPUShaderStage.Compute),
-            BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 176, WGPUShaderStage.Compute),
-            BufferLayout(4, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute),
+            BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 192, WGPUShaderStage.Compute),
+            BufferLayout(4, WGPUBufferBindingType.Storage, 20, WGPUShaderStage.Compute),
             BufferLayout(5, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
             BufferLayout(6, WGPUBufferBindingType.Storage, 80, WGPUShaderStage.Compute),
             BufferLayout(7, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute)
@@ -61,15 +46,11 @@ public sealed partial class VisibilityPbrFeature
         var dispatchLayout = Layout(world, device, [BufferLayout(2, WGPUBufferBindingType.Storage, 72, WGPUShaderStage.Compute)], acquired);
         var selectLayout = PipelineLayout(world, device, [layout, dispatchLayout], acquired);
         var occlusion = CreateOcclusionGpu(world, device, layout, pipelineLayout, shader, acquired);
-        var roots = (uint)tree.RootCount * instances;
-        var refinedNodes = System.Math.Min((ulong)count - roots,
-            System.Math.Min((uint)settings.Budget.MaxRefinementNodes, (ulong)maxChildren * (uint)settings.Budget.MaxRefinementCandidates));
-        var capacity = System.Math.Max(1u, checked(roots + (uint)refinedNodes));
         return new(patches, parameters, layout, dispatchLayout,
             ComputePipeline(world, device, shader, pipelineLayout, "project", acquired),
             ComputePipeline(world, device, shader, selectLayout, "select_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
-            roots, capacity, limits.MaxComputeWorkgroupsPerDimension, occlusion,
+            scene.StateCapacity, limits.MaxComputeWorkgroupsPerDimension, occlusion,
             CreateCompactionGpu(world, device, acquired), enableTiming);
     }
 
@@ -98,7 +79,7 @@ public sealed partial class VisibilityPbrFeature
 
     private LodViewGpu CreateLodView(LodGpu lod, Entity camera, Entity work, Entity indirect, WGPULimits limits, List<Entity> acquired)
     {
-        var state = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 16ul,
+        var state = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 20ul,
             WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
         var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 4ul, WGPUBufferUsage.Storage, limits, acquired);
         var dispatch = Allocate(_world, _device.GetWgpu<WGPUDevice>(), 72,
@@ -139,7 +120,7 @@ public sealed partial class VisibilityPbrFeature
     private sealed partial class ViewState
     {
         public void ProjectLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Project, (Owner._gpuLod.Value.Roots + 63) / 64);
+            DispatchLod(context, Owner._gpuLod!.Value.Project, Owner.InstanceCount);
 
         public void SelectLod(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, Owner._gpuLod!.Value.Select, 1, Lod!.Value.DispatchGroup);
@@ -170,7 +151,7 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget, uint4 Traversal);
 
     private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity DispatchLayout, Entity Project, Entity Select,
-        Entity Emit, uint Roots, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming);
+        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming);
 
     private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Dispatch, Entity Group, Entity DispatchGroup, CompactionViewGpu Compaction);
 }

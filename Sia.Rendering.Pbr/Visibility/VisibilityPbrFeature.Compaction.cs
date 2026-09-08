@@ -13,7 +13,7 @@ public sealed partial class VisibilityPbrFeature
         var layout = Layout(world, device, [
             BufferLayout(0, WGPUBufferBindingType.Uniform, 32, WGPUShaderStage.Compute),
             BufferLayout(1, WGPUBufferBindingType.ReadOnlyStorage, 64, WGPUShaderStage.Compute),
-            BufferLayout(2, WGPUBufferBindingType.Storage, 16, WGPUShaderStage.Compute),
+            BufferLayout(2, WGPUBufferBindingType.Storage, 20, WGPUShaderStage.Compute),
             BufferLayout(3, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
             BufferLayout(4, WGPUBufferBindingType.Storage, 80, WGPUShaderStage.Compute)
         ], acquired);
@@ -56,7 +56,7 @@ public sealed partial class VisibilityPbrFeature
         {
             range.w = levels[^1].Offset;
             var parameter = Upload<uint4>(_world, _device.GetWgpu<WGPUDevice>(), _queue.GetWgpu<WGPUQueue>(),
-                [new uint4(lod.Capacity, (uint)_patchTree!.Nodes.Length, lod.DispatchDimension, isPost ? 1u : 0u), range],
+                [new uint4(lod.Capacity, 0, lod.DispatchDimension, isPost ? 1u : 0u), range],
                 WGPUBufferUsage.Uniform, limits, acquired);
             parameters.Add(parameter);
             return Own(_world, BindGroup(gpu.Layout, [BufferEntry(0, parameter), BufferEntry(1, lod.Patches),

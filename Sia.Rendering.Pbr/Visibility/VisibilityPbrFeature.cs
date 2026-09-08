@@ -77,31 +77,41 @@ public sealed partial class VisibilityPbrFeature :
     public static VisibilityPbrFeature CreateLod(in GpuFrame frame, MeshPatchTree tree,
         ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded) =>
-        CreateLod(in frame, tree, instances, albedo, lod, outputFormat, mode, false);
+        CreateCpuLod(in frame, tree, instances, albedo, lod, outputFormat, mode);
 
     public static VisibilityPbrFeature CreateGpuLod(in GpuFrame frame, MeshPatchTree tree,
         ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false) =>
-        CreateLod(in frame, tree, instances, albedo, lod, outputFormat, mode, true, enableGpuTiming);
-
-    private static VisibilityPbrFeature CreateLod(in GpuFrame frame, MeshPatchTree tree,
-        ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
-        WGPUTextureFormat outputFormat, VisibilityDebugMode mode, bool gpuSelection, bool enableGpuTiming = false)
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false)
     {
         ArgumentNullException.ThrowIfNull(tree);
+        ValidateLod(lod);
+        var scene = CreateScene([tree], instances, lod.Budget);
+        return Create(in frame, scene.Geometry, instances, albedo, outputFormat, mode, null, lod, enableGpuTiming, scene);
+    }
+
+    private static VisibilityPbrFeature CreateCpuLod(in GpuFrame frame, MeshPatchTree tree,
+        ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo, VisibilityLodSettings lod,
+        WGPUTextureFormat outputFormat, VisibilityDebugMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ValidateLod(lod);
+        var (geometry, meshlets) = tree.CopyGeometry();
+        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod);
+    }
+
+    private static void ValidateLod(VisibilityLodSettings lod)
+    {
         if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
             || lod.Budget.MaxMeshlets < 0 || lod.Budget.MaxTriangles < 0
             || lod.Budget.MaxRefinementCandidates < 0 || lod.Budget.MaxRefinementNodes < 0) {
             throw new ArgumentOutOfRangeException(nameof(lod));
         }
-        var (geometry, meshlets) = tree.CopyGeometry();
-        return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod, gpuSelection, enableGpuTiming);
     }
 
     private static unsafe VisibilityPbrFeature Create(in GpuFrame frame,
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
-        bool gpuSelection = false, bool enableGpuTiming = false)
+        bool enableGpuTiming = false, SceneLodData? scene = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         ArgumentNullException.ThrowIfNull(albedo);
@@ -112,11 +122,14 @@ public sealed partial class VisibilityPbrFeature :
             throw new ArgumentOutOfRangeException(nameof(outputFormat));
         }
         var triangles = checked((uint)geometry.Triangles.Length);
-        var capacity = WorkCapacity(tree, triangles, (uint)instances.Length, lod.Budget);
+        var capacity = scene?.TriangleCapacity ?? WorkCapacity(tree, triangles, (uint)instances.Length, lod.Budget);
         _ = checked(capacity * 3u);
         var gpuInstances = new InstanceGpu[instances.Length];
         var transforms = new float4x4[instances.Length];
         for (var i = 0; i < instances.Length; i++) {
+            if (scene is null && instances[i].AssetIndex != 0) {
+                throw new ArgumentOutOfRangeException(nameof(instances), "A single geometry input only accepts asset index zero.");
+            }
             var transform = instances[i].Transform;
             var material = instances[i].Material;
             var determinant = math.determinant(transform);
@@ -137,7 +150,7 @@ public sealed partial class VisibilityPbrFeature :
             }
             gpuInstances[i] = new(transform, normalTransform,
                 new float4(material.BaseColor, 1), new float4(material.Metallic, MathF.Max(material.Roughness, 0.045f), 0, 0),
-                new float4(emissive, 0));
+                new float4(emissive, 0), scene?.InstanceRoots[i] ?? default);
             transforms[i] = transform;
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
@@ -211,7 +224,7 @@ public sealed partial class VisibilityPbrFeature :
             var raster = CreateRaster(world, device, geometryLayout, acquired);
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
-            var gpuLod = gpuSelection ? CreateLodGpu(world, device, queue, tree!, (uint)instances.Length, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
+            var gpuLod = scene is not null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
             return new(in frame, buffers, texture, view, sampler, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod);
         }
@@ -277,7 +290,7 @@ public sealed partial class VisibilityPbrFeature :
 
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct InstanceGpu(float4x4 Transform, float4x4 NormalTransform,
-        float4 Color, float4 Material, float4 Emissive);
+        float4 Color, float4 Material, float4 Emissive, uint4 Roots);
 
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct CameraGpu(float4x4 ViewProjection, float4 Eye, uint4 SizeCounts,

@@ -34,6 +34,10 @@ internal sealed partial class SceneExampleApp
             _patchBounds = new(math.min(_patchBounds.Min, node.Bounds.Min), math.max(_patchBounds.Max, node.Bounds.Max));
         }
         var instances = new List<VisibilityInstance>();
+        var pedestal = MeshPatchTree.Create([new(ProceduralMesh.Cube(), 0, [])]);
+        var pedestalSize = (_patchBounds.Max - _patchBounds.Min) * new float3(0.85f, 0.06f, 0.8f);
+        var pedestalCenter = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
+        pedestalCenter.y = _patchBounds.Min.y - pedestalSize.y * 0.5f;
         _patchSceneBounds = _patchBounds;
         var spacing = math.max(_patchBounds.Max - _patchBounds.Min, new float3(0.1f)) * 1.2f;
         for (var row = -4; row <= 4; row++) {
@@ -43,16 +47,21 @@ internal sealed partial class SceneExampleApp
                     math.max(_patchSceneBounds.Max, _patchBounds.Max + offset));
                 instances.Add(new(float4x4.Translate(offset),
                     PbrMaterial.Default with { BaseColor = new float3(0.8f, 0.75f, 0.65f), Roughness = 0.8f }));
+                var center = pedestalCenter + offset;
+                instances.Add(new(math.mul(float4x4.Translate(center), float4x4.Scale(pedestalSize)),
+                    PbrMaterial.Default with { BaseColor = new float3(0.25f, 0.3f, 0.35f), Roughness = 0.6f }) { AssetIndex = 1 });
+                _patchSceneBounds = new(math.min(_patchSceneBounds.Min, center - pedestalSize * 0.5f),
+                    math.max(_patchSceneBounds.Max, center + pedestalSize * 0.5f));
             }
         }
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var albedo = new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]);
         var settings = new VisibilityLodSettings(4,
             new MeshPatchBudget(4096, 8192, 262144) { MaxRefinementCandidates = 8192, MaxRefinementNodes = 32768 });
-        _visibilityLod = VisibilityPbrFeature.CreateGpuLod(in frame, tree, instances.ToArray(), albedo,
+        _visibilityLod = VisibilityPbrFeature.CreateGpuLod(in frame, [tree, pedestal], instances.ToArray(), albedo,
             settings, _surfaceFormat, _patchDebugMode);
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
-        Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length} patches per asset, {instances.Count} instances, "
+        Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length + pedestal.Nodes.Length} resident patches across two assets, {instances.Count} instances, "
             + $"{_visibilityLod.TriangleCapacity} work triangles; target {settings.TargetPixelError} px, "
             + $"triangle budget {settings.Budget.MaxTriangles}; setup/upload {started.Elapsed.TotalMilliseconds:F2} ms.");
         GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
@@ -63,7 +72,7 @@ internal sealed partial class SceneExampleApp
                 };
             }
         });
-        Console.WriteLine($"Bunny wall: 15 x 9 instances, {(long)build.SourceTriangleCount * instances.Count:N0} source triangles, one shared geometry asset.");
+        Console.WriteLine($"Bunny wall: 15 x 9 bunnies and pedestals, {(long)build.SourceTriangleCount * 135:N0} Bunny source triangles, two shared geometry assets.");
         Console.WriteLine("W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
     }
 
