@@ -59,6 +59,7 @@ public sealed class PbrRenderFeature :
         Renderer.PrepareOutput(state, in frame, extracted, Options.ExposureCompensation, Options.ToneMapping);
         if (Visibility is { } visibility) {
             visibility.Prepare(in context, sceneLighting: true);
+            visibility.PrepareShadows(in context, state.Shadows, extracted.ShadowConfig);
             Renderer.PrepareVisibility(state, in frame, extracted, visibility.DebugMode);
         }
     }
@@ -109,6 +110,7 @@ public sealed class PbrRenderFeature :
                 throw new InvalidOperationException("Visibility surfaces and scene output require distinct HDR targets.");
             }
             visibility.BuildRenderGraph(ref graph, in context, includeOutput: false);
+            PbrRenderGraphHooks.UseVisibilityShadowPasses(ref graph, visibility, in context);
             PbrRenderGraphHooks.UseVisibilityLightingPass(ref graph, Renderer, state, visibility, Options.HdrTarget, in frameContext);
         } else {
             PbrRenderGraphHooks.UseDepthPrepass(
