@@ -31,7 +31,4 @@
                       LogicalName="Sia.UI.Example.NotoSans-UiSubset.ttf" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
-    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
-  </PropertyGroup>
 </Project>

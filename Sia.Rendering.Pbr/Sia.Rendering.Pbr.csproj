@@ -16,10 +16,6 @@
     <ProjectReference Include="../Sia.Rendering/Sia.Rendering.csproj" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
-    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
-  </PropertyGroup>
-
   <ItemGroup>
     <EmbeddedResource Include="Shaders/*.wgsl" />
   </ItemGroup>

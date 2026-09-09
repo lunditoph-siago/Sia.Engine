@@ -20,7 +20,4 @@
     <ProjectReference Include="../Sia.Mesh/Sia.Mesh.csproj" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
-    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
-  </PropertyGroup>
 </Project>
