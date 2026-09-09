@@ -44,10 +44,6 @@
     <PackageReference Include="Sia.GLFW.Native" Version="0.0.4" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(TargetFramework)' == 'net11.0-browser'">
-    <SupportedOSPlatformVersion>0.0</SupportedOSPlatformVersion>
-  </PropertyGroup>
-
   <Target Name="AddBrowserNativeModules" BeforeTargets="_GenerateManagedToNative" DependsOnTargets="PrepareForWasmBuildNative">
     <ItemGroup>
       <_WasmPInvokeModules Include="__Internal_emscripten" />
