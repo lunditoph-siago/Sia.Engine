@@ -1,4 +1,5 @@
 #import pbr::occlusion
+#import pbr::parallel_lod
 
 struct Camera {
     view_projection: mat4x4<f32>, eye: vec4<f32>, size_counts: vec4<u32>,

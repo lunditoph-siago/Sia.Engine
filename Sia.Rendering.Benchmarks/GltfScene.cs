@@ -168,7 +168,7 @@ internal sealed partial class GltfScene
     {
         foreach (var name in names) {
             if (owner.TryGetProperty(name, out var value) && (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 0)) {
-                throw new NotSupportedException($"glTF {name} is not supported by the opaque static scene importer.");
+                throw new NotSupportedException($"glTF {name} is not supported by the static scene importer.");
             }
         }
     }

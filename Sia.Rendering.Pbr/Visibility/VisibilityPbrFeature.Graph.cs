@@ -76,18 +76,19 @@ public sealed partial class VisibilityPbrFeature
         graph.BindImportedBuffer(key, buffer);
     }
 
-    private ViewState CreateView(List<Entity>? resources = null, bool enableTiming = true)
+    private ViewState CreateView(List<Entity>? resources = null, bool enableTiming = true, LodGpu? lodOverride = null, uint? triangleCapacity = null)
     {
         var acquired = resources ?? new List<Entity>();
         var device = _device.GetWgpu<WGPUDevice>();
         var queue = _queue.GetWgpu<WGPUQueue>();
         var limits = Wgpu.GetLimits(device);
+        var lodConfiguration = lodOverride ?? _gpuLod;
         try {
             var uniform = Upload<CameraGpu>(_world, device, queue, [default], WGPUBufferUsage.Uniform, limits, acquired);
             var outputUniform = Upload<float4>(_world, device, queue,
                 [new float4(1, _output.EncodeSrgb ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform, limits, acquired);
             WorkGpu[] workItems = _fixedGeometry is not null || _gpuLod is not null ? [] : new WorkGpu[checked((int)TriangleCapacity)];
-            var workBuffer = Allocate(_world, device, System.Math.Max(1u, _fixedGeometry?.Count ?? TriangleCapacity) * 8ul,
+            var workBuffer = Allocate(_world, device, System.Math.Max(1u, _fixedGeometry?.Count ?? triangleCapacity ?? TriangleCapacity) * 8ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
             var indirect = Upload<uint>(_world, device, queue, _gpuLod is not null ? new uint[20] :
                 _fixedGeometry is not null ? [0, 1, 0, 0, 0, 0, 0, 0] : [0, 1, 0, 0],
@@ -95,13 +96,13 @@ public sealed partial class VisibilityPbrFeature
             WGPUBindGroupEntry[] entries = [BufferEntry(0, uniform), BufferEntry(1, _geometry[0]),
                 BufferEntry(3, _geometry[1]), BufferEntry(4, _geometry[2]), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)];
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
-            var lodView = _gpuLod is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
+            var lodView = lodConfiguration is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
             var timing = enableTiming && _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
             var clusters = _fixedGeometry is { } fixedGeometry ? CreateClusterView(fixedGeometry, uniform, workBuffer, indirect, limits, acquired) : (ClusterViewGpu?)null;
             var materialGroup = Own(_world, BindGroup(_materialTiles.GeometryLayout,
                 [BufferEntry(0, uniform), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)]), acquired);
             return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView) {
-                Timing = timing, Clusters = clusters, MaterialGeometryGroup = materialGroup
+                Timing = timing, Clusters = clusters, MaterialGeometryGroup = materialGroup, LodConfiguration = lodConfiguration
             };
         }
         catch {
@@ -154,6 +155,7 @@ public sealed partial class VisibilityPbrFeature
         public Entity Indirect { get; } = indirect;
         public WorkGpu[] WorkItems { get; } = workItems;
         public LodViewGpu? Lod { get; } = lodView;
+        public LodGpu? LodConfiguration { get; init; }
         public uint WorkCount { get; set; }
         public bool WorkInitialized { get; set; }
         public MeshPatchSelection? Selection { get; set; }

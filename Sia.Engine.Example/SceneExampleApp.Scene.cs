@@ -75,7 +75,7 @@ internal sealed unsafe partial class SceneExampleApp
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
         InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer, visibility: _visibilityLod))
+            .Add(new PbrRenderFeature(_sceneRenderer, visibility: _visibilityLod, transparency: _transparency))
             .Build();
     }
 
@@ -166,9 +166,9 @@ internal sealed unsafe partial class SceneExampleApp
             UpdatePatchInspection(deltaTime);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             var size = _materialBounds.Max - _materialBounds.Min;
-            target = new float3(-14.99f, 3.54f, .19f);
+            target = new float3(-1.28f, 2.39f, -1.52f);
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
-            eye = new float3(-15.99f, 3.59f, .18f);
+            eye = new float3(-8.53f, 2.79f, 1.83f);
             UpdateFreeCamera(deltaTime, ref eye, ref target);
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
             _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));

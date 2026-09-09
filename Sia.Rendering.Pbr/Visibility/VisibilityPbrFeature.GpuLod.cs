@@ -25,11 +25,12 @@ public sealed partial class VisibilityPbrFeature
             throw new ArgumentException("The scene exceeds compute dispatch limits.", nameof(scene));
         }
         var patches = Upload<PatchGpu>(world, device, queue, scene.Patches, WGPUBufferUsage.Storage, limits, acquired);
-        var parameters = Upload<LodParamsGpu>(world, device, queue, [new(
+        var parameterData = new LodParamsGpu(
             new uint4((uint)scene.Patches.Length, scene.RootCost.x, instances, limits.MaxComputeWorkgroupsPerDimension),
             new uint4((uint)settings.Budget.MaxPatches, (uint)settings.Budget.MaxMeshlets, (uint)settings.Budget.MaxTriangles,
                 BitConverter.SingleToUInt32Bits(settings.TargetPixelError == 0 ? 0 : settings.TargetPixelError)),
-            new uint4((uint)settings.Budget.MaxRefinementCandidates, (uint)settings.Budget.MaxRefinementNodes, 0, 0))],
+            new uint4((uint)settings.Budget.MaxRefinementCandidates, (uint)settings.Budget.MaxRefinementNodes, scene.RootCost.y, scene.RootCost.z));
+        var parameters = Upload<LodParamsGpu>(world, device, queue, [parameterData],
             WGPUBufferUsage.Uniform, limits, acquired);
         var layout = Layout(world, device, [
             BufferLayout(0, WGPUBufferBindingType.Uniform, 128, WGPUShaderStage.Compute),
@@ -51,7 +52,11 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, shader, selectLayout, "select_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
             scene.StateCapacity, limits.MaxComputeWorkgroupsPerDimension, occlusion,
-            CreateCompactionGpu(world, device, acquired), enableTiming);
+            CreateCompactionGpu(world, device, acquired), enableTiming) {
+            ParameterData = parameterData,
+            Parallel = settings.Traversal == VisibilityLodTraversal.Parallel
+                ? CreateParallelLod(world, device, shader, layout, scene.StateCapacity, (uint)settings.MaxTraversalPasses, acquired) : null
+        };
     }
 
     private static unsafe Entity ComputePipeline(World world, WgpuHandle<WGPUDevice> device, Entity shader,
@@ -81,14 +86,16 @@ public sealed partial class VisibilityPbrFeature
     {
         var state = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 20ul,
             WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
-        var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 4ul, WGPUBufferUsage.Storage, limits, acquired);
+        var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Parallel?.ScratchBytes ?? lod.Capacity * 4ul, WGPUBufferUsage.Storage, limits, acquired);
         var dispatch = Allocate(_world, _device.GetWgpu<WGPUDevice>(), 72,
             WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc, limits, acquired);
         var group = Own(_world, BindGroup(lod.Layout, [BufferEntry(0, camera), BufferEntry(1, lod.Parameters),
             BufferEntry(2, lod.Patches), BufferEntry(3, _geometry[3]), BufferEntry(4, state), BufferEntry(5, heap),
             BufferEntry(6, indirect), BufferEntry(7, work)]), acquired);
         var dispatchGroup = Own(_world, BindGroup(lod.DispatchLayout, [BufferEntry(2, dispatch)]), acquired);
-        return new(state, heap, dispatch, group, dispatchGroup, CreateCompactionView(lod, state, heap, indirect, limits, acquired));
+        return new(state, heap, dispatch, group, dispatchGroup, CreateCompactionView(lod, state, heap, indirect, limits, acquired)) {
+            Parallel = lod.Parallel is { } parallel ? CreateParallelLodView(parallel, dispatch, lod.Capacity, limits, acquired) : null
+        };
     }
 
     private static void BuildLodGraph(ref RenderGraphBuildContext graph, ViewState view, LodGpu lod)
@@ -120,17 +127,20 @@ public sealed partial class VisibilityPbrFeature
     private sealed partial class ViewState
     {
         public void ProjectLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Project, Owner.InstanceCount);
+            DispatchLod(context, LodConfiguration!.Value.Project, Owner.InstanceCount);
 
-        public void SelectLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Select, 1, Lod!.Value.DispatchGroup);
+        public void SelectLod(WgpuReactiveRenderGraphPassContext context)
+        {
+            if (Lod!.Value.Parallel is { } parallel) { SelectParallelLod(context, parallel); }
+            else { DispatchLod(context, LodConfiguration!.Value.Select, 1, Lod.Value.DispatchGroup); }
+        }
 
         public void EmitLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, Owner._gpuLod!.Value.Emit, 0, indirectOffset: 12);
+            DispatchLod(context, LodConfiguration!.Value.Emit, 0, indirectOffset: 12);
 
         private void DispatchLod(WgpuReactiveRenderGraphPassContext context, Entity pipeline, uint count, Entity? extraGroup = null, ulong? indirectOffset = null)
         {
-            var dimension = Owner._gpuLod!.Value.DispatchDimension;
+            var dimension = LodConfiguration!.Value.DispatchDimension;
             count = System.Math.Max(1u, count);
             var pass = BeginCompute(context);
             try {
@@ -151,7 +161,14 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget, uint4 Traversal);
 
     private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity DispatchLayout, Entity Project, Entity Select,
-        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming);
+        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming)
+    {
+        public LodParamsGpu ParameterData { get; init; }
+        public ParallelLodGpu? Parallel { get; init; }
+    }
 
-    private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Dispatch, Entity Group, Entity DispatchGroup, CompactionViewGpu Compaction);
+    private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Dispatch, Entity Group, Entity DispatchGroup, CompactionViewGpu Compaction)
+    {
+        public ParallelLodViewGpu? Parallel { get; init; }
+    }
 }

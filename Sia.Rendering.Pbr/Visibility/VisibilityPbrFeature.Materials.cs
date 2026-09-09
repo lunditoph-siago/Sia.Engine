@@ -9,7 +9,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class VisibilityPbrFeature
 {
-    public const int MaximumMaterialCount = 128;
+    public const int MaximumMaterialCount = 256;
     public const ulong MaximumMaterialTextureBytes = 128 * 1024 * 1024;
     public int MaterialCount { get; }
     private readonly Entity _materialParameters;
@@ -24,18 +24,23 @@ public sealed partial class VisibilityPbrFeature
         if (materials.Length > MaximumMaterialCount) {
             throw new ArgumentOutOfRangeException(nameof(materials), $"Visibility supports at most {MaximumMaterialCount} resident material batches.");
         }
-        if (!materials.IsEmpty) { return PbrSceneAsset.Create([], materials, []).Materials.ToArray(); }
+        if (!materials.IsEmpty) {
+            foreach (var material in materials) {
+                if (material is { AlphaBlend: true }) { throw new ArgumentException("Blended materials require a PbrTransparentScene.", nameof(materials)); }
+            }
+            return PbrSceneAsset.Create([], materials, []).Materials.ToArray();
+        }
         ArgumentNullException.ThrowIfNull(albedo);
         ArgumentNullException.ThrowIfNull(albedo.MipLevels);
         return [new(new(float3.one, 1, 1, float3.one, 1), PbrTextureData.Create(albedo.Width, albedo.Height, false, albedo.MipLevels))];
     }
 
-    private static PbrTextureData[] MaterialMaps(PbrMaterialAsset material) => [
+    internal static PbrTextureData[] MaterialMaps(PbrMaterialAsset material) => [
         material.BaseColor ?? s_WhiteColor, material.Normal ?? s_FlatNormal,
         material.MetallicRoughness ?? s_WhiteData, material.Occlusion ?? s_WhiteData, material.Emissive ?? s_WhiteColor
     ];
 
-    private static void ValidateTextureCapacity(PbrMaterialAsset[] materials, WGPULimits limits)
+    internal static void ValidateTextureCapacity(PbrMaterialAsset[] materials, WGPULimits limits)
     {
         var textures = new HashSet<PbrTextureData>(ReferenceEqualityComparer.Instance);
         ulong bytes = 0;
@@ -89,7 +94,7 @@ public sealed partial class VisibilityPbrFeature
             WGPUBufferUsage.Storage, limits, acquired));
     }
 
-    private static unsafe MaterialTextureGpu CreateMaterialTexture(World world, WgpuHandle<WGPUDevice> device,
+    internal static unsafe MaterialTextureGpu CreateMaterialTexture(World world, WgpuHandle<WGPUDevice> device,
         WgpuHandle<WGPUQueue> queue, ReadOnlySpan<PbrTextureData> sources, int index, List<Entity> acquired)
     {
         var source = sources[0];
@@ -132,7 +137,7 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private sealed record MaterialBatchGpu(Entity Uniform, RenderGraphBufferKey Key, MaterialTextureGpu[] Maps);
-    private sealed record MaterialTextureGpu(Entity Texture, Entity View, Entity Sampler, RenderGraphTextureKey Key, bool Srgb);
+    internal sealed record MaterialTextureGpu(Entity Texture, Entity View, Entity Sampler, RenderGraphTextureKey Key, bool Srgb);
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct MaterialParametersGpu(float4 ColorMetallic, float4 EmissiveRoughness, float4 TextureFactors,
         uint4 Layers, uint4 Indices);

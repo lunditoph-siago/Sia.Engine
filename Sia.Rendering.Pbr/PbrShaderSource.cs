@@ -19,6 +19,7 @@ public static class PbrShaderSource
         k_ResourcePrefix + "atmosphere.wgsl",
         k_ResourcePrefix + "visibility_geometry.wgsl",
         k_ResourcePrefix + "visibility_occlusion.wgsl",
+        k_ResourcePrefix + "visibility_parallel_lod.wgsl",
         k_ResourcePrefix + "visibility_materials.wgsl",
         k_ResourcePrefix + "scene_lighting.wgsl",
     ];
@@ -26,6 +27,7 @@ public static class PbrShaderSource
     public static string LoadDepthPrepass() => Load(k_ResourcePrefix + "depth_prepass.wgsl");
 
     public static string LoadForwardPbr() => Load(k_ResourcePrefix + "forward_pbr.wgsl");
+    internal static string LoadTransparentPbr() => Load(k_ResourcePrefix + "transparent_pbr.wgsl");
 
     public static string LoadClusterLightCulling() => Load(k_ResourcePrefix + "cluster_light_culling.wgsl");
 
@@ -51,6 +53,7 @@ public static class PbrShaderSource
 
     internal static string LoadVisibilityCompact() => Load(k_ResourcePrefix + "visibility_compact.wgsl");
     internal static string LoadVisibilityClusters() => Load(k_ResourcePrefix + "visibility_clusters.wgsl");
+    internal static string LoadVisibilityShadowIndices() => Load(k_ResourcePrefix + "visibility_shadow_indices.wgsl");
 
     internal static string LoadAtmosphere(string name) => Load(k_ResourcePrefix + "atmosphere_" + name + ".wgsl");
 

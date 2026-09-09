@@ -10,7 +10,7 @@ public sealed partial class VisibilityPbrFeature
     private readonly FixedGeometryGpu? _fixedGeometry;
 
     private uint4 RasterConfig => _fixedGeometry is { } geometry
-        ? new(geometry.Stride, geometry.Count, geometry.DispatchDimension, geometry.SharedVertices ? 1u : 3u) : new(1, 0, 0, 0);
+        ? new(geometry.Stride, geometry.Count, geometry.DispatchDimension, geometry.SharedVertices ? 1u : 3u) : new(1, 0, _materialTiles.DispatchDimension, 0);
 
     public static VisibilityPbrFeature CreateFixedScene(in GpuFrame frame, PbrSceneAsset asset,
         ReadOnlySpan<VisibilityInstance> instances, WGPUTextureFormat outputFormat,

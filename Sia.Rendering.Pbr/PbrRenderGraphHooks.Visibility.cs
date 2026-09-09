@@ -6,6 +6,46 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public static partial class PbrRenderGraphHooks
 {
+    internal static void UseTransparencyPass(ref RenderGraphBuildContext graph, PbrTransparentScene.View view,
+        PbrViewState lighting, RenderGraphTextureKey color, RenderGraphTextureKey depth, bool enabled)
+    {
+        var state = graph.UseState(static () => new TransparencyState());
+        state.View = view; state.Lighting = lighting; state.Color = color; state.Depth = depth;
+        state.Enabled = enabled;
+        graph.UsePass(new("pbr-transparent"), "pbr-transparent", state.Declare, state.Render);
+    }
+
+    private sealed class TransparencyState
+    {
+        public PbrTransparentScene.View View { get; set; } = null!;
+        public PbrViewState Lighting { get; set; } = null!;
+        public RenderGraphTextureKey Color { get; set; }
+        public RenderGraphTextureKey Depth { get; set; }
+        public bool Enabled { get; set; }
+        public void Declare(RenderGraphPassDeclarationBuilder declaration)
+        {
+            View.Declare(declaration);
+            declaration.ReadWrite(Color, RenderGraphTextureUsage.RenderAttachment)
+                .Read(Depth, RenderGraphTextureUsage.RenderAttachment)
+                .Read(_clusterConfigKey, RenderGraphBufferUsage.Uniform)
+                .Read(_clusteredLightsKey, RenderGraphBufferUsage.Storage)
+                .Read(_lightGridKey, RenderGraphBufferUsage.Storage)
+                .Read(_lightIndexListKey, RenderGraphBufferUsage.Storage)
+                .Read(_shadowAtlasKey, RenderGraphTextureUsage.TextureBinding)
+                .Read(AtmosphereGpuState.IrradianceKey, RenderGraphBufferUsage.Uniform)
+                .Read(_iblPrefilteredKey, RenderGraphTextureUsage.TextureBinding)
+                .Read(_iblBrdfLutKey, RenderGraphTextureUsage.TextureBinding);
+        }
+        public void Render(WgpuReactiveRenderGraphPassContext context)
+        {
+            if (!Enabled) { return; }
+            var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(Color, WGPULoadOp.Load),
+                new WgpuReactiveRenderGraphDepthStencilAttachment(Depth, WGPULoadOp.Undefined,
+                    WGPUStoreOp.Undefined, DepthReadOnly: true));
+            View.Render(pass, Lighting);
+        }
+    }
+
     internal static void UseVisibilityShadowPasses(ref RenderGraphBuildContext graph, VisibilityPbrFeature visibility,
         in RenderFeatureContext<RenderFrameContext> context) => visibility.BuildShadowGraph(ref graph, in context, _shadowAtlasKey);
 
