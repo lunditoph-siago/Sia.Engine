@@ -14,7 +14,43 @@ self.addEventListener('fetch', event => {
 function cachedResponse(response, hit) {
   const headers = new Headers(response.headers);
   headers.set('X-Sia-Asset-Cache', hit ? 'hit' : 'miss');
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  const reader = response.body?.getReader();
+  let chunk;
+  let offset = 0;
+  const body = reader ? new ReadableStream({
+    async pull(controller) {
+      const buffer = new Uint8Array(1024 * 1024);
+      let used = 0;
+      try {
+        while (used < buffer.length) {
+          if (!chunk || offset === chunk.length) {
+            const next = await reader.read();
+            if (next.done) {
+              if (used) controller.enqueue(buffer.subarray(0, used));
+              controller.close();
+              reader.releaseLock();
+              return;
+            }
+            chunk = next.value;
+            offset = 0;
+          }
+          const count = Math.min(buffer.length - used, chunk.length - offset);
+          buffer.set(chunk.subarray(offset, offset + count), used);
+          used += count;
+          offset += count;
+        }
+        controller.enqueue(buffer);
+      } catch (error) {
+        reader.releaseLock();
+        throw error;
+      }
+    },
+    async cancel(reason) {
+      try { await reader.cancel(reason); }
+      finally { reader.releaseLock(); }
+    }
+  }) : null;
+  return new Response(body, { status: response.status, statusText: response.statusText, headers });
 }
 
 async function loadScene(request) {

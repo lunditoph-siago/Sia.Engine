@@ -114,7 +114,11 @@ public sealed partial class PbrSceneAsset
                 var sampler = new PbrTextureSampler((WGPUAddressMode)reader.ReadUInt32(), (WGPUAddressMode)reader.ReadUInt32(),
                     (WGPUFilterMode)reader.ReadUInt32(), (WGPUFilterMode)reader.ReadUInt32(), (WGPUMipmapFilterMode)reader.ReadUInt32(), reader.ReadBoolean());
                 var levels = new ReadOnlyMemory<byte>[Count(reader, 4, 14)];
-                for (var level = 0; level < levels.Length; level++) { levels[level] = Blob(reader); }
+                for (var level = 0; level < levels.Length; level++) {
+                    var size = Count(reader, 1, int.MaxValue);
+                    levels[level] = raw.AsMemory((int)stream.Position, size);
+                    stream.Position += size;
+                }
                 textures[i] = PbrTextureData.Create(width, height, srgb, levels, sampler);
             }
             var materials = new PbrMaterialAsset[Count(reader, version == 1 ? 64 : 70, 4096)];
@@ -157,7 +161,6 @@ public sealed partial class PbrSceneAsset
     }
 
     private static void Blob(BinaryWriter writer, ReadOnlySpan<byte> bytes) { writer.Write(bytes.Length); writer.Write(bytes); }
-    private static byte[] Blob(BinaryReader reader) => reader.ReadBytes(Count(reader, 1, int.MaxValue));
     private static void Vector(BinaryWriter writer, float3 value) { writer.Write(value.x); writer.Write(value.y); writer.Write(value.z); }
     private static float3 Vector(BinaryReader reader) => new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
     private static void Column(BinaryWriter writer, float4 value) { Vector(writer, value.xyz); writer.Write(value.w); }

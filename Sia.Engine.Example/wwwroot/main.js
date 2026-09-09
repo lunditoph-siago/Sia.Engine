@@ -119,37 +119,20 @@ function setSceneAttribution(attribution) {
 }
 
 function showError(message) {
+  if (failed) return;
+  document.getElementById('loading-title').textContent = loading.hidden ? 'Scene interrupted' : 'Unable to open scene';
+  document.getElementById('loading-stage').textContent = message;
   failed = true;
   closeSettings();
   settingsToggle.disabled = true;
   document.getElementById('explore-hint').hidden = true;
-  document.getElementById('loading-title').textContent = loading.hidden ? 'Scene interrupted' : 'Unable to open scene';
   loading.hidden = false;
   loading.setAttribute('aria-busy', 'false');
-  document.getElementById('loading-stage').textContent = 'Try again, or choose another scene.';
   document.getElementById('loading-percent').textContent = '';
   loadingProgress.hidden = true;
   document.getElementById('loading-note').hidden = true;
   document.getElementById('retry').hidden = false;
-  document.getElementById('error-details').hidden = false;
-  const output = document.getElementById('error-output');
-  output.textContent = (output.textContent + message + '\n\n').slice(-16000);
 }
-
-function formatErrorValue(value) {
-  if (value instanceof Error) return value.stack ?? `${value.name}: ${value.message}`;
-  if (typeof value === 'string') return value;
-  try { return JSON.stringify(value, null, 2) ?? String(value); }
-  catch { return String(value); }
-}
-
-const originalConsoleError = console.error.bind(console);
-console.error = (...values) => {
-  originalConsoleError(...values);
-  showError(values.map(formatErrorValue).join(' '));
-};
-window.addEventListener('error', event => showError(event.error?.stack ?? event.message));
-window.addEventListener('unhandledrejection', event => showError(formatErrorValue(event.reason)));
 
 document.getElementById('loading-title').textContent = pipeline === 'pbr' ? 'Bistro' : pipeline === 'bunny' ? 'Stanford Bunny' : 'Unlit';
 if (pipeline !== 'pbr') document.getElementById('loading-note').textContent = 'Preparing the scene for your device.';
@@ -177,6 +160,7 @@ for (const link of document.querySelectorAll('nav a')) {
 }
 
 try {
+  setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
@@ -186,6 +170,7 @@ try {
   if (pipeline === 'pbr') {
     const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
     if (!parameters.has('scene')) {
+      setLoadingState('Checking scene version', NaN);
       const response = await fetch(new URL('Assets/Bistro.assets.json', location.href), { cache: 'no-store' });
       if (!response.ok) throw new Error(`Unable to load scene hashes (${response.status}).`);
       const hashes = await response.json();
@@ -194,6 +179,7 @@ try {
       scene.searchParams.set('sha256', hash);
       if ('serviceWorker' in navigator) {
         try {
+          setLoadingState('Opening scene cache', NaN);
           await navigator.serviceWorker.register(import.meta.resolve('./asset-cache.js'), { updateViaCache: 'none' });
           await navigator.serviceWorker.ready;
           if (!navigator.serviceWorker.controller) {
@@ -204,12 +190,15 @@ try {
     }
     args.push('--scene', scene.href);
   }
+  setLoadingState('Starting engine runtime', NaN);
   const { runMain, Module, setModuleImports } = await dotnet.withApplicationArguments(...args).create();
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
   setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, compareLodAtCamera, setLoadingState, setSceneReady, takeInspectionCommands, takeInspectionDistance });
-  await runMain();
+  const exitCode = await runMain();
+  if (exitCode !== 0) showError(`The engine stopped with exit code ${exitCode}.`);
 } catch (error) {
   console.error('[startup]', error);
+  showError(error instanceof Error ? error.message : String(error));
 }
