@@ -59,7 +59,7 @@ public static partial class Program
 #endif
         var readMilliseconds = timer.Elapsed.TotalMilliseconds;
         timer.Restart();
-        var scene = PbrSceneAsset.Decode(bytes.Span, 512 * 1024 * 1024);
+        var scene = PbrSceneAsset.Decode(bytes.Span, 1024 * 1024 * 1024);
         Console.WriteLine(scene.Attribution);
         Console.WriteLine($"PBR scene: {bytes.Length} bytes; read {readMilliseconds:F2} ms, decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
             + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");

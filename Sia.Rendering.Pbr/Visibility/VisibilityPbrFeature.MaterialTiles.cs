@@ -24,10 +24,10 @@ public sealed partial class VisibilityPbrFeature
         var layout = PipelineLayout(world, device, [geometry, group], acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityMaterialTiles()), acquired);
         return new(geometry, group, ComputePipeline(world, device, shader, layout, "reset", acquired),
-            ComputePipeline(world, device, shader, layout, "classify", acquired));
+            ComputePipeline(world, device, shader, layout, "classify", acquired), Wgpu.GetLimits(device).MaxComputeWorkgroupsPerDimension);
     }
 
-    private readonly record struct MaterialTilesGpu(Entity GeometryLayout, Entity Layout, Entity Reset, Entity Classify);
+    private readonly record struct MaterialTilesGpu(Entity GeometryLayout, Entity Layout, Entity Reset, Entity Classify, uint DispatchDimension);
 
     private sealed partial class ViewState
     {

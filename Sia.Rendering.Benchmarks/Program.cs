@@ -82,11 +82,11 @@ if (stripScenePath is not null) {
         && option is not ("--strip-scene-lod" or "--source"))) {
         throw new ArgumentException("--strip-scene-lod requires only --source INPUT.siapbr.");
     }
-    var source = PbrSceneAsset.Decode(File.ReadAllBytes(sourcePath), 512 * 1024 * 1024);
+    var source = PbrSceneAsset.Decode(File.ReadAllBytes(sourcePath), 1024 * 1024 * 1024);
     var geometry = source.Geometry.ToArray().Select(asset => asset.ExtractFinest()).ToArray();
     var scene = PbrSceneAsset.Create(geometry, source.Materials.Span, source.Instances.Span, source.Attribution);
     var bytes = scene.Encode();
-    _ = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
+    _ = PbrSceneAsset.Decode(bytes, 1024 * 1024 * 1024);
     WriteAsset(stripScenePath, bytes);
     Console.WriteLine(JsonSerializer.Serialize(new { Path = Path.GetFullPath(stripScenePath), Bytes = bytes.Length }));
     return;
@@ -99,7 +99,7 @@ if (scenePath is not null) {
     var watch = Stopwatch.StartNew();
     var scene = GltfScene.Read(sourcePath, textureSize, attribution, buildSettings);
     var bytes = scene.Encode();
-    var decoded = PbrSceneAsset.Decode(bytes, 512 * 1024 * 1024);
+    var decoded = PbrSceneAsset.Decode(bytes, 1024 * 1024 * 1024);
     WriteAsset(scenePath, bytes);
     Console.WriteLine(JsonSerializer.Serialize(new {
         Path = Path.GetFullPath(scenePath), Bytes = bytes.Length, Geometry = decoded.Geometry.Length,

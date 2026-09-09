@@ -21,7 +21,7 @@ struct Cluster { minimum: vec4<f32>, maximum: vec4<f32>, sphere: vec4<f32>, cone
 var<workgroup> sums: array<vec2<u32>, 256>;
 
 fn backfacing(cluster: Cluster) -> bool {
-    if (cluster.cone.w >= 1.0) { return false; }
+    if (cluster.cone.w >= 1.0 || instances[cluster.work.y].material.w != 0.0) { return false; }
     let origin = transpose(instances[cluster.work.y].normal_transform) * camera.raster_origin;
     let direction = origin.xyz - cluster.sphere.xyz * origin.w;
     let distance = length(direction);

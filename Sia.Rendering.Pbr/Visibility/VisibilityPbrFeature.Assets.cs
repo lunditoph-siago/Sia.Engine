@@ -37,14 +37,11 @@ public sealed partial class VisibilityPbrFeature
                 rootTriangles += (uint)root.TriangleCount;
             }
         }
-        var geometry = new MeshletRasterData[assets.Length];
         var offsets = new uint[assets.Length];
         var patches = new List<PatchGpu>();
         uint triangleOffset = 0, maxChildren = 0;
         for (var asset = 0; asset < assets.Length; asset++) {
             var tree = assets[asset];
-            var (mesh, meshlets) = tree.CopyGeometry();
-            geometry[asset] = MeshletRasterData.Create(mesh, meshlets);
             offsets[asset] = (uint)patches.Count;
             var nodes = tree.Nodes.Span;
             foreach (var node in nodes) {
@@ -58,7 +55,7 @@ public sealed partial class VisibilityPbrFeature
                     new uint4(checked(offsets[asset] + (uint)node.ChildOffset), (uint)node.ChildCount, childMeshlets, childTriangles),
                     new uint4((uint)node.MeshletCount, checked(triangleOffset + (uint)node.TriangleOffset), (uint)node.TriangleCount, (uint)asset)));
             }
-            triangleOffset = checked(triangleOffset + (uint)geometry[asset].Triangles.Length);
+            triangleOffset = checked(triangleOffset + (uint)tree.TriangleCount);
         }
         var ranges = new uint4[instances.Length];
         uint rootOffset = 0;
@@ -70,7 +67,7 @@ public sealed partial class VisibilityPbrFeature
         }
         var refined = System.Math.Min(instanceNodes - roots,
             System.Math.Min((uint)budget.MaxRefinementNodes, (ulong)maxChildren * (uint)budget.MaxRefinementCandidates));
-        return new(geometry.Length == 1 ? geometry[0] : MeshletRasterData.Combine(geometry), patches.ToArray(), ranges,
+        return new(MeshletRasterData.Create(assets), patches.ToArray(), ranges,
             new uint3(rootOffset, checked((uint)rootMeshlets), checked((uint)rootTriangles)), checked((uint)System.Math.Max(1ul, roots + refined)),
             checked((uint)System.Math.Min(finest, System.Math.Max(rootTriangles, (uint)budget.MaxTriangles))));
     }

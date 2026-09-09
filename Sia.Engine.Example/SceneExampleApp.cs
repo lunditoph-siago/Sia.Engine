@@ -103,7 +103,11 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
 
-        _device = Wgpu.RequestDevice(_adapter, CreateDeviceDescriptor());
+        var required = WGPULimits.Default;
+        ConfigureSceneLimits(ref required);
+        var deviceDescriptor = CreateDeviceDescriptor();
+        deviceDescriptor.RequiredLimits = &required;
+        _device = Wgpu.RequestDevice(_adapter, deviceDescriptor);
         _queue = Wgpu.GetQueue(_device);
 
         InitializeRenderGraph();
@@ -135,6 +139,17 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         descriptor.UncapturedErrorCallbackInfo.Callback = &OnGpuError;
 #endif
         return descriptor;
+    }
+
+    private void ConfigureSceneLimits(ref WGPULimits required)
+    {
+        if (_pipeline != ScenePipeline.Pbr) { return; }
+        var supported = WGPULimits.Default;
+        if (WgpuUnsafe.wgpuAdapterGetLimits((WGPUAdapter*)_adapter.DangerousGetHandle(), &supported) != WGPUStatus.Success) {
+            throw new WgpuException("The adapter did not report its geometry buffer limits.");
+        }
+        required.MaxStorageBufferBindingSize = System.Math.Min(supported.MaxStorageBufferBindingSize, 256ul * 1024 * 1024);
+        required.MaxBufferSize = System.Math.Min(supported.MaxBufferSize, 256ul * 1024 * 1024);
     }
 
 #if BROWSER

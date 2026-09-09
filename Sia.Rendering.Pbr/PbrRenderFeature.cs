@@ -20,11 +20,13 @@ public sealed class PbrRenderFeature :
 
     public PbrRenderFeatureOptions Options { get; }
     public VisibilityPbrFeature? Visibility { get; }
+    public PbrTransparentScene? Transparency { get; }
 
     public PbrRenderFeature(
         PbrRenderer renderer,
         PbrRenderFeatureOptions? options = null,
-        VisibilityPbrFeature? visibility = null)
+        VisibilityPbrFeature? visibility = null,
+        PbrTransparentScene? transparency = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
         if (visibility is null && !renderer.HasMeshPipelines) {
@@ -33,6 +35,7 @@ public sealed class PbrRenderFeature :
         Renderer = renderer;
         Options = options ?? new PbrRenderFeatureOptions();
         Visibility = visibility;
+        Transparency = transparency;
     }
 
     public void Extract(in RenderFeatureContext<RenderFrameContext> context)
@@ -60,6 +63,7 @@ public sealed class PbrRenderFeature :
         Renderer.PrepareFrame(state, in frame, extracted);
         Renderer.PrepareLighting(state, in frame, extracted);
         Renderer.PrepareOutput(state, in frame, extracted, Options.ExposureCompensation, Options.ToneMapping);
+        Transparency?.Prepare(in context, extracted);
         if (Visibility is { } visibility) {
             visibility.Prepare(in context, sceneLighting: true);
             visibility.PrepareShadows(in context, state.Shadows, extracted.ShadowConfig);
@@ -120,6 +124,10 @@ public sealed class PbrRenderFeature :
                 ref graph, Renderer, state, phase, Options.DepthPrepass, frameContext.DepthTarget);
             PbrRenderGraphHooks.UseForwardPbrPass(
                 ref graph, Renderer, state, phase, Options.ForwardPass, Options.HdrTarget, frameContext.DepthTarget, WGPULoadOp.Load);
+        }
+        if (Transparency is { } transparency) {
+            PbrRenderGraphHooks.UseTransparencyPass(ref graph, transparency.Import(ref graph, in context), state,
+                Options.HdrTarget, frameContext.DepthTarget, Visibility is null || Visibility.DebugMode == VisibilityDebugMode.Shaded);
         }
         var output = PbrRenderGraphHooks.UseAtmosphereComposite(
             ref graph, state, extracted, Options, in frameContext);
