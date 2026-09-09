@@ -212,6 +212,12 @@ public sealed partial class MeshPatchAsset
         public Aabb Box() => new(Vector(), Vector());
         public MeshVertex Vertex(int version)
         {
+            if (BitConverter.IsLittleEndian) {
+                var values = MemoryMarshal.Cast<byte, float>(Bytes(version == 1 ? 32 : 48));
+                return new(new(values[0], values[1], values[2]), new(values[3], values[4], values[5]), new(values[6], values[7])) {
+                    Tangent = version == 1 ? default : new(values[8], values[9], values[10], values[11])
+                };
+            }
             var vertex = new MeshVertex(Vector(), Vector(), new(Float(), Float()));
             return version == 1 ? vertex : vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
         }
