@@ -51,7 +51,8 @@ public sealed class PbrRenderFeature :
             in frame,
             frameContext.Camera,
             clusterConfig,
-            shadowConfig);
+            shadowConfig,
+            Visibility?.ShadowBounds);
         context.View.Resources.Set(extracted);
     }
 

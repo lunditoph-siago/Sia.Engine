@@ -82,6 +82,7 @@ public sealed partial class VisibilityPbrFeature
         }
         entities.Sort(static (a, b) => a.Id.Value.CompareTo(b.Id.Value));
         var instances = new InstanceGpu[entities.Count];
+        Aabb? shadowBounds = null;
         uint roots = 0, meshlets = 0, triangles = 0;
         for (var i = 0; i < instances.Length; i++) {
             var source = entities[i].Get<VisibilityInstance>();
@@ -94,12 +95,14 @@ public sealed partial class VisibilityPbrFeature
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
+            IncludeBounds(ref shadowBounds, _assetBounds[source.AssetIndex], source.Transform);
         }
         if (roots > _lod.Budget.MaxPatches || meshlets > _lod.Budget.MaxMeshlets || triangles > _lod.Budget.MaxTriangles) {
             throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
         }
         if (_lod.Shadows is { } shadow) { ValidateShadowRoots(new(roots, meshlets, triangles), shadow.Budget); }
         _extractedInstances = new(context.RenderWorld.FrameIndex, entities.ToArray(), instances, roots, meshlets, triangles);
+        ShadowBounds = shadowBounds;
         _instanceRenderWorld = context.RenderWorld;
     }
 

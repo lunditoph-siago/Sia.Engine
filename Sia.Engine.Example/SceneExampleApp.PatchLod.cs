@@ -70,12 +70,12 @@ internal sealed partial class SceneExampleApp
                     Key.Space when _pipeline == ScenePipeline.Bunny => 1u, Key.M => 2u, Key.R => 4u,
                     Key.S or Key.Down when _pipeline == ScenePipeline.Bunny => 8u,
                     Key.W or Key.Up when _pipeline == ScenePipeline.Bunny => 16u,
-                    Key.B => 32u, Key.P => 64u, _ => 0u
+                    Key.B => 32u, _ => 0u
                 };
             }
         });
         Console.WriteLine(_pipeline == ScenePipeline.Pbr
-            ? "WASD: move. Q/E: down/up. Right drag or arrows: look. Shift: fast. C: slow. P: print camera. R: reset. M: material. B: atmosphere."
+            ? "WASD: move. Q/E: down/up. Right drag or arrows: look. Shift: fast. C: slow. R: reset. M: material. B: atmosphere."
             : "W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
     }
 
@@ -86,10 +86,14 @@ internal sealed partial class SceneExampleApp
         _patchKeys = 0;
 #if BROWSER
         pressed |= (uint)TakeInspectionCommands();
-        var distance = TakeInspectionDistance();
-        if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
-            _patchDistance = (float)System.Math.Clamp(distance, 0, 1);
-            _patchTour = false;
+        _cameraFocused = (pressed & 128) != 0;
+        _compareLodRequested = (pressed & 64) != 0;
+        if ((pressed & 256) != 0) {
+            var distance = TakeInspectionDistance();
+            if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
+                _patchDistance = (float)System.Math.Clamp(distance, 0, 1);
+                _patchTour = false;
+            }
         }
 #endif
         if (_pipeline == ScenePipeline.Bunny && (pressed & 1) != 0) {
@@ -105,16 +109,17 @@ internal sealed partial class SceneExampleApp
             else { _patchDistance = 0; }
             _patchTour = false;
         }
-        if ((pressed & 64) != 0) { _printCamera = true; }
         if (_pipeline == ScenePipeline.Pbr && (pressed & 32) != 0) {
             var environment = _sceneWorld!.AcquireAddon<EnvironmentLighting>();
             environment.Atmosphere = environment.Atmosphere is null ? new SkyAtmosphere() : null;
         }
-        var direction = (Down(Key.S) || Down(Key.Down) ? 1 : 0) - (Down(Key.W) || Down(Key.Up) ? 1 : 0);
-        var step = ((pressed & 8) != 0 ? 1 : 0) - ((pressed & 16) != 0 ? 1 : 0);
-        if (_pipeline == ScenePipeline.Bunny && (direction != 0 || step != 0)) {
-            _patchTour = false;
-            _patchDistance = System.Math.Clamp(_patchDistance + direction * deltaTime * 0.25f + step * 0.01f, 0, 1);
+        if (_pipeline == ScenePipeline.Bunny) {
+            var direction = (Down(Key.S) || Down(Key.Down) ? 1 : 0) - (Down(Key.W) || Down(Key.Up) ? 1 : 0);
+            var step = ((pressed & 8) != 0 ? 1 : 0) - ((pressed & 16) != 0 ? 1 : 0);
+            if (direction != 0 || step != 0) {
+                _patchTour = false;
+                _patchDistance = System.Math.Clamp(_patchDistance + direction * deltaTime * 0.25f + step * 0.01f, 0, 1);
+            }
         }
         if (_patchTour) {
             _patchTourPhase = (_patchTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;

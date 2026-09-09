@@ -69,11 +69,12 @@ public sealed partial class VisibilityPbrFeature
             System.Math.Min((uint)budget.MaxRefinementNodes, (ulong)maxChildren * (uint)budget.MaxRefinementCandidates));
         return new(MeshletRasterData.Create(assets), patches.ToArray(), ranges,
             new uint3(rootOffset, checked((uint)rootMeshlets), checked((uint)rootTriangles)), checked((uint)System.Math.Max(1ul, roots + refined)),
-            checked((uint)System.Math.Min(finest, System.Math.Max(rootTriangles, (uint)budget.MaxTriangles))));
+            checked((uint)System.Math.Min(finest, System.Math.Max(rootTriangles, (uint)budget.MaxTriangles))),
+            assets.ToArray().Select(PatchBounds).ToArray());
     }
 
     private sealed record SceneLodData(MeshletRasterData Geometry, PatchGpu[] Patches, uint4[] InstanceRoots,
-        uint3 RootCost, uint StateCapacity, uint TriangleCapacity)
+        uint3 RootCost, uint StateCapacity, uint TriangleCapacity, Aabb?[] AssetBounds)
     {
         public int InstanceCapacity { get; init; } = InstanceRoots.Length;
     }

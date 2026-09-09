@@ -166,9 +166,9 @@ internal sealed unsafe partial class SceneExampleApp
             UpdatePatchInspection(deltaTime);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             var size = _materialBounds.Max - _materialBounds.Min;
-            target = new float3(-1.28f, 2.39f, -1.52f);
+            target = new float3(-15.1f, 3.9f, 1.6f);
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
-            eye = new float3(-8.53f, 2.79f, 1.83f);
+            eye = new float3(-16.1f, 4.0f, 1.7f);
             UpdateFreeCamera(deltaTime, ref eye, ref target);
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
             _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
