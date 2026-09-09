@@ -88,7 +88,7 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe Entity CreateRaster(World world, WgpuHandle<WGPUDevice> device,
-        Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false)
+        Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false, bool doubleSided = false)
     {
         var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
         var first = indexed && !shadow && core;
@@ -122,7 +122,7 @@ public sealed partial class VisibilityPbrFeature
             descriptor.Primitive = WGPUPrimitiveState.Default;
             descriptor.Primitive.Topology = WGPUPrimitiveTopology.TriangleList;
             descriptor.Primitive.FrontFace = WGPUFrontFace.CCW;
-            descriptor.Primitive.CullMode = WGPUCullMode.Back;
+            descriptor.Primitive.CullMode = doubleSided ? WGPUCullMode.None : WGPUCullMode.Back;
             descriptor.Multisample = WGPUMultisampleState.Default;
             return Own(world, Wgpu.CreateRenderPipeline(device, descriptor), acquired);
         }

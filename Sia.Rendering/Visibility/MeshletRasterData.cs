@@ -28,6 +28,32 @@ public sealed class MeshletRasterData
             indexCount = checked(indexCount + asset.Indices.Length);
             triangleCount = checked(triangleCount + asset.Triangles.Length);
         }
+        return Combine(assets.ToArray(), vertexCount, meshletCount, indexCount, triangleCount);
+    }
+
+    public static MeshletRasterData Create(ReadOnlySpan<MeshPatchTree> assets)
+    {
+        int vertexCount = 0, meshletCount = 0, indexCount = 0, triangleCount = 0;
+        foreach (var asset in assets) {
+            ArgumentNullException.ThrowIfNull(asset);
+            vertexCount = checked(vertexCount + asset.VertexCount);
+            meshletCount = checked(meshletCount + asset.MeshletCount);
+            indexCount = checked(indexCount + asset.MeshletVertexCount + asset.TriangleCount);
+            triangleCount = checked(triangleCount + asset.TriangleCount);
+        }
+        if (assets.Length == 1) {
+            var (geometry, meshlets) = assets[0].CopyGeometry();
+            return Create(geometry, meshlets);
+        }
+        return Combine(assets.ToArray().Select(asset => {
+            var (geometry, meshlets) = asset.CopyGeometry();
+            return Create(geometry, meshlets);
+        }), vertexCount, meshletCount, indexCount, triangleCount);
+    }
+
+    private static MeshletRasterData Combine(IEnumerable<MeshletRasterData> assets,
+        int vertexCount, int meshletCount, int indexCount, int triangleCount)
+    {
         var vertices = new MeshVertex[vertexCount];
         var meshlets = new uint4[meshletCount];
         var indices = new uint[indexCount];

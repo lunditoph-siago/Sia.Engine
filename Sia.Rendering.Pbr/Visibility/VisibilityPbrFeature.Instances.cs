@@ -89,7 +89,8 @@ public sealed partial class VisibilityPbrFeature
                 throw new ArgumentOutOfRangeException(nameof(source.AssetIndex), "The instance asset index is outside the scene asset table.");
             }
             var asset = _instanceAssets[source.AssetIndex];
-            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex), MaterialCount);
+            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex), MaterialCount,
+                (uint)source.MaterialIndex < (uint)_doubleSided.Length && _doubleSided[source.MaterialIndex]);
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
@@ -97,7 +98,8 @@ public sealed partial class VisibilityPbrFeature
         if (roots > _lod.Budget.MaxPatches || meshlets > _lod.Budget.MaxMeshlets || triangles > _lod.Budget.MaxTriangles) {
             throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
         }
-        _extractedInstances = new(context.RenderWorld.FrameIndex, entities.ToArray(), instances, roots);
+        if (_lod.Shadows is { } shadow) { ValidateShadowRoots(new(roots, meshlets, triangles), shadow.Budget); }
+        _extractedInstances = new(context.RenderWorld.FrameIndex, entities.ToArray(), instances, roots, meshlets, triangles);
         _instanceRenderWorld = context.RenderWorld;
     }
 
@@ -140,12 +142,16 @@ public sealed partial class VisibilityPbrFeature
                 [new uint4((uint)(Wgpu.GetBufferSize(lod.Patches.GetWgpu<WGPUBuffer>()) / 64), snapshot.RootCount,
                     (uint)instances.Length, lod.DispatchDimension)]);
         }
+        if (previous is null || previous.RootMeshlets != snapshot.RootMeshlets || previous.RootTriangles != snapshot.RootTriangles) {
+            Wgpu.WriteBuffer<uint>(queue, _gpuLod!.Value.Parameters.GetWgpu<WGPUBuffer>(), 40,
+                [snapshot.RootMeshlets, snapshot.RootTriangles]);
+        }
         if (changed) { _instanceVersion = checked(_instanceVersion + 1); }
         InstanceCount = (uint)instances.Length;
         _preparedInstances = snapshot;
     }
 
-    private static InstanceGpu ToGpu(VisibilityInstance instance, uint4 roots, int materialCount = 1)
+    private static InstanceGpu ToGpu(VisibilityInstance instance, uint4 roots, int materialCount = 1, bool doubleSided = false)
     {
         var transform = instance.Transform;
         var material = instance.Material;
@@ -169,11 +175,11 @@ public sealed partial class VisibilityPbrFeature
             throw new ArgumentException("Instance transforms/materials overflow their GPU representation.", nameof(instance));
         }
         return new(transform, normalTransform, new float4(material.BaseColor, 1),
-            new float4(material.Metallic, material.Roughness, instance.MaterialIndex, 0), new float4(emissive, 0), roots);
+            new float4(material.Metallic, material.Roughness, instance.MaterialIndex, doubleSided ? 1 : 0), new float4(emissive, 0), roots);
     }
 
     private readonly record struct AssetRoots(uint Offset, uint Count, uint Meshlets, uint Triangles);
-    private sealed record InstanceSnapshot(ulong Frame, Entity[] Entities, InstanceGpu[] Instances, uint RootCount);
+    private sealed record InstanceSnapshot(ulong Frame, Entity[] Entities, InstanceGpu[] Instances, uint RootCount, uint RootMeshlets, uint RootTriangles);
 
     private sealed partial class ViewState
     {

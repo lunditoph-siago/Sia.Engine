@@ -20,6 +20,7 @@ public sealed partial class VisibilityPbrFeature :
     private readonly LodGpu? _gpuLod;
     private readonly MaterialBatchGpu[] _materialBatches;
     private readonly MaterialTextureGpu[] _materialTextures;
+    private bool[] _doubleSided = [];
     private readonly Entity _geometryLayout;
     private readonly Entity _resolveLayout;
     private readonly Entity _raster;
@@ -100,6 +101,9 @@ public sealed partial class VisibilityPbrFeature :
     {
         ArgumentNullException.ThrowIfNull(tree);
         ValidateLod(lod);
+        if (lod.Traversal != VisibilityLodTraversal.BestFirst || lod.Shadows is not null) {
+            throw new ArgumentException("Parallel traversal and independent shadow settings require GPU LOD.", nameof(lod));
+        }
         var (geometry, meshlets) = tree.CopyGeometry();
         return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod);
     }
@@ -108,8 +112,18 @@ public sealed partial class VisibilityPbrFeature :
     {
         if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
             || lod.Budget.MaxMeshlets < 0 || lod.Budget.MaxTriangles < 0
-            || lod.Budget.MaxRefinementCandidates < 0 || lod.Budget.MaxRefinementNodes < 0) {
+            || lod.Budget.MaxRefinementCandidates < 0 || lod.Budget.MaxRefinementNodes < 0
+            || !Enum.IsDefined(lod.Traversal)
+            || (lod.Traversal == VisibilityLodTraversal.Parallel && lod.MaxTraversalPasses <= 0)) {
             throw new ArgumentOutOfRangeException(nameof(lod));
+        }
+        if (lod.Shadows is { } shadow) {
+            ValidateLod(new(shadow.TargetPixelError, shadow.Budget) { Traversal = lod.Traversal, MaxTraversalPasses = shadow.MaxTraversalPasses });
+            if (shadow.Budget.MaxPatches > lod.Budget.MaxPatches || shadow.Budget.MaxMeshlets > lod.Budget.MaxMeshlets
+                || shadow.Budget.MaxTriangles > lod.Budget.MaxTriangles || shadow.Budget.MaxRefinementNodes > lod.Budget.MaxRefinementNodes
+                || shadow.Budget.MaxRefinementCandidates > lod.Budget.MaxRefinementCandidates) {
+                throw new ArgumentException("Shadow budgets must fit the reserved scene budgets.", nameof(lod));
+            }
         }
     }
 
@@ -120,6 +134,7 @@ public sealed partial class VisibilityPbrFeature :
         FixedClusterGpu[]? fixedClusters = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
+        if (scene is not null && lod.Shadows is { } shadow) { ValidateShadowRoots(scene.RootCost, shadow.Budget); }
         var sourceMaterials = ValidateMaterials(albedo, materials);
         if (!Enum.IsDefined(mode)) { throw new ArgumentOutOfRangeException(nameof(mode)); }
         if (outputFormat is not (WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.BGRA8Unorm
@@ -135,7 +150,8 @@ public sealed partial class VisibilityPbrFeature :
             if (scene is null && instances[i].AssetIndex != 0) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "A single geometry input only accepts asset index zero.");
             }
-            gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default, sourceMaterials.Length);
+            gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default, sourceMaterials.Length,
+                (uint)instances[i].MaterialIndex < (uint)sourceMaterials.Length && sourceMaterials[instances[i].MaterialIndex].DoubleSided);
             transforms[i] = instances[i].Transform;
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
@@ -166,7 +182,8 @@ public sealed partial class VisibilityPbrFeature :
             var (materialGpu, textures, materialParameters) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
             var geometryLayout = CreateGeometryLayout(world, device, acquired);
             var resolveLayout = CreateResolveLayout(world, device, acquired);
-            var raster = CreateRaster(world, device, geometryLayout, acquired, indexed: fixedClusters is not null);
+            var raster = CreateRaster(world, device, geometryLayout, acquired, indexed: fixedClusters is not null,
+                doubleSided: sourceMaterials.Any(material => material.DoubleSided));
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
             var materialTiles = CreateMaterialTiles(world, device, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
@@ -174,7 +191,8 @@ public sealed partial class VisibilityPbrFeature :
             var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired);
             return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry) {
-                InstanceCapacity = (uint)gpuInstances.Length
+                InstanceCapacity = (uint)gpuInstances.Length,
+                _doubleSided = sourceMaterials.Select(material => material.DoubleSided).ToArray()
             };
         }
         catch {

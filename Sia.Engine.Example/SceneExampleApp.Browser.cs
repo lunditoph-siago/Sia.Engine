@@ -157,6 +157,7 @@ internal sealed partial class SceneExampleApp
         requiredStages.MaxStorageBuffersInVertexStage = vertexStorage;
         requiredStages.MaxStorageBuffersInFragmentStage = fragmentStorage;
         var required = WGPULimits.Default;
+        ConfigureSceneLimits(ref required);
         required.NextInChain = &requiredStages.Chain;
         required.MaxComputeWorkgroupSizeX = workgroupSize;
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;

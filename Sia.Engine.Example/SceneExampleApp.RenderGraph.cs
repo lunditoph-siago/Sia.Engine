@@ -59,9 +59,7 @@ internal sealed unsafe partial class SceneExampleApp
             Console.WriteLine($"{_pipeline}: {_renderGraph!.PreparePlan().Graph.Passes.Count} render graph pass(es).");
             return;
         }
-        if (mount.Props != props) {
-            mount.Update(props);
-        }
+        mount.Update(props);
     }
 
     private void ExecuteRenderGraph() => _renderGraphWorld!.ExecuteWgpuRenderGraph();

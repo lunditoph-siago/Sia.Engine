@@ -5,7 +5,7 @@
 @group(1) @binding(1) var<storage, read_write> tiles: array<atomic<u32>>;
 @group(1) @binding(2) var<storage, read_write> dispatches: array<atomic<u32>>;
 @group(1) @binding(3) var<storage, read> material_parameters: array<VisibilityMaterial>;
-var<workgroup> materials: array<atomic<u32>, 4>;
+var<workgroup> materials: array<atomic<u32>, 8>;
 var<workgroup> first_material: u32;
 
 fn material_at(pixel: vec2<i32>) -> u32 {
@@ -29,7 +29,7 @@ fn reset(@builtin(global_invocation_id) thread: vec3<u32>) {
 @compute @workgroup_size(8, 8)
 fn classify(@builtin(global_invocation_id) thread: vec3<u32>,
     @builtin(local_invocation_index) local: u32, @builtin(workgroup_id) group: vec3<u32>) {
-    if (local < 4u) { atomicStore(&materials[local], 0u); }
+    if (local < 8u) { atomicStore(&materials[local], 0u); }
     if (local == 0u) { first_material = material_at(vec2<i32>(group.xy * 8u)); }
     workgroupBarrier();
     let size = visibility_camera.size_counts.xy;
@@ -40,7 +40,7 @@ fn classify(@builtin(global_invocation_id) thread: vec3<u32>,
         }
     }
     workgroupBarrier();
-    if (local < 4u) {
+    if (local < 8u) {
         let dimensions = (size + 7u) / 8u;
         let stride = dimensions.x * dimensions.y + 1u;
         var mask = atomicLoad(&materials[local]);
@@ -49,8 +49,8 @@ fn classify(@builtin(global_invocation_id) thread: vec3<u32>,
             let material = local * 32u + bit;
             let index = atomicAdd(&tiles[material * stride], 1u);
             atomicStore(&tiles[material * stride + 1u + index], group.y * dimensions.x + group.x);
-            atomicMax(&dispatches[material * 3u], min(index + 1u, 65535u));
-            atomicMax(&dispatches[material * 3u + 1u], index / 65535u + 1u);
+            atomicMax(&dispatches[material * 3u], min(index + 1u, visibility_camera.raster.z));
+            atomicMax(&dispatches[material * 3u + 1u], index / visibility_camera.raster.z + 1u);
             mask &= mask - 1u;
         }
     }

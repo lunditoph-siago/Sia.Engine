@@ -13,8 +13,9 @@ internal sealed partial class GltfScene
     private PbrMaterialAsset Material(JsonElement material)
     {
         Reject(material, "extensions");
-        Require(!material.TryGetProperty("alphaMode", out var alphaMode) || alphaMode.GetString() == "OPAQUE", "Only opaque glTF materials are supported.");
-        Require(!material.TryGetProperty("doubleSided", out var doubleSided) || !doubleSided.GetBoolean(), "Double-sided glTF materials are not supported.");
+        var blend = material.TryGetProperty("alphaMode", out var alphaMode) && alphaMode.GetString() == "BLEND";
+        Require(!material.TryGetProperty("alphaMode", out alphaMode) || alphaMode.GetString() is "OPAQUE" or "BLEND", "Unsupported glTF alpha mode.");
+        var doubleSided = material.TryGetProperty("doubleSided", out var sided) && sided.GetBoolean();
         var color = new[] { 1f, 1f, 1f, 1f }; var metallic = 1f; var roughness = 1f;
         PbrTextureData? baseColor = null; PbrTextureData? metallicRoughness = null;
         if (material.TryGetProperty("pbrMetallicRoughness", out var pbr)) {
@@ -30,7 +31,8 @@ internal sealed partial class GltfScene
             baseColor, Texture(material, "normalTexture", normal: true), metallicRoughness, Texture(material, "occlusionTexture"),
             Texture(material, "emissiveTexture", srgb: true),
             material.TryGetProperty("normalTexture", out var normalInfo) ? Scalar(normalInfo, "scale", 1) : 1,
-            material.TryGetProperty("occlusionTexture", out var occlusionInfo) ? Scalar(occlusionInfo, "strength", 1) : 1);
+            material.TryGetProperty("occlusionTexture", out var occlusionInfo) ? Scalar(occlusionInfo, "strength", 1) : 1,
+            doubleSided, blend, color[3]);
     }
 
     private PbrTextureData? Texture(JsonElement owner, string property, bool srgb = false, bool normal = false)

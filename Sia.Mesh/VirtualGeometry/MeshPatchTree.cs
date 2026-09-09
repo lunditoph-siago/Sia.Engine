@@ -11,6 +11,10 @@ public sealed partial class MeshPatchTree
     public ReadOnlyMemory<MeshPatchNode> Nodes { get; }
     public int RootCount { get; }
     public int FinestTriangleCount { get; }
+    public int VertexCount => _geometry.Vertices.Length;
+    public int TriangleCount => _geometry.Indices.Length / 3;
+    public int MeshletCount => _meshlets.Meshlets.Length;
+    public int MeshletVertexCount => _meshlets.VertexIndices.Length;
 
     private MeshPatchTree(MeshPatchNode[] nodes, int roots, int finestTriangles, MeshData geometry, MeshletData meshlets)
     {

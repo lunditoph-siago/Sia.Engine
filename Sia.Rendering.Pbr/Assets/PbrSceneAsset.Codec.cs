@@ -44,6 +44,7 @@ public sealed partial class PbrSceneAsset
                 Vector(writer, p.BaseColor); writer.Write(p.Metallic); writer.Write(p.Roughness);
                 Vector(writer, p.EmissiveColor); writer.Write(p.EmissiveStrength);
                 writer.Write(material.NormalScale); writer.Write(material.OcclusionStrength);
+                writer.Write(material.DoubleSided); writer.Write(material.AlphaBlend); writer.Write(material.Opacity);
                 foreach (var map in Maps(material)) { writer.Write(map is null ? -1 : textureIndices[map]); }
             }
             writer.Write(Instances.Length);
@@ -74,7 +75,8 @@ public sealed partial class PbrSceneAsset
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
         Require(bytes.Length > HeaderSize && bytes[..8].SequenceEqual("SIAPBR01"u8), "Invalid PBR scene header.");
-        Require(BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]) == FormatVersion, "Unsupported PBR scene version.");
+        var version = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
+        Require(version is 1 or FormatVersion, "Unsupported PBR scene version.");
         var length = BinaryPrimitives.ReadInt32LittleEndian(bytes[12..]);
         Require(length >= 13 && length <= maximumDecodedBytes && BinaryPrimitives.ReadInt64LittleEndian(bytes[16..]) == bytes.Length,
             "Invalid PBR scene length or decoded byte budget.");
@@ -115,11 +117,15 @@ public sealed partial class PbrSceneAsset
                 for (var level = 0; level < levels.Length; level++) { levels[level] = Blob(reader); }
                 textures[i] = PbrTextureData.Create(width, height, srgb, levels, sampler);
             }
-            var materials = new PbrMaterialAsset[Count(reader, 64, 4096)];
+            var materials = new PbrMaterialAsset[Count(reader, version == 1 ? 64 : 70, 4096)];
             for (var i = 0; i < materials.Length; i++) {
                 var parameters = new PbrMaterial(Vector(reader), reader.ReadSingle(), reader.ReadSingle(), Vector(reader), reader.ReadSingle());
                 var normalScale = reader.ReadSingle(); var occlusionStrength = reader.ReadSingle();
-                materials[i] = new(parameters, Texture(), Texture(), Texture(), Texture(), Texture(), normalScale, occlusionStrength);
+                var doubleSided = version >= 2 && reader.ReadBoolean();
+                var alphaBlend = version >= 2 && reader.ReadBoolean();
+                var opacity = version >= 2 ? reader.ReadSingle() : 1;
+                materials[i] = new(parameters, Texture(), Texture(), Texture(), Texture(), Texture(), normalScale, occlusionStrength,
+                    doubleSided, alphaBlend, opacity);
             }
             var instances = new PbrSceneInstance[Count(reader, 72, 1000000)];
             for (var i = 0; i < instances.Length; i++) {
