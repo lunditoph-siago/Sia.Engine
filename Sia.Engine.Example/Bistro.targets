@@ -38,5 +38,8 @@
     <Copy SourceFiles="$(BistroAssetPath)" DestinationFiles="$(_BistroPublishPath)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(BistroFinestAssetPath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/BistroFinest.siapbr" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(_BistroLicensePath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.LICENSE.txt" SkipUnchangedFiles="true" />
+    <WriteLinesToFile File="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.assets.json"
+                      Lines="{&quot;Bistro.siapbr&quot;:&quot;$(_BistroAssetHash)&quot;,&quot;BistroFinest.siapbr&quot;:&quot;$(_BistroFinestAssetHash)&quot;}"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
   </Target>
 </Project>

@@ -10,6 +10,8 @@ namespace Sia.Engine.Example;
 internal sealed partial class SceneExampleApp
 {
     private double? _previousAnimationFrameTime;
+    private bool _cameraFocused;
+    private bool _compareLodRequested;
 
     public async Task RunAsync()
     {
@@ -97,11 +99,8 @@ internal sealed partial class SceneExampleApp
     [JSImport("takeInspectionDistance", "main.js")]
     private static partial double TakeInspectionDistance();
 
-    [JSImport("setCameraPose", "main.js")]
-    private static partial void SetCameraPose(string pose);
-
-    [JSImport("hasCameraFocus", "main.js")]
-    private static partial bool HasCameraFocus();
+    [JSImport("compareLodAtCamera", "main.js")]
+    private static partial void CompareLodAtCamera(string pose);
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
