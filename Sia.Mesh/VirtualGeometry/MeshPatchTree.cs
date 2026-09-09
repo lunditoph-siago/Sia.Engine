@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -153,7 +154,9 @@ public sealed partial class MeshPatchTree
             }
             var identity = new VertexIdentity(v.Position.x, v.Position.y, v.Position.z,
                 v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y, v.Tangent.x, v.Tangent.y, v.Tangent.z, v.Tangent.w);
-            if (!identities.TryGetValue(identity, out ids[i])) { identities.Add(identity, ids[i] = identities.Count); }
+            ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, identity, out var exists);
+            if (!exists) { id = identities.Count - 1; }
+            ids[i] = id;
         }
         return ids;
     }

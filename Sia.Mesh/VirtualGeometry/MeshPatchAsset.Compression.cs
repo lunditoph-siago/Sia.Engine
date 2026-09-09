@@ -65,12 +65,26 @@ public sealed partial class MeshPatchAsset
             Require(BinaryPrimitives.ReadInt64LittleEndian(descriptor) == offset && count >= 0
                 && BinaryPrimitives.ReadInt32LittleEndian(descriptor[12..]) == stride
                 && (long)count * stride <= bytes.Length - offset, "Invalid compressed patch section.");
-            for (var lane = 0; lane < stride; lane++) {
-                for (var i = 0; i < count; i++) {
-                    if ((i & 65535) == 0) { cancellationToken.ThrowIfCancellationRequested(); }
-                    var interleaved = offset + i * stride + lane;
-                    var planar = offset + lane * count + i;
-                    output[restore ? interleaved : planar] = bytes[restore ? planar : interleaved];
+            if (stride == 1) {
+                bytes.Slice(offset, count).CopyTo(output.AsSpan(offset));
+            } else if (restore) {
+                for (var lane = 0; lane < stride; lane += 4) {
+                    var a = bytes.Slice(offset + lane * count, count);
+                    var b = bytes.Slice(offset + (lane + 1) * count, count);
+                    var c = bytes.Slice(offset + (lane + 2) * count, count);
+                    var d = bytes.Slice(offset + (lane + 3) * count, count);
+                    for (var i = 0; i < count; i++) {
+                        if ((i & 65535) == 0) { cancellationToken.ThrowIfCancellationRequested(); }
+                        var value = (uint)(a[i] | b[i] << 8 | c[i] << 16 | d[i] << 24);
+                        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(offset + i * stride + lane), value);
+                    }
+                }
+            } else {
+                for (var lane = 0; lane < stride; lane++) {
+                    for (var i = 0; i < count; i++) {
+                        if ((i & 65535) == 0) { cancellationToken.ThrowIfCancellationRequested(); }
+                        output[offset + lane * count + i] = bytes[offset + i * stride + lane];
+                    }
                 }
             }
             offset += count * stride;

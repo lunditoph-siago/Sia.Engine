@@ -24,7 +24,7 @@ public static partial class Program
         if (length > maximumBytes) { throw new InvalidDataException("The scene download exceeds the supported size."); }
         using var bytes = new MemoryStream(length is > 0 ? (int)length.Value : 0);
         using var stream = await response.Content.ReadAsStreamAsync();
-        var buffer = new byte[65536];
+        var buffer = new byte[1024 * 1024];
         long reported = 0;
         int count;
         while ((count = await stream.ReadAsync(buffer)) != 0) {

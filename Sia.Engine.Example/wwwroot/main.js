@@ -15,6 +15,8 @@ let atmosphereEnabled = parameters.get('atmosphere') === 'on';
 let inspectionCommands = atmosphereEnabled ? 32 : 0;
 let inspectionDistance = NaN;
 let failed = false;
+const loadingStages = [];
+const startupErrors = [];
 
 function closeSettings() {
   inspection.hidden = true;
@@ -36,9 +38,24 @@ window.addEventListener('keydown', event => {
   } else if (event.target !== canvas) event.stopImmediatePropagation();
 }, true);
 document.getElementById('retry').addEventListener('click', () => location.reload());
+document.getElementById('copy-error').addEventListener('click', async () => {
+  const button = document.getElementById('copy-error');
+  try {
+    await navigator.clipboard.writeText(document.getElementById('error-output').textContent);
+    button.textContent = 'Copied';
+  } catch {
+    document.getElementById('error-details').open = true;
+    button.textContent = 'Select and copy the details below';
+  }
+});
 
 function setLoadingState(stage, progress) {
   if (failed) return;
+  if (loadingStages.at(-1)?.stage !== stage) {
+    loadingStages.push({ stage, seconds: +(performance.now() / 1000).toFixed(2) });
+    if (loadingStages.length > 16) loadingStages.shift();
+  }
+  loadingStages.at(-1).progress = Number.isFinite(progress) ? Math.round(progress * 100) : null;
   document.getElementById('loading-stage').textContent = stage;
   if (Number.isFinite(progress)) {
     loadingProgress.value = Math.max(0, Math.min(1, progress));
@@ -51,6 +68,7 @@ function setLoadingState(stage, progress) {
 
 function setSceneReady() {
   if (failed) return;
+  setLoadingState('Scene running', 1);
   loading.hidden = true;
   loading.setAttribute('aria-busy', 'false');
   inspection.disabled = false;
@@ -119,21 +137,37 @@ function setSceneAttribution(attribution) {
 }
 
 function showError(message) {
+  const output = document.getElementById('error-output');
+  if (!failed) {
+    const moduleFailure = /importing a module script failed|failed to fetch dynamically imported module|error loading dynamically imported module|failed to load module script/i.test(message);
+    document.getElementById('loading-title').textContent = moduleFailure ? 'Module loading interrupted'
+      : loading.hidden ? 'Scene interrupted' : 'Unable to open scene';
+    document.getElementById('loading-stage').textContent = `Stopped during: ${loadingStages.at(-1)?.stage ?? 'Starting engine'}`;
+    const path = value => { const url = new URL(value, location.href); return url.origin + url.pathname; };
+    const resources = performance.getEntriesByType('resource')
+      .filter(entry => /\.(js|wasm)(?:\?|$)/i.test(entry.name)).slice(-16)
+      .map(entry => ({ url: path(entry.name), status: entry.responseStatus ?? null,
+        durationMs: Math.round(entry.duration), transferredBytes: entry.transferSize }));
+    output.textContent = JSON.stringify({ page: path(location.href), browser: navigator.userAgent,
+      online: navigator.onLine, pipeline, lod: finest ? 'finest' : 'auto',
+      seconds: +(performance.now() / 1000).toFixed(2), stages: loadingStages,
+      modules: ['./main.js', './_framework/dotnet.js', './_framework/dotnet.runtime.js', './_framework/dotnet.native.js']
+        .map(name => path(import.meta.resolve(name))), recentModuleRequests: resources }, null, 2)
+      + '\n\n' + startupErrors.join('\n\n') + '\n\n';
+  }
   failed = true;
   closeSettings();
   settingsToggle.disabled = true;
   document.getElementById('explore-hint').hidden = true;
-  document.getElementById('loading-title').textContent = loading.hidden ? 'Scene interrupted' : 'Unable to open scene';
   loading.hidden = false;
   loading.setAttribute('aria-busy', 'false');
-  document.getElementById('loading-stage').textContent = 'Try again, or choose another scene.';
   document.getElementById('loading-percent').textContent = '';
   loadingProgress.hidden = true;
   document.getElementById('loading-note').hidden = true;
   document.getElementById('retry').hidden = false;
+  document.getElementById('copy-error').hidden = false;
   document.getElementById('error-details').hidden = false;
-  const output = document.getElementById('error-output');
-  output.textContent = (output.textContent + message + '\n\n').slice(-16000);
+  output.textContent = (output.textContent + message + '\n\n').slice(0, 16000);
 }
 
 function formatErrorValue(value) {
@@ -143,13 +177,19 @@ function formatErrorValue(value) {
   catch { return String(value); }
 }
 
+function recordError(message) {
+  if (failed || loading.hidden) { showError(message); return; }
+  startupErrors.push(message.slice(0, 1000));
+  if (startupErrors.length > 8) startupErrors.shift();
+}
+
 const originalConsoleError = console.error.bind(console);
 console.error = (...values) => {
   originalConsoleError(...values);
-  showError(values.map(formatErrorValue).join(' '));
+  recordError(values.map(formatErrorValue).join(' '));
 };
-window.addEventListener('error', event => showError(event.error?.stack ?? event.message));
-window.addEventListener('unhandledrejection', event => showError(formatErrorValue(event.reason)));
+window.addEventListener('error', event => recordError(event.error?.stack ?? event.message ?? 'Script loading failed'));
+window.addEventListener('unhandledrejection', event => recordError(formatErrorValue(event.reason)));
 
 document.getElementById('loading-title').textContent = pipeline === 'pbr' ? 'Bistro' : pipeline === 'bunny' ? 'Stanford Bunny' : 'Unlit';
 if (pipeline !== 'pbr') document.getElementById('loading-note').textContent = 'Preparing the scene for your device.';
@@ -177,6 +217,7 @@ for (const link of document.querySelectorAll('nav a')) {
 }
 
 try {
+  setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
@@ -186,6 +227,7 @@ try {
   if (pipeline === 'pbr') {
     const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
     if (!parameters.has('scene')) {
+      setLoadingState('Checking scene version', NaN);
       const response = await fetch(new URL('Assets/Bistro.assets.json', location.href), { cache: 'no-store' });
       if (!response.ok) throw new Error(`Unable to load scene hashes (${response.status}).`);
       const hashes = await response.json();
@@ -194,6 +236,7 @@ try {
       scene.searchParams.set('sha256', hash);
       if ('serviceWorker' in navigator) {
         try {
+          setLoadingState('Opening scene cache', NaN);
           await navigator.serviceWorker.register(import.meta.resolve('./asset-cache.js'), { updateViaCache: 'none' });
           await navigator.serviceWorker.ready;
           if (!navigator.serviceWorker.controller) {
@@ -204,12 +247,15 @@ try {
     }
     args.push('--scene', scene.href);
   }
+  setLoadingState('Starting engine runtime', NaN);
   const { runMain, Module, setModuleImports } = await dotnet.withApplicationArguments(...args).create();
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
   setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, compareLodAtCamera, setLoadingState, setSceneReady, takeInspectionCommands, takeInspectionDistance });
-  await runMain();
+  const exitCode = await runMain();
+  if (exitCode !== 0) showError(`The engine stopped with exit code ${exitCode}.`);
 } catch (error) {
-  console.error('[startup]', error);
+  originalConsoleError('[startup]', error);
+  showError(formatErrorValue(error));
 }
