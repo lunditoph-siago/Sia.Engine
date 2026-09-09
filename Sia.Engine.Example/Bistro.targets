@@ -1,33 +1,35 @@
 <Project>
   <PropertyGroup>
-    <BistroAssetPath Condition="'$(BistroAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro-official-v2/Bistro.siapbr', '$(MSBuildProjectDirectory)'))</BistroAssetPath>
-    <BistroFinestAssetPath Condition="'$(BistroFinestAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro-official-v2/BistroFinest.siapbr', '$(MSBuildProjectDirectory)'))</BistroFinestAssetPath>
+    <_BistroAssetHash>46EB0143EF0A1F3CB19CEEE42FBE67C05E1EEBAA84F03A5B8D87E59EAB877CCD</_BistroAssetHash>
+    <_BistroFinestAssetHash>81C5AC6416D7688F22A6AB559D5341210773E876AD5C3734EE68D84E2364D948</_BistroFinestAssetHash>
+    <_BistroLicenseHash>7BFF2ABCE5BB54900FC5A3172EDD62F88B7540646A4B239D9473B610863F41EC</_BistroLicenseHash>
+    <_BistroReleaseUrl>https://github.com/lunditoph-siago/Sia.Engine/releases/download/Bistro</_BistroReleaseUrl>
+    <BistroAssetPath Condition="'$(BistroAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroAssetHash)/Bistro.siapbr', '$(MSBuildProjectDirectory)'))</BistroAssetPath>
+    <BistroFinestAssetPath Condition="'$(BistroFinestAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroFinestAssetHash)/BistroFinest.siapbr', '$(MSBuildProjectDirectory)'))</BistroFinestAssetPath>
+    <_BistroLicensePath>$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroLicenseHash)/Bistro.LICENSE.txt', '$(MSBuildProjectDirectory)'))</_BistroLicensePath>
   </PropertyGroup>
 
   <Target Name="PublishBistroAsset" AfterTargets="Publish">
-    <PropertyGroup>
-      <_BistroLicensePath>$([System.IO.Path]::GetDirectoryName('$(BistroAssetPath)'))/Bistro.LICENSE.txt</_BistroLicensePath>
-    </PropertyGroup>
     <DownloadFile Condition="!Exists('$(_BistroLicensePath)')"
-                  SourceUrl="https://github.com/lunditoph-siago/Sia.Engine/releases/download/example-assets-bistro-official-v2/Bistro.LICENSE.txt"
+                  SourceUrl="$(_BistroReleaseUrl)/LICENSE.txt"
                   DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(_BistroLicensePath)'))"
                   DestinationFileName="Bistro.LICENSE.txt" Retries="3" RetryDelayMilliseconds="1000" />
     <VerifyFileHash File="$(_BistroLicensePath)" Algorithm="SHA256"
-                    Hash="7BFF2ABCE5BB54900FC5A3172EDD62F88B7540646A4B239D9473B610863F41EC" />
+                    Hash="$(_BistroLicenseHash)" />
     <DownloadFile Condition="!Exists('$(BistroAssetPath)')"
-                  SourceUrl="https://github.com/lunditoph-siago/Sia.Engine/releases/download/example-assets-bistro-official-v2/Bistro.siapbr"
+                  SourceUrl="$(_BistroReleaseUrl)/Bistro.siapbr"
                   DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(BistroAssetPath)'))"
                   DestinationFileName="$([System.IO.Path]::GetFileName('$(BistroAssetPath)'))"
                   Retries="3" RetryDelayMilliseconds="1000" />
     <VerifyFileHash File="$(BistroAssetPath)" Algorithm="SHA256"
-                    Hash="46EB0143EF0A1F3CB19CEEE42FBE67C05E1EEBAA84F03A5B8D87E59EAB877CCD" />
+                    Hash="$(_BistroAssetHash)" />
     <DownloadFile Condition="!Exists('$(BistroFinestAssetPath)')"
-                  SourceUrl="https://github.com/lunditoph-siago/Sia.Engine/releases/download/example-assets-bistro-official-v2/BistroFinest.siapbr"
+                  SourceUrl="$(_BistroReleaseUrl)/BistroFinest.siapbr"
                   DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(BistroFinestAssetPath)'))"
                   DestinationFileName="$([System.IO.Path]::GetFileName('$(BistroFinestAssetPath)'))"
                   Retries="3" RetryDelayMilliseconds="1000" />
     <VerifyFileHash File="$(BistroFinestAssetPath)" Algorithm="SHA256"
-                    Hash="81C5AC6416D7688F22A6AB559D5341210773E876AD5C3734EE68D84E2364D948" />
+                    Hash="$(_BistroFinestAssetHash)" />
     <PropertyGroup>
       <_BistroPublishPath>$([System.IO.Path]::Combine('$(PublishDir)', 'Assets', 'Bistro.siapbr'))</_BistroPublishPath>
       <_BistroPublishPath Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">$([System.IO.Path]::Combine('$(PublishDir)', 'wwwroot', 'Assets', 'Bistro.siapbr'))</_BistroPublishPath>
@@ -36,5 +38,8 @@
     <Copy SourceFiles="$(BistroAssetPath)" DestinationFiles="$(_BistroPublishPath)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(BistroFinestAssetPath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/BistroFinest.siapbr" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(_BistroLicensePath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.LICENSE.txt" SkipUnchangedFiles="true" />
+    <WriteLinesToFile File="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.assets.json"
+                      Lines="{&quot;Bistro.siapbr&quot;:&quot;$(_BistroAssetHash)&quot;,&quot;BistroFinest.siapbr&quot;:&quot;$(_BistroFinestAssetHash)&quot;}"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
   </Target>
 </Project>

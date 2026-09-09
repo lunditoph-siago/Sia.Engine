@@ -13,10 +13,12 @@ public static partial class Program
 
     private static async Task<ReadOnlyMemory<byte>> DownloadSceneAsync(string path)
     {
-        SetLoadingState("Downloading scene", double.NaN);
+        SetLoadingState("Loading scene", double.NaN);
         using var client = new HttpClient();
         using var response = await client.GetAsync(path, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
+        var stage = response.Headers.TryGetValues("X-Sia-Asset-Cache", out var cache)
+            && cache.Contains("hit") ? "Loading cached scene" : "Loading scene";
         var length = response.Content.Headers.ContentLength;
         const int maximumBytes = 512 * 1024 * 1024;
         if (length > maximumBytes) { throw new InvalidDataException("The scene download exceeds the supported size."); }
@@ -30,10 +32,10 @@ public static partial class Program
             bytes.Write(buffer, 0, count);
             if (bytes.Length - reported >= 1024 * 1024) {
                 reported = bytes.Length;
-                SetLoadingState("Downloading scene", length is > 0 ? (double)reported / length.Value : double.NaN);
+                SetLoadingState(stage, length is > 0 ? (double)reported / length.Value : double.NaN);
             }
         }
-        SetLoadingState("Downloading scene", 1);
+        SetLoadingState(stage, 1);
         return bytes.GetBuffer().AsMemory(0, checked((int)bytes.Length));
     }
 }

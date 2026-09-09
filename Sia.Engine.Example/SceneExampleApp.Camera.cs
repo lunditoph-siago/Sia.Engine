@@ -1,4 +1,3 @@
-using System.Globalization;
 using Sia.GLFW;
 using Sia.Input;
 using Sia.Math;
@@ -12,15 +11,12 @@ internal sealed partial class SceneExampleApp
     private float _cameraYaw;
     private float _cameraPitch;
     private MousePosition? _cameraDrag;
-    private bool _printCamera;
-    private float _cameraLogTime;
-    private string? _cameraLog;
     private readonly HashSet<Key> _cameraPressed = [];
 
     private unsafe void UpdateFreeCamera(float deltaTime, ref float3 eye, ref float3 target)
     {
 #if BROWSER
-        var focused = HasCameraFocus();
+        var focused = _cameraFocused;
 #else
         var focused = GlfwUnsafe.GetWindowAttrib((WindowHandle*)_window.Handle, WindowAttribute.Focused) != 0;
 #endif
@@ -32,7 +28,6 @@ internal sealed partial class SceneExampleApp
             _cameraYaw = MathF.Atan2(direction.x, -direction.z);
             _cameraPitch = MathF.Asin(System.Math.Clamp(direction.y, -1, 1));
             _cameraDrag = null;
-            _printCamera = true;
         }
         var cursor = Glfw.GetCursorPosition(_window);
         if (focused && Glfw.GetMouseButton(_window, MouseButton.Right) != InputAction.Release) {
@@ -59,17 +54,12 @@ internal sealed partial class SceneExampleApp
         _cameraEye = eye;
         target = eye + forward;
         _cameraPressed.Clear();
-        var pose = string.Create(CultureInfo.InvariantCulture,
-            $"{eye.x:F6},{eye.y:F6},{eye.z:F6},{target.x:F6},{target.y:F6},{target.z:F6}");
 #if BROWSER
-        SetCameraPose(pose);
-#endif
-        _cameraLogTime += deltaTime;
-        if (_printCamera || (_cameraLog != pose && _cameraLogTime >= .25f)) {
-            Console.WriteLine("Camera: --camera " + pose);
-            _cameraLog = pose;
-            _cameraLogTime = 0;
-            _printCamera = false;
+        if (_compareLodRequested) {
+            _compareLodRequested = false;
+            CompareLodAtCamera(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"{eye.x:F6},{eye.y:F6},{eye.z:F6},{target.x:F6},{target.y:F6},{target.z:F6}"));
         }
+#endif
     }
 }

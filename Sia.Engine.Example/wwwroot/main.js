@@ -14,7 +14,6 @@ const loadingProgress = document.getElementById('loading-progress');
 let atmosphereEnabled = parameters.get('atmosphere') === 'on';
 let inspectionCommands = atmosphereEnabled ? 32 : 0;
 let inspectionDistance = NaN;
-let cameraPose = null;
 let failed = false;
 
 function closeSettings() {
@@ -60,7 +59,6 @@ function setSceneReady() {
   canvas.focus();
 }
 
-function setCameraPose(pose) { cameraPose = pose; }
 function hasCameraFocus() {
   return !failed && inspection.hidden && document.hasFocus() && document.activeElement === canvas;
 }
@@ -76,7 +74,9 @@ atmosphereControl.addEventListener('click', () => {
 });
 
 function takeInspectionCommands() {
-  const commands = inspectionCommands;
+  const commands = inspectionCommands
+    | (hasCameraFocus() ? 128 : 0)
+    | (Number.isFinite(inspectionDistance) ? 256 : 0);
   inspectionCommands = 0;
   return commands;
 }
@@ -85,6 +85,15 @@ function takeInspectionDistance() {
   const distance = inspectionDistance;
   inspectionDistance = NaN;
   return distance;
+}
+
+function compareLodAtCamera(pose) {
+  const url = new URL(location.href);
+  url.searchParams.set('lod', finest ? 'auto' : 'finest');
+  url.searchParams.set('debug', materialControl.textContent === 'Show shaded' ? 'triangles' : 'shaded');
+  url.searchParams.set('atmosphere', atmosphereEnabled ? 'on' : 'off');
+  url.searchParams.set('camera', pose);
+  location.href = url.href;
 }
 
 function setInspectionStatus(status, distance, touring, triangles, atmosphere) {
@@ -159,12 +168,8 @@ if (pipeline === 'pbr') {
   lodControl.hidden = false;
   lodControl.textContent = finest ? 'Compare automatic LOD' : 'Use full detail';
   lodControl.addEventListener('click', () => {
-    const url = new URL(location.href);
-    url.searchParams.set('lod', finest ? 'auto' : 'finest');
-    url.searchParams.set('debug', materialControl.textContent === 'Show shaded' ? 'triangles' : 'shaded');
-    url.searchParams.set('atmosphere', atmosphereEnabled ? 'on' : 'off');
-    if (cameraPose !== null) url.searchParams.set('camera', cameraPose);
-    location.href = url.href;
+    lodControl.disabled = true;
+    inspectionCommands |= 64;
   });
 }
 for (const link of document.querySelectorAll('nav a')) {
@@ -178,12 +183,32 @@ try {
   if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
   if (parameters.has('lod')) args.push('--lod', parameters.get('lod'));
   if (parameters.has('camera')) args.push('--camera', parameters.get('camera'));
-  if (pipeline === 'pbr') args.push('--scene', new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href).href);
+  if (pipeline === 'pbr') {
+    const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
+    if (!parameters.has('scene')) {
+      const response = await fetch(new URL('Assets/Bistro.assets.json', location.href), { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Unable to load scene hashes (${response.status}).`);
+      const hashes = await response.json();
+      const hash = hashes[finest ? 'BistroFinest.siapbr' : 'Bistro.siapbr'];
+      if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/i.test(hash)) throw new Error('Invalid scene hash.');
+      scene.searchParams.set('sha256', hash);
+      if ('serviceWorker' in navigator) {
+        try {
+          await navigator.serviceWorker.register(import.meta.resolve('./asset-cache.js'), { updateViaCache: 'none' });
+          await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
+          }
+        } catch (error) { console.warn('Scene cache unavailable:', error); }
+      }
+    }
+    args.push('--scene', scene.href);
+  }
   const { runMain, Module, setModuleImports } = await dotnet.withApplicationArguments(...args).create();
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, setCameraPose, hasCameraFocus, setLoadingState, setSceneReady, takeInspectionCommands, takeInspectionDistance });
+  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, compareLodAtCamera, setLoadingState, setSceneReady, takeInspectionCommands, takeInspectionDistance });
   await runMain();
 } catch (error) {
   console.error('[startup]', error);

@@ -39,7 +39,8 @@ public sealed partial class PbrRenderer(
         in GpuFrame frame,
         Entity cameraEntity,
         ClusterGridConfig clusterConfig,
-        ShadowAtlasConfig shadowConfig)
+        ShadowAtlasConfig shadowConfig,
+        Aabb? shadowBounds = null)
     {
         var cache = frame.MainWorld.AcquireAddon<PbrRenderCache>();
         cache.Refresh();
@@ -50,7 +51,10 @@ public sealed partial class PbrRenderer(
         var matrices = cameraEntity.Get<CameraMatrices>();
         var visible = cache.Cull(matrices.Frustum);
         var extractedShadowConfig = Copy(shadowConfig);
-        state.Shadows.Refresh(frame.MainWorld, extractedShadowConfig, cameraEntity);
+        if (cache.ShadowBounds is { } meshBounds) {
+            shadowBounds = shadowBounds is { } visibilityBounds ? Aabb.Union(visibilityBounds, meshBounds) : meshBounds;
+        }
+        state.Shadows.Refresh(frame.MainWorld, extractedShadowConfig, cameraEntity, shadowBounds);
         state.Lights.Refresh(frame.MainWorld, state.Shadows);
 
         var environment = frame.MainWorld.AcquireAddon<EnvironmentLighting>();
