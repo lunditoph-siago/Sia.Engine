@@ -55,7 +55,7 @@ public sealed class ShadowGpuStore
     public int ShadowLayerFor(Entity spotLightEntity) =>
         _spotShadowLayerByEntity.TryGetValue(spotLightEntity, out var layer) ? layer : -1;
 
-    public void Refresh(World world, ShadowAtlasConfig config, Entity cameraEntity)
+    public void Refresh(World world, ShadowAtlasConfig config, Entity cameraEntity, Aabb? casterBounds = null)
     {
         _cascadeCount = config.CascadeCount;
         _layerViewProj = new ShadowViewProjGpu[System.Math.Max(config.LayerCount, 1)];
@@ -79,7 +79,7 @@ public sealed class ShadowGpuStore
             for (var i = 0; i < config.CascadeCount; i++) {
                 var viewProj = CascadeSplitting.ComputeCascadeViewProj(
                     in cameraTransform, camera.VerticalFovRadians, aspect,
-                    _cascadeSplits[i], _cascadeSplits[i + 1], direction, config.CascadeShadowPullback);
+                    _cascadeSplits[i], _cascadeSplits[i + 1], direction, config.CascadeShadowPullback, casterBounds);
                 _layerViewProj[i] = new ShadowViewProjGpu(viewProj);
             }
         });

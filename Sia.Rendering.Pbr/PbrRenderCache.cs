@@ -45,6 +45,9 @@ public sealed class PbrRenderCache : SnapshotExtractSystem<PbrRenderInstance>, I
 
     public IReadOnlyList<MeshHandle> MeshHandles => _meshHandles;
 
+    internal Aabb? ShadowBounds => _worldBounds.Count == 0 ? null
+        : _worldBounds.Aggregate(static (bounds, next) => Aabb.Union(bounds, next));
+
     public IReadOnlyList<int> Cull(Frustum frustum)
     {
         _visibleIndices.Clear();

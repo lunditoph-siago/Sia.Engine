@@ -146,6 +146,8 @@ public sealed partial class VisibilityPbrFeature :
         _ = checked(capacity * 3u);
         var gpuInstances = new InstanceGpu[scene?.InstanceCapacity ?? instances.Length];
         var transforms = new float4x4[instances.Length];
+        var assetBounds = scene?.AssetBounds ?? [GeometryBounds(geometry)];
+        Aabb? shadowBounds = null;
         for (var i = 0; i < instances.Length; i++) {
             if (scene is null && instances[i].AssetIndex != 0) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "A single geometry input only accepts asset index zero.");
@@ -153,6 +155,7 @@ public sealed partial class VisibilityPbrFeature :
             gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default, sourceMaterials.Length,
                 (uint)instances[i].MaterialIndex < (uint)sourceMaterials.Length && sourceMaterials[instances[i].MaterialIndex].DoubleSided);
             transforms[i] = instances[i].Transform;
+            IncludeBounds(ref shadowBounds, assetBounds[instances[i].AssetIndex], instances[i].Transform);
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
         if (enableGpuTiming && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.TimestampQuery) == 0) {
@@ -192,7 +195,9 @@ public sealed partial class VisibilityPbrFeature :
             return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry) {
                 InstanceCapacity = (uint)gpuInstances.Length,
-                _doubleSided = sourceMaterials.Select(material => material.DoubleSided).ToArray()
+                _doubleSided = sourceMaterials.Select(material => material.DoubleSided).ToArray(),
+                _assetBounds = assetBounds,
+                ShadowBounds = shadowBounds
             };
         }
         catch {

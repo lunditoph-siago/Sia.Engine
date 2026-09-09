@@ -51,7 +51,8 @@ public sealed partial class VisibilityPbrFeature
                         packedOffset + offsets[index] + (uint)cluster.TriangleOffset / 3));
             }
         }
-        var scene = new SceneLodData(combined, [], ranges, default, 1, (uint)capacity);
+        var scene = new SceneLodData(combined, [], ranges, default, 1, (uint)capacity,
+            asset.Geometry.ToArray().Select(mesh => PatchBounds(mesh.Build.Tree)).ToArray());
         return Create(in frame, scene.Geometry, instances, null, outputFormat, mode, null, default,
             scene: scene, materials: asset.Materials.Span, fixedClusters: work);
     }

@@ -28,7 +28,8 @@ public static class CascadeSplitting
         float splitNear,
         float splitFar,
         float3 lightDirection,
-        float pullbackMultiplier)
+        float pullbackMultiplier,
+        Aabb? casterBounds = null)
     {
         var corners = ComputeFrustumCorners(in cameraWorldTransform, verticalFov, aspect, splitNear, splitFar);
 
@@ -46,6 +47,11 @@ public static class CascadeSplitting
         var up = MathF.Abs(lightDirection.y) > 0.99f ? new float3(0, 0, 1) : new float3(0, 1, 0);
         var lightRotation = quaternion.LookRotation(-lightDirection, up);
         var pullback = radius * pullbackMultiplier;
+        if (casterBounds is { } bounds) {
+            var lightwardExtent = math.dot(center - bounds.Center, lightDirection)
+                + math.dot(bounds.HalfExtents, math.abs(lightDirection));
+            pullback = MathF.Max(pullback, lightwardExtent + 0.01f);
+        }
         var eye = center - lightDirection * pullback;
         var lightWorld = float4x4.TRS(eye, lightRotation, float3.one);
         var view = math.inverse(lightWorld);
