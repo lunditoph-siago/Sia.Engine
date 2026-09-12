@@ -27,6 +27,9 @@ public static partial class Program
         }
         catch (Exception exception) {
             Console.Error.WriteLine(exception);
+#if BROWSER
+            ShowError(exception.Message);
+#endif
             return 1;
         }
     }
