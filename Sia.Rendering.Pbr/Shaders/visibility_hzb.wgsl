@@ -3,6 +3,12 @@ struct Reduction { source: vec4<u32>, destination: vec4<u32> }
 @group(0) @binding(1) var<storage, read_write> hzb: array<f32>;
 @group(0) @binding(2) var<uniform> reduction: Reduction;
 
+// Binding 1 is a separate four-byte scratch buffer for this entry point, not the HZB.
+@compute @workgroup_size(1)
+fn read_after_post() {
+    hzb[0] = textureLoad(depth, vec2<i32>(textureDimensions(depth) / 2u), 0).r;
+}
+
 @compute @workgroup_size(8, 8)
 fn seed(@builtin(global_invocation_id) thread: vec3<u32>) {
     if (any(thread.xy >= reduction.destination.xy)) { return; }
