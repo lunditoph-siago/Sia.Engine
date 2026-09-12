@@ -63,6 +63,7 @@ public sealed partial class VisibilityPbrFeature
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
         if (_gpuLod is not null) { BuildPostOcclusionGraph(ref graph, view); }
         if (_fixedGeometry is not null) { view.BuildClusterPostGraph(ref graph); }
+        view.BuildPostDepthReadGraph(ref graph);
         view.BuildMaterialTiles(ref graph);
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
         if (includeOutput) { graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output); }
