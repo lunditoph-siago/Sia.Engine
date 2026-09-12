@@ -13,6 +13,7 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_HzbKey = new("visibility-hzb");
     private static readonly RenderGraphBufferKey s_HzbParamsKey = new("visibility-hzb-params");
     private static readonly RenderGraphBufferKey s_HzbReduceKey = new("visibility-hzb-reduce-params");
+    private static readonly RenderGraphBufferKey s_PostDepthReadKey = new("visibility-post-depth-read");
     private HzbGpu HzbPipelines => _gpuLod?.Occlusion.Hzb ?? _fixedGeometry!.Value.Hzb;
 
     private static OcclusionGpu CreateOcclusionGpu(World world, WgpuHandle<WGPUDevice> device, Entity lodLayout, Entity lodPipelineLayout,
@@ -25,7 +26,7 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, lodShader, lodPipelineLayout, "emit_post", acquired));
     }
 
-    private static HzbGpu CreateHzbGpu(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired)
+    private static unsafe HzbGpu CreateHzbGpu(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired)
     {
         var layout = Layout(world, device, [
             BufferLayout(0, WGPUBufferBindingType.Uniform, 592, WGPUShaderStage.Compute),
@@ -38,9 +39,11 @@ public sealed partial class VisibilityPbrFeature
         ], acquired);
         var reducePipelineLayout = PipelineLayout(world, device, [reduceLayout], acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityHzb(), "visibility-hzb"), acquired);
+        var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
         return new(layout, reduceLayout,
             ComputePipeline(world, device, shader, reducePipelineLayout, "seed", acquired),
-            ComputePipeline(world, device, shader, reducePipelineLayout, "reduce", acquired));
+            ComputePipeline(world, device, shader, reducePipelineLayout, "reduce", acquired),
+            core ? null : ComputePipeline(world, device, shader, reducePipelineLayout, "read_after_post", acquired));
     }
 
     private void PrepareOcclusion(ViewState view, float4x4 projection)
@@ -101,7 +104,9 @@ public sealed partial class VisibilityPbrFeature
             }
             var reduceParameters = Upload<uint4>(_world, device, _queue.GetWgpu<WGPUQueue>(), data,
                 WGPUBufferUsage.Uniform, limits, acquired);
-            return new(buffer, parameters, group, reduceParameters, count, stride, acquired.ToArray(), levels, width, height, factor);
+            Entity? postDepthRead = HzbPipelines.ReadAfterPost is null ? null
+                : Allocate(_world, device, 4, WGPUBufferUsage.Storage, limits, acquired);
+            return new(buffer, parameters, group, reduceParameters, postDepthRead, count, stride, acquired.ToArray(), levels, width, height, factor);
         }
         catch {
             for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); }
@@ -153,6 +158,36 @@ public sealed partial class VisibilityPbrFeature
         public float4x4 Projection { get; set; }
         private Entity[] _hzbGroups = [];
         private WgpuHandle<WGPUTextureView> _hzbDepth;
+        private Entity? _postDepthReadGroup;
+
+        public void BuildPostDepthReadGraph(ref RenderGraphBuildContext graph)
+        {
+            if (Hzb?.PostDepthRead is not { } scratch) { return; }
+            ImportBuffer(ref graph, s_PostDepthReadKey, scratch, RenderGraphBufferUsage.Storage);
+            // Some compatibility backends expose stale depth in later frames after an indirect
+            // post pass with no depth writes. A post-raster texture read avoids that path.
+            graph.UseComputePass(new("visibility-post-depth-read"), "visibility-post-depth-read", declaration => declaration
+                .Read(Frame.DepthTarget, RenderGraphTextureUsage.TextureBinding)
+                .Read(s_HzbReduceKey, RenderGraphBufferUsage.Uniform)
+                .Write(s_PostDepthReadKey, RenderGraphBufferUsage.Storage).MarkSideEffect(), ReadDepthAfterPost);
+        }
+
+        private void ReadDepthAfterPost(WgpuReactiveRenderGraphPassContext context)
+        {
+            var hzb = Hzb!.Value;
+            var gpu = Owner.HzbPipelines;
+            var depth = context.GetTextureView(Frame.DepthTarget);
+            _postDepthReadGroup ??= Owner.OwnTextureBindGroup(gpu.ReduceLayout,
+                [TextureEntry(0, depth), BufferEntry(1, hzb.PostDepthRead!.Value),
+                    BufferEntry(2, hzb.ReduceParameters) with { Size = 32 }], depth);
+            var pass = BeginCompute(context);
+            try {
+                Wgpu.SetComputePipeline(pass, gpu.ReadAfterPost!.Value.GetWgpu<WGPUComputePipeline>());
+                Wgpu.SetBindGroup(pass, 0, _postDepthReadGroup.Value.GetWgpu<WGPUBindGroup>());
+                Wgpu.DispatchWorkgroups(pass, 1);
+            }
+            finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        }
 
         public void CullMain(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, Owner._gpuLod!.Value.Occlusion.CullMain, 0, Hzb!.Value.Group, 0);
@@ -186,6 +221,8 @@ public sealed partial class VisibilityPbrFeature
 
         public void ReleaseHzbGroups()
         {
+            _postDepthReadGroup?.Destroy();
+            _postDepthReadGroup = null;
             foreach (var group in _hzbGroups) { group.Destroy(); }
             _hzbGroups = [];
             _hzbDepth = default;
@@ -232,10 +269,10 @@ public sealed partial class VisibilityPbrFeature
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct HzbParamsGpu(float4x4 PreviousProjection, uint4 Size, HzbLevelsGpu Levels);
 
-    private readonly record struct HzbViewGpu(Entity Buffer, Entity Parameters, Entity Group, Entity ReduceParameters, int LevelCount, uint ReduceStride,
+    private readonly record struct HzbViewGpu(Entity Buffer, Entity Parameters, Entity Group, Entity ReduceParameters, Entity? PostDepthRead, int LevelCount, uint ReduceStride,
         Entity[] Owned, HzbLevelsGpu Levels, uint Width, uint Height, uint Factor);
 
-    private readonly record struct HzbGpu(Entity Layout, Entity ReduceLayout, Entity Seed, Entity Reduce);
+    private readonly record struct HzbGpu(Entity Layout, Entity ReduceLayout, Entity Seed, Entity Reduce, Entity? ReadAfterPost);
 
     private readonly record struct OcclusionGpu(HzbGpu Hzb, Entity CullMain, Entity CullPost, Entity EmitPost);
 }
