@@ -17,6 +17,12 @@ public sealed partial class MeshPatchTree
     public int MeshletCount => _meshlets.Meshlets.Length;
     public int MeshletVertexCount => _meshlets.VertexIndices.Length;
 
+    // Validated, allocation-free views; callers cannot mutate the tree storage.
+    public ReadOnlySpan<MeshVertex> Vertices => _geometry.Vertices;
+    public ReadOnlySpan<Meshlet> Meshlets => _meshlets.Meshlets;
+    public ReadOnlySpan<uint> MeshletVertexIndices => _meshlets.VertexIndices;
+    public ReadOnlySpan<byte> MeshletTriangleIndices => _meshlets.TriangleIndices;
+
     private MeshPatchTree(MeshPatchNode[] nodes, int roots, int finestTriangles, MeshData geometry, MeshletData meshlets)
     {
         Nodes = nodes;
