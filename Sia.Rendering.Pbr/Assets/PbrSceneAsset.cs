@@ -3,16 +3,21 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
+/// <summary>Static material textures, coverage and optional dielectric slab transport.</summary>
+/// <param name="Opacity">Surface coverage, multiplied by base-color texture alpha.</param>
+/// <param name="Transmission">Dielectric transmission fraction in [0, 1]; requires AlphaBlend.</param>
+/// <param name="Thickness">Slab thickness in world meters, in [0, 10]. Zero gives undistorted thin-sheet transmission.</param>
 public sealed record PbrMaterialAsset(PbrMaterial Parameters, PbrTextureData? BaseColor = null,
     PbrTextureData? Normal = null, PbrTextureData? MetallicRoughness = null, PbrTextureData? Occlusion = null,
     PbrTextureData? Emissive = null, float NormalScale = 1, float OcclusionStrength = 1,
-    bool DoubleSided = false, bool AlphaBlend = false, float Opacity = 1);
+    bool DoubleSided = false, bool AlphaBlend = false, float Opacity = 1,
+    float Transmission = 0, float Thickness = 0);
 
 public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform);
 
 public sealed partial class PbrSceneAsset
 {
-    public const int FormatVersion = 2;
+    public const int FormatVersion = 3;
     public ReadOnlyMemory<MeshPatchAsset> Geometry { get; }
     public ReadOnlyMemory<PbrMaterialAsset> Materials { get; }
     public ReadOnlyMemory<PbrSceneInstance> Instances { get; }
@@ -41,6 +46,9 @@ public sealed partial class PbrSceneAsset
                 || !float.IsFinite(p.Metallic) || p.Metallic is < 0 or > 1 || !float.IsFinite(p.Roughness) || p.Roughness is < 0 or > 1
                 || !float.IsFinite(material.NormalScale)
                 || !float.IsFinite(material.Opacity) || material.Opacity is < 0 or > 1
+                || !float.IsFinite(material.Transmission) || material.Transmission is < 0 or > 1
+                || !float.IsFinite(material.Thickness) || material.Thickness is < 0 or > 10
+                || material.Transmission > 0 && !material.AlphaBlend
                 || !float.IsFinite(material.OcclusionStrength) || material.OcclusionStrength is < 0 or > 1
                 || material.BaseColor is { Srgb: false } || material.Emissive is { Srgb: false }
                 || material.Normal is { Srgb: true } || material.MetallicRoughness is { Srgb: true } || material.Occlusion is { Srgb: true }) {
