@@ -72,9 +72,15 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
     let a = visibility_vertex(triangle, 0u);
     let b = visibility_vertex(triangle, 1u);
     let c = visibility_vertex(triangle, 2u);
+#ifdef WORLD_SPACE_GEOMETRY
+    let world_a = vec4<f32>(a.position.xyz, 1.0);
+    let world_b = vec4<f32>(b.position.xyz, 1.0);
+    let world_c = vec4<f32>(c.position.xyz, 1.0);
+#else
     let world_a = instance.transform * vec4<f32>(a.position.xyz, 1.0);
     let world_b = instance.transform * vec4<f32>(b.position.xyz, 1.0);
     let world_c = instance.transform * vec4<f32>(c.position.xyz, 1.0);
+#endif
     let clip_a = visibility_camera.view_projection * world_a;
     let clip_b = visibility_camera.view_projection * world_b;
     let clip_c = visibility_camera.view_projection * world_c;
@@ -115,10 +121,18 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
     let base_color = textureSampleGrad(albedo, albedo_sampler, uv, i32(material_parameters.layers.x), uv_dx, uv_dy).rgb
         * instance.color.rgb * material_parameters.color_metallic.rgb;
     let local_normal = a.normal.xyz * bary.x + b.normal.xyz * bary.y + c.normal.xyz * bary.z;
+#ifdef WORLD_SPACE_GEOMETRY
+    var normal = safe_normalize(local_normal);
+#else
     var normal = safe_normalize((instance.normal_transform * vec4<f32>(local_normal, 0.0)).xyz);
+#endif
     if (material_parameters.texture_factors.z != 0.0) {
         let local_tangent = a.tangent * bary.x + b.tangent * bary.y + c.tangent * bary.z;
+#ifdef WORLD_SPACE_GEOMETRY
+        let transformed = local_tangent.xyz;
+#else
         let transformed = (instance.transform * vec4<f32>(local_tangent.xyz, 0.0)).xyz;
+#endif
         var tangent = transformed - normal * dot(normal, transformed);
         if (dot(tangent, tangent) < 1e-12) {
             let axis = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(normal.x) < 0.9);

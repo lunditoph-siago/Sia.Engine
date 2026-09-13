@@ -88,11 +88,11 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe Entity CreateRaster(World world, WgpuHandle<WGPUDevice> device,
-        Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false, bool doubleSided = false)
+        Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false, bool doubleSided = false, bool worldSpace = false)
     {
         var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
         var first = indexed && !shadow && core;
-        var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityRaster(), "visibility-raster"), acquired);
+        var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityRaster(worldSpace), "visibility-raster"), acquired);
         var pipelineLayout = PipelineLayout(world, device, [layout], acquired);
         var entry = first ? "indexed_first"u8 : indexed ? (shadow ? "indexed_shadow"u8 : "indexed"u8) : "vertex"u8;
         var fragmentEntry = first ? "fragment_first"u8 : core ? "fragment"u8 : "fragment_depth"u8;
@@ -131,9 +131,9 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct ResolveGpu(Entity Debug, Entity Surface);
 
     private static ResolveGpu CreateResolve(World world, WgpuHandle<WGPUDevice> device,
-        Entity geometry, Entity textures, List<Entity> acquired)
+        Entity geometry, Entity textures, List<Entity> acquired, bool worldSpace)
     {
-        var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityResolve(), "visibility-resolve"), acquired);
+        var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityResolve(worldSpace), "visibility-resolve"), acquired);
         var layout = PipelineLayout(world, device, [geometry, textures], acquired);
         return new(ComputePipeline(world, device, shader, layout, "resolve", acquired),
             ComputePipeline(world, device, shader, layout, "resolve_surface", acquired));

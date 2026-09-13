@@ -49,6 +49,33 @@ also retain zero defaults. The encoder emits v3; older runtimes cannot read it.
 Deploy a compatible reader before replacing downloaded assets with v3 files.
 No asset name convention implicitly enables refraction.
 
+## Fixed-scene frame cost
+
+`CreateFixedScene` detects scenes whose instance transforms are all identity and
+specializes visibility raster, material resolve and cluster culling for their
+already baked world coordinates. Transformed instances and dynamic scenes retain
+the general path. Cluster frustum tests use conservative plane support bounds
+instead of projecting eight corners; boundary boxes remain visible.
+
+Immutable fixed scenes without forward mesh casters retain a shadow layer when
+its atlas texture, light projection and resolution are unchanged. Camera/light
+projection changes, atlas replacement, leaving shaded mode and mixed forward
+casters invalidate reuse. Dynamic LOD scenes still render their shadows each frame.
+Reflection graph declarations stay stable across debug-mode changes; snapshot
+copy and reflection drawing are skipped outside shaded mode.
+
+On a hardware Intel adapter in Edge/WebGPU, 1280 × 720 BistroFinest with default
+effects and reflections enabled measured 83.26 → 48.55 ms median idle RAF interval.
+A fixed 180-frame turning path measured 62.35 → 48.64 ms (P95 97.17 → 90.24 ms).
+These are local browser measurements, not a 60 FPS claim or native GPU timings.
+The scene retains 3,544,994 work triangles and the same material/texture settings.
+SSR itself was about 0.8 ms; geometry, shadow raster and material resolve dominated.
+Asset loading/decoding and large-scene indirect lighting remain separate limitations.
+
+Native linear captures of the Bistro entrance and optical-glass fixture remained
+byte-identical. Repeated-frame camera/light changes, shadow atlas recreation and
+return from debug mode also matched fresh-renderer captures exactly.
+
 ## Validation
 
 Run `dotnet test Sia.Rendering.Pbr.Tests/Sia.Rendering.Pbr.Tests.csproj -c Release`

@@ -44,9 +44,9 @@ public static class PbrShaderSource
 
     public static string LoadToneMapping() => Load(k_ResourcePrefix + "tone_mapping.wgsl");
 
-    internal static string LoadVisibilityRaster() => Load(k_ResourcePrefix + "visibility_raster.wgsl");
+    internal static string LoadVisibilityRaster(bool worldSpace = false) => LoadGeometry("visibility_raster", worldSpace);
 
-    internal static string LoadVisibilityResolve() => Load(k_ResourcePrefix + "visibility_resolve.wgsl");
+    internal static string LoadVisibilityResolve(bool worldSpace = false) => LoadGeometry("visibility_resolve", worldSpace);
     internal static string LoadVisibilityMaterialTiles() => Load(k_ResourcePrefix + "visibility_material_tiles.wgsl");
     internal static string LoadVisibilityLighting() => Load(k_ResourcePrefix + "visibility_lighting.wgsl");
 
@@ -55,10 +55,13 @@ public static class PbrShaderSource
     internal static string LoadVisibilityHzb() => Load(k_ResourcePrefix + "visibility_hzb.wgsl");
 
     internal static string LoadVisibilityCompact() => Load(k_ResourcePrefix + "visibility_compact.wgsl");
-    internal static string LoadVisibilityClusters() => Load(k_ResourcePrefix + "visibility_clusters.wgsl");
+    internal static string LoadVisibilityClusters(bool worldSpace = false) => LoadGeometry("visibility_clusters", worldSpace);
     internal static string LoadVisibilityShadowIndices() => Load(k_ResourcePrefix + "visibility_shadow_indices.wgsl");
 
     internal static string LoadAtmosphere(string name) => Load(k_ResourcePrefix + "atmosphere_" + name + ".wgsl");
+
+    private static string LoadGeometry(string name, bool worldSpace) => Load(k_ResourcePrefix + name + ".wgsl",
+        worldSpace ? new Dictionary<string, string> { ["WORLD_SPACE_GEOMETRY"] = "true" } : null);
 
     private static string Load(string entryResourceName, IReadOnlyDictionary<string, string>? definitions = null)
     {

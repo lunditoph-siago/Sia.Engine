@@ -101,6 +101,7 @@ internal sealed unsafe class PbrScreenReflections
 
     private void Copy(WgpuReactiveRenderGraphPassContext c)
     {
+        if (_visibility.DebugMode != VisibilityDebugMode.Shaded) { return; }
         var from = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)c.GetTexture(_color).DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
         var to = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)c.GetTexture(Snapshot).DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
         var size = new WGPUExtent3D { Width = _width, Height = _height, DepthOrArrayLayers = 1 };
@@ -109,6 +110,7 @@ internal sealed unsafe class PbrScreenReflections
 
     private void Render(WgpuReactiveRenderGraphPassContext c)
     {
+        if (_visibility.DebugMode != VisibilityDebugMode.Shaded) { return; }
         WgpuHandle<WGPUTextureView>[] sources = [c.GetTextureView(Snapshot), c.GetTextureView(_depth),
             c.GetTextureView(_visibility.BaseColorRoughnessTarget), c.GetTextureView(_visibility.NormalMetallicTarget),
             c.GetTextureView(_visibility.EmissiveOcclusionTarget)];

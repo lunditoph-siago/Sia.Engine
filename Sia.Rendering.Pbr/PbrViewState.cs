@@ -20,6 +20,8 @@ public sealed class PbrViewState
 
     public ShadowGpuStore Shadows { get; } = new();
 
+    internal HashSet<int> RetainedShadowLayers { get; } = [];
+
     public IblEnvironmentGpuStore Ibl { get; } = new();
 
     internal Entity DepthBindGroup { get; set; }
