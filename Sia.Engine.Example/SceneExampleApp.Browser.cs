@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices.JavaScript;
+using System.Runtime.InteropServices;
 using Sia.GLFW;
 using Sia.Input;
 using Sia.WebGPU;
@@ -17,18 +18,26 @@ internal sealed partial class SceneExampleApp
     private double _browserDistance;
     private string _browserFeatureLevel = "core";
     private string? _browserComparePose;
-    private (string Status, double Distance, bool Touring, bool Triangles, bool Atmosphere)? _browserInspection;
+    private (double Distance, bool Touring, bool Triangles, bool Atmosphere)? _browserInspection;
 
     public async Task RunAsync()
     {
-        CaptureBrowserState();
         _browserFeatureLevel = GetBrowserFeatureLevel();
         if (_materialScene is { } scene) SetSceneAttribution(scene.Attribution);
-        await Program.BrowserOwner.RunGraphicsAsync(async () => { await InitializeAsync(); return 0; });
-        PublishBrowserState();
+        await Program.BrowserOwner.RunGraphicsAsync(async () => {
+            CaptureBrowserState();
+            await InitializeAsync();
+            PublishBrowserState();
+            return 0;
+        });
         Program.SetSceneReady();
         Console.WriteLine($"Sia.Engine browser {_pipeline} example - Esc to close.");
-        await RunAnimationFrameLoopAsync();
+        await Program.BrowserOwner.RunFramesAsync(timestamp => {
+            CaptureBrowserState();
+            var running = RenderAnimationFrame(timestamp);
+            PublishBrowserState();
+            return running;
+        });
     }
 
     private bool RenderAnimationFrame(double timestampMilliseconds)
@@ -92,10 +101,11 @@ internal sealed partial class SceneExampleApp
 
     private WindowSize GetCanvasSize() => _browserSize;
 
-    private void CaptureBrowserState()
+    private unsafe void CaptureBrowserState()
     {
-        Program.BrowserOwner.VerifyAccess();
-        var state = TakeFrameState();
+        Program.BrowserOwner.VerifyGraphicsAccess();
+        var state = stackalloc double[4];
+        if (ReadFrame(state) == 0) { throw new InvalidOperationException("Could not read browser frame input."); }
         _browserSize = new((int)state[0], (int)state[1]);
         _browserCommands = (int)state[2];
         _browserDistance = state[3];
@@ -103,25 +113,32 @@ internal sealed partial class SceneExampleApp
 
     private void PublishBrowserState()
     {
-        Program.BrowserOwner.VerifyAccess();
+        Program.BrowserOwner.VerifyGraphicsAccess();
         if (_browserInspection is { } state) {
-            SetInspectionStatus(state.Status, state.Distance, state.Touring, state.Triangles, state.Atmosphere);
+            if (PublishFrame(state.Distance, (state.Touring ? 1 : 0) | (state.Triangles ? 2 : 0) | (state.Atmosphere ? 4 : 0)) == 0) {
+                throw new InvalidOperationException("Could not update browser frame status.");
+            }
             _browserInspection = null;
         }
-        if (_browserComparePose is { } pose) { _browserComparePose = null; CompareLodAtCamera(pose); }
+        if (_browserComparePose is { } pose) {
+            _browserComparePose = null;
+            if (CompareLodAtCamera(pose) == 0) { throw new InvalidOperationException("Could not open the LOD comparison."); }
+        }
     }
 
-    [JSImport("takeFrameState", "main.js")]
-    private static partial double[] TakeFrameState();
+    // These native JS-library calls stay on the graphics/UI owner. Only startup
+    // imports use the managed deputy; frame input never needs array marshaling.
+    [DllImport("__Internal_emscripten", EntryPoint = "sia_browser_read_frame", CallingConvention = CallingConvention.Cdecl)]
+    private static extern unsafe int ReadFrame(double* state);
 
-    [JSImport("setInspectionStatus", "main.js")]
-    private static partial void SetInspectionStatus(string status, double distance, bool touring, bool triangles, bool atmosphere);
+    [DllImport("__Internal_emscripten", EntryPoint = "sia_browser_publish_frame", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int PublishFrame(double distance, int flags);
 
     [JSImport("setSceneAttribution", "main.js")]
     private static partial void SetSceneAttribution(string attribution);
 
-    [JSImport("compareLodAtCamera", "main.js")]
-    private static partial void CompareLodAtCamera(string pose);
+    [DllImport("__Internal_emscripten", EntryPoint = "sia_browser_compare_lod", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int CompareLodAtCamera([MarshalAs(UnmanagedType.LPUTF8Str)] string pose);
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {

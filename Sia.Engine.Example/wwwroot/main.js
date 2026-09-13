@@ -96,7 +96,8 @@ function compareLodAtCamera(pose) {
   location.href = url.href;
 }
 
-function setInspectionStatus(status, distance, touring, triangles, atmosphere) {
+function setInspectionStatus(distance, flags) {
+  const touring = (flags & 1) !== 0, triangles = (flags & 2) !== 0, atmosphere = (flags & 4) !== 0;
   atmosphereEnabled = atmosphere !== ((inspectionCommands & 32) !== 0);
   document.getElementById('inspection-status').textContent = pipeline === 'pbr'
     ? (finest ? 'Geometry · Full detail' : 'Geometry · Automatic LOD') : '135 bunnies · Automatic LOD';
@@ -111,8 +112,12 @@ function setInspectionStatus(status, distance, touring, triangles, atmosphere) {
 function getCanvasWidth() { return Math.max(1, Math.round(window.innerWidth)); }
 function getCanvasHeight() { return Math.max(1, Math.round(window.innerHeight)); }
 function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
-function takeFrameState() { return [getCanvasWidth(), getCanvasHeight(), takeInspectionCommands(), takeInspectionDistance()]; }
-function nextAnimationFrame() { return new Promise(requestAnimationFrame); }
+function readFrameState(heap, offset) {
+  heap[offset] = getCanvasWidth();
+  heap[offset + 1] = getCanvasHeight();
+  heap[offset + 2] = takeInspectionCommands();
+  heap[offset + 3] = takeInspectionDistance();
+}
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
   credit.textContent = attribution;
@@ -221,9 +226,10 @@ try {
     .withRuntimeOptions(['--no-jiterpreter-traces-enabled'])
     .withConfig({ pthreadPoolInitialSize: 16 }).withApplicationArguments(...args).create();
   Module.canvas = canvas;
+  Module.siaFrame = { read: readFrameState, publish: setInspectionStatus, compare: compareLodAtCamera };
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, compareLodAtCamera, setLoadingState, setSceneReady, showError, takeFrameState, nextAnimationFrame });
+  setModuleImports('main.js', { getBrowserFeatureLevel, setSceneAttribution, setLoadingState, setSceneReady, showError });
   const exitCode = await runMain();
   if (exitCode !== 0) showError(`The engine stopped with exit code ${exitCode}.`);
 } catch (error) {

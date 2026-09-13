@@ -19,7 +19,7 @@ internal sealed partial class SceneExampleApp
     private float _patchTourPhase;
     private bool _patchTour;
     private uint _patchKeys;
-    private string? _patchStatus;
+    private (int Distance, bool Touring, VisibilityDebugMode Mode, bool Atmosphere)? _patchStatus;
 
     private unsafe void InitializePatchLod()
     {
@@ -125,18 +125,18 @@ internal sealed partial class SceneExampleApp
             _patchTourPhase = (_patchTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;
             _patchDistance = (1 - MathF.Cos(_patchTourPhase)) * 0.5f;
         }
-        var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
-            : $"{_materialInstanceCount} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
         var atmosphere = _pipeline == ScenePipeline.Pbr && _sceneWorld!.AcquireAddon<EnvironmentLighting>().Atmosphere is not null;
-        var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
-        var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
-            : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
-        var status = $"{scene} | {_visibilityLod!.DebugMode} | {camera}{lighting}";
+        var status = ((int)(_patchDistance * 100), _patchTour, _visibilityLod!.DebugMode, atmosphere);
         if (_patchStatus != status) {
             _patchStatus = status;
-            Glfw.SetTitle(_window, "Sia.Engine - " + status);
+            var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
+                : $"{_materialInstanceCount} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
+            var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
+            var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
+                : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
+            Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_visibilityLod.DebugMode} | {camera}{lighting}");
 #if BROWSER
-            _browserInspection = (status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
+            _browserInspection = (_patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
 #endif
         }
     }

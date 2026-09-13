@@ -7,7 +7,7 @@ namespace Sia.Engine.Example;
 // Managed imports run on the deputy; native GLFW/WebGPU runs on the browser UI.
 // Exchange snapshots across this boundary, never synchronously wait or call
 // a JavaScript import from a graphics operation. CPU jobs use neither owner.
-internal sealed class BrowserThread
+internal sealed partial class BrowserThread
 {
     private readonly int _managed = Environment.CurrentManagedThreadId;
     private readonly GraphicsContext _graphics = new();
@@ -35,6 +35,8 @@ internal sealed class BrowserThread
         try { return await _graphics.RunAsync(action); }
         finally { VerifyAccess(); }
     }
+
+    public Task RunFramesAsync(Func<double, bool> frame) => RunGraphicsAsync(() => FrameLoop.RunAsync(frame));
 
     private sealed class GraphicsContext : SynchronizationContext
     {

@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <StaticWebAssetFingerprintPattern Include="JS" Pattern="*.js" Expression="#[.{fingerprint}]!" />
+    <Content Include="BrowserFrame.js" Kind="js-library" />
   </ItemGroup>
 
   <ItemGroup>
@@ -50,6 +51,9 @@
     <ItemGroup>
       <_WasmPInvokeModules Include="__Internal_emscripten" />
       <_WasmPInvokeModules Include="__Internal_glfw" />
+      <!-- runtime.c includes this generated table; the SDK omits its incremental dependency. -->
+      <_WasmRuntimePackSrcFile Update="$(_WasmRuntimePackSrcDir)runtime.c"
+                               Dependencies="%(_WasmRuntimePackSrcFile.Dependencies);$(_WasmInterpToNativeTablePath)" />
     </ItemGroup>
   </Target>
   <Import Project="Bistro.targets" />
