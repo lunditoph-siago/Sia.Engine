@@ -3,7 +3,7 @@
     <_BistroAssetHash>3F9D54C523EAFC3736DB63CBEFAA8F044E33906D0849A19F635FE82881DBFDC3</_BistroAssetHash>
     <_BistroFinestAssetHash>B8F8C98578585C80A8DF242A103E6510BC0FA6AA35089CF468C71686A8944D00</_BistroFinestAssetHash>
     <_BistroLicenseHash>9A9EF3C33320EEBE6126B0C7DC327885806BDE242283BBE6E4AE77641AD703E4</_BistroLicenseHash>
-    <_BistroReleaseUrl>https://github.com/lunditoph-siago/Sia.Engine/releases/download/Bistro-20260913</_BistroReleaseUrl>
+    <_BistroReleaseUrl>https://github.com/lunditoph-siago/Sia.Engine/releases/download/Bistro</_BistroReleaseUrl>
     <BistroAssetPath Condition="'$(BistroAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroAssetHash)/Bistro.siapbr', '$(MSBuildProjectDirectory)'))</BistroAssetPath>
     <BistroFinestAssetPath Condition="'$(BistroFinestAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroFinestAssetHash)/BistroFinest.siapbr', '$(MSBuildProjectDirectory)'))</BistroFinestAssetPath>
     <_BistroLicensePath>$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroLicenseHash)/Bistro.LICENSE.txt', '$(MSBuildProjectDirectory)'))</_BistroLicensePath>
@@ -38,7 +38,6 @@
     <Copy SourceFiles="$(BistroAssetPath)" DestinationFiles="$(_BistroPublishPath)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(BistroFinestAssetPath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/BistroFinest.siapbr" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(_BistroLicensePath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.LICENSE.txt" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)Assets/bistro.source.json" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.source.json" SkipUnchangedFiles="true" />
     <WriteLinesToFile File="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.assets.json"
                       Lines="{&quot;Bistro.siapbr&quot;:&quot;$(_BistroAssetHash)&quot;,&quot;BistroFinest.siapbr&quot;:&quot;$(_BistroFinestAssetHash)&quot;}"
                       Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
