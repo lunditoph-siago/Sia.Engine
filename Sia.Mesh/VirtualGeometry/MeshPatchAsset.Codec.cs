@@ -7,12 +7,10 @@ namespace Sia.Engine.Mesh;
 
 public sealed partial class MeshPatchAsset
 {
-    private const int HeaderSize = 272;
-    private const int HashOffset = 56;
+    private const int HeaderSize = 264;
+    private const int HashOffset = 48;
     private const int HashSize = 32;
     private static ReadOnlySpan<int> Strides => [56, 48, 4, 72, 4, 1, 4];
-
-    private static int SectionStride(int version, int section) => section == 1 && version == 1 ? 32 : Strides[section];
 
     public byte[] Encode(CancellationToken cancellationToken = default)
     {
@@ -27,11 +25,9 @@ public sealed partial class MeshPatchAsset
         var bytes = new byte[length];
         "SIAPATCH"u8.CopyTo(bytes);
         var writer = new Writer(bytes.AsSpan(8));
-        writer.Int(FormatVersion);
-        writer.Int(BuilderVersion);
         writer.Long(length);
-        Convert.FromHexString(SourceHash).CopyTo(bytes, 24);
-        writer = new(bytes.AsSpan(88));
+        Convert.FromHexString(SourceHash).CopyTo(bytes, 16);
+        writer = new(bytes.AsSpan(80));
         writer.Int(Settings.MaxLeafTriangles);
         writer.Int(Settings.MaxChildren);
         writer.Float(Settings.ParentTriangleRatio);
@@ -95,7 +91,7 @@ public sealed partial class MeshPatchAsset
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
-        if (bytes.StartsWith("SIAGZIP1"u8)) {
+        if (bytes.StartsWith("SIAGZIP\0"u8)) {
             return DecodeRaw(Decompress(bytes, maximumDecodedBytes, cancellationToken), cancellationToken);
         }
         Require(bytes.Length <= maximumDecodedBytes, "Patch asset exceeds the decoded byte limit.");
@@ -107,13 +103,10 @@ public sealed partial class MeshPatchAsset
         cancellationToken.ThrowIfCancellationRequested();
         Require(bytes.Length >= HeaderSize && bytes[..8].SequenceEqual("SIAPATCH"u8), "Invalid patch asset header.");
         var reader = new Reader(bytes[8..]);
-        var version = reader.Int();
-        Require(version is 1 or FormatVersion, "Unsupported patch asset format version.");
-        var builderVersion = reader.Int();
-        Require(builderVersion > 0 && reader.Long() == bytes.Length, "Invalid patch asset version or length.");
+        Require(reader.Long() == bytes.Length, "Invalid patch asset length.");
         Require(CryptographicOperations.FixedTimeEquals(Hash(bytes), bytes.Slice(HashOffset, HashSize)), "Patch asset checksum mismatch.");
-        var sourceHash = Convert.ToHexString(bytes.Slice(24, HashSize));
-        reader = new(bytes[88..]);
+        var sourceHash = Convert.ToHexString(bytes.Slice(16, HashSize));
+        reader = new(bytes[80..]);
         var settings = new MeshPatchBuildSettings(reader.Int(), reader.Int(), reader.Float(), reader.Float(), reader.Float());
         Require(settings.MaxLeafTriangles is >= 1 and <= 512 && settings.MaxChildren is >= 2 and <= 8
             && float.IsFinite(settings.ParentTriangleRatio) && settings.ParentTriangleRatio > 0 && settings.ParentTriangleRatio < 1
@@ -132,7 +125,7 @@ public sealed partial class MeshPatchAsset
         for (var i = 0; i < counts.Length; i++) {
             Require(reader.Long() == offset, "Patch sections must form a contiguous ordered stream.");
             counts[i] = reader.Int();
-            var stride = SectionStride(version, i);
+            var stride = Strides[i];
             Require(counts[i] >= 0 && reader.Int() == stride, "Invalid patch section count or stride.");
             offset += (long)counts[i] * stride;
             Require(offset <= bytes.Length, "Patch section exceeds the asset length.");
@@ -153,7 +146,7 @@ public sealed partial class MeshPatchAsset
         var vertices = new MeshVertex[counts[1]];
         for (var i = 0; i < vertices.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
-            vertices[i] = reader.Vertex(version);
+            vertices[i] = reader.Vertex();
         }
         var indices = reader.UIntArray(counts[2]);
         var clusters = new Meshlet[counts[3]];
@@ -168,7 +161,7 @@ public sealed partial class MeshPatchAsset
         var tree = MeshPatchTree.Restore(nodes, roots, finest, new(vertices, indices, bounds),
             new(clusters, references, localIndices, sourceIndices), cancellationToken);
         Require(simplified == nodes.Count(node => node.ChildCount != 0), "Simplification count differs from the patch hierarchy.");
-        return new(new(tree, sourceTriangles, removed, simplified, targetMisses, unreduced), settings, sourceHash, builderVersion);
+        return new(new(tree, sourceTriangles, removed, simplified, targetMisses, unreduced), settings, sourceHash);
     }
 
     private static byte[] Hash(ReadOnlySpan<byte> bytes)
@@ -210,16 +203,16 @@ public sealed partial class MeshPatchAsset
         public float Float() => BitConverter.Int32BitsToSingle(Int());
         public float3 Vector() => new(Float(), Float(), Float());
         public Aabb Box() => new(Vector(), Vector());
-        public MeshVertex Vertex(int version)
+        public MeshVertex Vertex()
         {
             if (BitConverter.IsLittleEndian) {
-                var values = MemoryMarshal.Cast<byte, float>(Bytes(version == 1 ? 32 : 48));
+                var values = MemoryMarshal.Cast<byte, float>(Bytes(48));
                 return new(new(values[0], values[1], values[2]), new(values[3], values[4], values[5]), new(values[6], values[7])) {
-                    Tangent = version == 1 ? default : new(values[8], values[9], values[10], values[11])
+                    Tangent = new(values[8], values[9], values[10], values[11])
                 };
             }
             var vertex = new MeshVertex(Vector(), Vector(), new(Float(), Float()));
-            return version == 1 ? vertex : vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
+            return vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
         }
         public uint[] UIntArray(int count)
         {

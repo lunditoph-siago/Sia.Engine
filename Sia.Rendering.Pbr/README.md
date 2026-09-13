@@ -37,17 +37,19 @@ limits. These effects do not solve indirect occlusion or local diffuse GI.
 
 Each opaque reflection pass copies one RGBA16F scene image; an optical scene adds
 another copy after opaque reflections and before transparent rendering. This
-avoids reading an HDR attachment while writing it. The legacy alpha-only path
+avoids reading an HDR attachment while writing it. A scene without transmission
 does not allocate the optical snapshot.
 
-## Asset compatibility
+## Asset layout
 
-SIAPBR version 3 appends transmission and thickness floats after opacity in each
-material record (78 fixed bytes including texture indices; v2 was 70 and v1 was 64).
-The decoder accepts v1/v2 and supplies zero optical parameters. Existing callers
-also retain zero defaults. The encoder emits v3; older runtimes cannot read it.
-Deploy a compatible reader before replacing downloaded assets with v3 files.
-No asset name convention implicitly enables refraction.
+SIAPBR has one unversioned layout: an eight-byte `SIAPBR` signature padded with
+two zero bytes, decoded length, file length, SHA-256 and a compressed payload.
+Every material stores coverage, transmission and thickness explicitly (78 fixed
+bytes including texture indices). Embedded patch geometry likewise has one layout,
+including tangent vectors, without format or builder versions. The reader does not
+upgrade other layouts. Rebuild assets with the current writer and publish matching
+runtime/assets together; SHA pins distinguish changed files. Material names do
+not implicitly enable refraction.
 
 ## Fixed-scene frame cost
 
@@ -78,20 +80,16 @@ return from debug mode also matched fresh-renderer captures exactly.
 
 ## Validation
 
-Run `dotnet test Sia.Rendering.Pbr.Tests/Sia.Rendering.Pbr.Tests.csproj -c Release`
-from the engine root using its configured SDK. The tests cover independent legacy
-wire records, coverage-preserving optical round trips and invalid parameters.
-
 The workspace blender-sync skill owns file-based cooking and matched Blender/Sia
-capture tools. Its clear slab, emissive checker wall and polished floor fixture
-uses shared geometry, camera, light and linear captures. At 640 × 480, Cycles
+capture tools. An earlier clear slab, emissive checker wall and polished floor
+comparison used shared geometry, camera, light and linear captures. At 640 × 480, Cycles
 128 samples versus Sia 4 × 4 supersampling on Vulkan/GTX 1650 Max-Q, relative RGB
 RMSE changed from 24.69% (alpha approximation) to 15.45% (optical glass), then
 12.38% (plus opaque reflections). Coverage IoU was .9942. The full comparison
 still fails its 10% RMSE / 95% pixel-tolerance gate; do not treat this as Cycles parity.
 
-Existing v2 Bistro with opaque reflections disabled rendered byte-identically to
+The earlier Bistro capture with opaque reflections disabled rendered byte-identically to
 the prior linear capture. With reflections enabled, entrance/cafe comparisons
 remain at 68.71% / 32.88% relative RMSE: indirect lighting is still the dominant
-gap tracked by issue #119. The published alpha-based Bistro materials do not opt
-into physical refraction. No published asset migration is included in this change.
+gap tracked by issue #119. Alpha-based Bistro materials do not opt
+into physical refraction. Layout changes do not alter those material parameters.

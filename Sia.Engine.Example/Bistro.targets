@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
-    <_BistroAssetHash>9B3959E5F0CA96843305EAA053DB5FAF5A0661F129F4F6E197C130107994C7A9</_BistroAssetHash>
-    <_BistroFinestAssetHash>AAEE2B33846383A89B2EC08C390AE4BBCDD17A59BECBCB3E4FF3E2867AE472CC</_BistroFinestAssetHash>
+    <_BistroAssetHash>E122135759BBACD722BE08AC0C221E36EC569EEAD4EA1B3BAAD787AA97DDCB6D</_BistroAssetHash>
+    <_BistroFinestAssetHash>516663E4E30D42C9DE20C50AD66DD1FDFDEA35B7A6C20BCBC8BD587F80A10DBF</_BistroFinestAssetHash>
     <_BistroLicenseHash>9A9EF3C33320EEBE6126B0C7DC327885806BDE242283BBE6E4AE77641AD703E4</_BistroLicenseHash>
     <_BistroReleaseUrl>https://github.com/lunditoph-siago/Sia.Engine/releases/download/Bistro</_BistroReleaseUrl>
     <BistroAssetPath Condition="'$(BistroAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroAssetHash)/Bistro.siapbr', '$(MSBuildProjectDirectory)'))</BistroAssetPath>
@@ -34,12 +34,13 @@
       <_BistroPublishPath>$([System.IO.Path]::Combine('$(PublishDir)', 'Assets', 'Bistro.siapbr'))</_BistroPublishPath>
       <_BistroPublishPath Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">$([System.IO.Path]::Combine('$(PublishDir)', 'wwwroot', 'Assets', 'Bistro.siapbr'))</_BistroPublishPath>
     </PropertyGroup>
-    <Delete Files="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Sponza.siapbr;$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/SponzaFinest.siapbr;$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Sponza.LICENSE.txt" />
     <Copy SourceFiles="$(BistroAssetPath)" DestinationFiles="$(_BistroPublishPath)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(BistroFinestAssetPath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/BistroFinest.siapbr" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(_BistroLicensePath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.LICENSE.txt" SkipUnchangedFiles="true" />
-    <WriteLinesToFile File="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.assets.json"
-                      Lines="{&quot;Bistro.siapbr&quot;:&quot;$(_BistroAssetHash)&quot;,&quot;BistroFinest.siapbr&quot;:&quot;$(_BistroFinestAssetHash)&quot;}"
-                      Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
+    <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+      <_BistroIndexHtml>$([System.IO.File]::ReadAllText('$(PublishDir)/wwwroot/index.html').Replace('__BISTRO_SHA256__', '$(_BistroAssetHash)').Replace('__BISTRO_FINEST_SHA256__', '$(_BistroFinestAssetHash)'))</_BistroIndexHtml>
+    </PropertyGroup>
+    <WriteLinesToFile Condition="'$(RuntimeIdentifier)' == 'browser-wasm'" File="$(PublishDir)/wwwroot/index.html"
+                      Lines="$([MSBuild]::Escape('$(_BistroIndexHtml)'))" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
   </Target>
 </Project>
