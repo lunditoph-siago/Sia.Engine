@@ -43,7 +43,7 @@ internal sealed unsafe class PbrScreenReflections
                     entries[i].Buffer.MinBindingSize = 144;
                 } else {
                     entries[i].Texture.ViewDimension = WGPUTextureViewDimension._2D;
-                    entries[i].Texture.SampleType = i == 2 ? WGPUTextureSampleType.Depth : WGPUTextureSampleType.Float;
+                    entries[i].Texture.SampleType = i == 2 ? WGPUTextureSampleType.UnfilterableFloat : WGPUTextureSampleType.Float;
                 }
             }
             fixed (WGPUBindGroupLayoutEntry* ptr = entries) {
