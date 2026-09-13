@@ -286,7 +286,7 @@ public sealed unsafe class PbrTransparentScene
     {
         var entry = WGPUBindGroupLayoutEntry.Default;
         entry.Binding = binding; entry.Visibility = WGPUShaderStage.Fragment;
-        entry.Texture.SampleType = depth ? WGPUTextureSampleType.Depth : WGPUTextureSampleType.Float;
+        entry.Texture.SampleType = depth ? WGPUTextureSampleType.UnfilterableFloat : WGPUTextureSampleType.Float;
         entry.Texture.ViewDimension = WGPUTextureViewDimension._2D;
         return entry;
     }

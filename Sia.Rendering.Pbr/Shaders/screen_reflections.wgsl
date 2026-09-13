@@ -10,7 +10,7 @@
 }
 @fragment fn fragment(@builtin(position) pixel:vec4<f32>) -> @location(0) vec4<f32> {
     let xy=vec2<i32>(pixel.xy); let original=textureLoad(opaque_color,xy,0);
-    let depth=textureLoad(opaque_depth,xy,0);
+    let depth=textureLoad(opaque_depth,xy,0).r;
     let base=textureLoad(base_roughness,xy,0);
     if (depth>=1.0 || base.w>=0.35) { return original; }
     let uv=pixel.xy/vec2<f32>(textureDimensions(opaque_depth));
