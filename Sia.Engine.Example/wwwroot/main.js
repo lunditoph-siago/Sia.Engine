@@ -170,12 +170,7 @@ try {
   if (pipeline === 'pbr') {
     const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
     if (!parameters.has('scene')) {
-      setLoadingState('Checking scene version', NaN);
-      const response = await fetch(new URL('Assets/Bistro.assets.json', location.href), { cache: 'no-store' });
-      if (!response.ok) throw new Error(`Unable to load scene hashes (${response.status}).`);
-      const hashes = await response.json();
-      const hash = hashes[finest ? 'BistroFinest.siapbr' : 'Bistro.siapbr'];
-      if (typeof hash !== 'string' || !/^[a-f0-9]{64}$/i.test(hash)) throw new Error('Invalid scene hash.');
+      const hash = finest ? canvas.dataset.bistroFinestSha256 : canvas.dataset.bistroSha256;
       scene.searchParams.set('sha256', hash);
       if ('serviceWorker' in navigator) {
         try {

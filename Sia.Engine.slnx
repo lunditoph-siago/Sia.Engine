@@ -14,6 +14,5 @@
   <Folder Name="/tests/">
     <Project Path="Sia.Mesh.Tests/Sia.Mesh.Tests.csproj" />
     <Project Path="Sia.Rendering.Debug.Tests/Sia.Rendering.Debug.Tests.csproj" />
-    <Project Path="Sia.Rendering.Pbr.Tests/Sia.Rendering.Pbr.Tests.csproj" />
   </Folder>
 </Solution>

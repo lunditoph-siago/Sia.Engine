@@ -17,7 +17,6 @@ public readonly record struct PbrSceneInstance(int Geometry, int Material, float
 
 public sealed partial class PbrSceneAsset
 {
-    public const int FormatVersion = 3;
     public ReadOnlyMemory<MeshPatchAsset> Geometry { get; }
     public ReadOnlyMemory<PbrMaterialAsset> Materials { get; }
     public ReadOnlyMemory<PbrSceneInstance> Instances { get; }
