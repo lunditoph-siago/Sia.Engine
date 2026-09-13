@@ -19,9 +19,6 @@ internal sealed partial class SceneExampleApp
     private void BuildMaterialScene()
     {
         var scene = _materialScene ?? throw new InvalidOperationException("A cooked PBR scene is required.");
-#if BROWSER
-        SetSceneAttribution(scene.Attribution);
-#endif
         _opaqueScene = OpaqueScene(scene);
         var world = _sceneWorld!;
         _materialBounds = new(new float3(float.PositiveInfinity), new float3(float.NegativeInfinity));
@@ -81,7 +78,7 @@ internal sealed partial class SceneExampleApp
                 new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode)
             : VisibilityPbrFeature.CreateGpuScene(in frame, scene, System.Math.Max(32, scene.Instances.Length), settings, _surfaceFormat, _patchDebugMode);
         InitializeInspectionControls();
-        Console.WriteLine($"PBR: {scene.Instances.Length} static instances, {(_finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles. B: toggle atmosphere.");
+        Console.WriteLine($"PBR: {scene.Instances.Length} static instances, {(_finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles.");
         _materialScene = null;
         _opaqueScene = null;
     }

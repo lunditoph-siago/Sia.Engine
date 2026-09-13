@@ -11,17 +11,23 @@ public static partial class Program
     public static async Task<int> Main(string[] args)
     {
         try {
+#if BROWSER
+            BrowserOwner = await BrowserThread.StartAsync();
+#endif
             var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
             var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath, finest) : null;
-            using var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera);
+            var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera);
             scene = null;
 #if BROWSER
-            SetLoadingState("Preparing graphics", double.NaN);
-            await Task.Delay(20);
-            await app.RunAsync();
+            try {
+                SetLoadingState("Preparing graphics", double.NaN);
+                await Task.Delay(20);
+                await app.RunAsync();
+            }
+            finally { await BrowserOwner.RunGraphicsAsync(() => { app.Dispose(); return Task.FromResult(0); }); }
 #else
-            app.Run();
+            using (app) { app.Run(); }
 #endif
             return 0;
         }
@@ -45,7 +51,11 @@ public static partial class Program
         var bytes = memory.ToArray();
         var readMilliseconds = timer.Elapsed.TotalMilliseconds;
         timer.Restart();
+#if BROWSER
+        var asset = await BrowserOwner.RunCpuAsync(token => MeshPatchAsset.Decode(bytes, cancellationToken: token));
+#else
         var asset = MeshPatchAsset.Decode(bytes);
+#endif
         Console.WriteLine($"Patch asset: {bytes.Length} bytes; read {readMilliseconds:F2} ms, decode/validate {timer.Elapsed.TotalMilliseconds:F2} ms; {asset.SourceHash}.");
         return asset;
     }
@@ -62,7 +72,11 @@ public static partial class Program
 #endif
         var readMilliseconds = timer.Elapsed.TotalMilliseconds;
         timer.Restart();
+#if BROWSER
+        var scene = await BrowserOwner.RunCpuAsync(token => PbrSceneAsset.Decode(bytes.Span, 1024 * 1024 * 1024, token));
+#else
         var scene = PbrSceneAsset.Decode(bytes.Span, 1024 * 1024 * 1024);
+#endif
         Console.WriteLine(scene.Attribution);
         Console.WriteLine($"PBR scene: {bytes.Length} bytes; read {readMilliseconds:F2} ms, decode {timer.Elapsed.TotalMilliseconds:F2} ms; "
             + $"{scene.Geometry.Length} shared geometries, {scene.Materials.Length} materials, {scene.Instances.Length} instances.");

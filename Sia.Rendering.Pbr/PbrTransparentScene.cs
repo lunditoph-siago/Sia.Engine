@@ -132,7 +132,7 @@ public sealed unsafe class PbrTransparentScene
         Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Camera.GetWgpu<WGPUBuffer>(), 0,
             [new(camera.ViewProj, new(camera.WorldPosition, 1), math.inverse(camera.ViewProj))]);
         view.Width = (uint)extracted.Viewport.Width; view.Height = (uint)extracted.Viewport.Height;
-        view.Draws = _draws.OrderByDescending(draw => math.lengthsq(draw.Center - camera.WorldPosition)).ToArray();
+        view.Sort(camera.WorldPosition);
     }
 
     internal View Import(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context)
@@ -158,21 +158,51 @@ public sealed unsafe class PbrTransparentScene
 
     internal sealed class View
     {
+        // Preserve transparency order while amortizing common state. Translation
+        // rebuilds only batches whose ordered draws change; camera turns reuse all.
+        private const int DrawsPerBundle = 32;
         public PbrTransparentScene Owner { get; }
         public Entity Camera { get; }
         public Entity Group { get; private set; }
         public uint Width { get; set; }
         public uint Height { get; set; }
         private WgpuHandle<WGPUTextureView> _color, _depth;
-        public Draw[] Draws { get; set; } = [];
+        private readonly int[] _order;
+        private readonly float[] _distances;
+        private readonly IComparer<int> _compare;
+        private readonly nint[] _orderedBundles;
+        private readonly int[] _recordedOrder;
+        private float3? _eye;
+        private bool _orderChanged = true;
+        private readonly Entity[] _bundles;
+        private (Entity Camera, Entity Lighting, Entity Ibl)? _bindings;
         public RenderGraphBufferKey CameraKey { get; } = new("transparent-camera");
         public View(PbrTransparentScene owner)
         {
             Owner = owner;
+            _order = Enumerable.Range(0, owner._draws.Length).ToArray();
+            _distances = new float[_order.Length];
+            _recordedOrder = new int[_order.Length];
+            Array.Fill(_recordedOrder, -1);
+            _bundles = new Entity[(_order.Length + DrawsPerBundle - 1) / DrawsPerBundle];
+            _orderedBundles = new nint[_bundles.Length];
+            _compare = Comparer<int>.Create((left, right) => {
+                var distance = _distances[right].CompareTo(_distances[left]);
+                // Match OrderByDescending's source-order tie break.
+                return distance != 0 ? distance : left.CompareTo(right);
+            });
             Camera = owner._world.OwnWgpu(Wgpu.CreateBuffer(owner._device.GetWgpu<WGPUDevice>(),
                 new WGPUBufferDescriptor { Size = 144, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst }));
             try { if (!owner.HasTransmission) { Group = owner._world.OwnWgpu(PbrTransparentScene.Group(owner._device.GetWgpu<WGPUDevice>(), owner._cameraLayout, [BufferEntry(0, Camera)])); } }
             catch { Camera.Destroy(); throw; }
+        }
+        public void Sort(float3 eye)
+        {
+            if (_eye is { } previous && previous.Equals(eye)) { return; }
+            for (var i = 0; i < _distances.Length; i++) { _distances[i] = math.lengthsq(Owner._draws[i].Center - eye); }
+            Array.Sort(_order, _compare);
+            _eye = eye;
+            _orderChanged = true;
         }
         public void BindScene(WgpuHandle<WGPUTextureView> color, WgpuHandle<WGPUTextureView> depth)
         {
@@ -192,16 +222,57 @@ public sealed unsafe class PbrTransparentScene
         }
         public void Render(WgpuHandle<WGPURenderPassEncoder> pass, PbrViewState lighting)
         {
-            Wgpu.SetRenderPipeline(pass, Owner._pipeline.GetWgpu<WGPURenderPipeline>());
-            Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-            Wgpu.SetBindGroup(pass, 1, lighting.ForwardLightingBindGroup.GetWgpu<WGPUBindGroup>());
-            Wgpu.SetBindGroup(pass, 2, lighting.IblBindGroup.GetWgpu<WGPUBindGroup>());
-            foreach (var draw in Draws) {
-                Wgpu.SetBindGroup(pass, 3, draw.Group.GetWgpu<WGPUBindGroup>());
-                Wgpu.SetVertexBuffer(pass, 0, draw.Vertices.GetWgpu<WGPUBuffer>());
-                Wgpu.SetIndexBuffer(pass, draw.Indices.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-                Wgpu.DrawIndexed(pass, draw.Count);
+            var bindings = (Group, lighting.ForwardLightingBindGroup, lighting.IblBindGroup);
+            var bindingsChanged = _bindings != bindings;
+            if (bindingsChanged || _orderChanged) {
+                for (var i = 0; i < _bundles.Length; i++) {
+                    var start = i * DrawsPerBundle;
+                    var count = System.Math.Min(DrawsPerBundle, _order.Length - start);
+                    var order = _order.AsSpan(start, count);
+                    var recorded = _recordedOrder.AsSpan(start, count);
+                    if (!bindingsChanged && order.SequenceEqual(recorded)) { continue; }
+                    var next = CreateBundle(order, lighting);
+                    if (_bundles[i].IsValid) { _bundles[i].Destroy(); }
+                    _bundles[i] = next;
+                    _orderedBundles[i] = next.GetWgpu<WGPURenderBundle>().DangerousGetHandle();
+                    order.CopyTo(recorded);
+                }
+                _bindings = bindings;
+                _orderChanged = false;
             }
+            fixed (nint* bundles = _orderedBundles) {
+                WgpuUnsafe.wgpuRenderPassEncoderExecuteBundles((WGPURenderPassEncoder*)pass.DangerousGetHandle(),
+                    (nuint)_orderedBundles.Length, (WGPURenderBundle**)bundles);
+            }
+        }
+        private Entity CreateBundle(ReadOnlySpan<int> order, PbrViewState lighting)
+        {
+            var format = WGPUTextureFormat.RGBA16Float;
+            var descriptor = WGPURenderBundleEncoderDescriptor.Default;
+            descriptor.ColorFormatCount = 1; descriptor.ColorFormats = &format;
+            descriptor.DepthStencilFormat = WGPUTextureFormat.Depth32Float;
+            descriptor.DepthReadOnly = 1; descriptor.StencilReadOnly = 1;
+            var encoder = WgpuUnsafe.wgpuDeviceCreateRenderBundleEncoder((WGPUDevice*)Owner._device.GetWgpu<WGPUDevice>().DangerousGetHandle(), &descriptor);
+            if (encoder == null) { throw new WgpuException("Could not create transparent render bundle encoder."); }
+            try {
+                WgpuUnsafe.wgpuRenderBundleEncoderSetPipeline(encoder, (WGPURenderPipeline*)Owner._pipeline.GetWgpu<WGPURenderPipeline>().DangerousGetHandle());
+                WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 0, (WGPUBindGroup*)Group.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
+                WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 1, (WGPUBindGroup*)lighting.ForwardLightingBindGroup.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
+                WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 2, (WGPUBindGroup*)lighting.IblBindGroup.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
+                foreach (var index in order) {
+                    var draw = Owner._draws[index];
+                    WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 3, (WGPUBindGroup*)draw.Group.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
+                    var vertices = draw.Vertices.GetWgpu<WGPUBuffer>();
+                    var indices = draw.Indices.GetWgpu<WGPUBuffer>();
+                    WgpuUnsafe.wgpuRenderBundleEncoderSetVertexBuffer(encoder, 0, (WGPUBuffer*)vertices.DangerousGetHandle(), 0, Wgpu.GetBufferSize(vertices));
+                    WgpuUnsafe.wgpuRenderBundleEncoderSetIndexBuffer(encoder, (WGPUBuffer*)indices.DangerousGetHandle(), WGPUIndexFormat.Uint32, 0, Wgpu.GetBufferSize(indices));
+                    WgpuUnsafe.wgpuRenderBundleEncoderDrawIndexed(encoder, draw.Count, 1, 0, 0, 0);
+                }
+                var bundle = WgpuUnsafe.wgpuRenderBundleEncoderFinish(encoder, null);
+                if (bundle == null) { throw new WgpuException("Could not finish transparent render bundle."); }
+                return Owner._world.OwnWgpu(new WgpuHandle<WGPURenderBundle>((nint)bundle));
+            }
+            finally { WgpuUnsafe.wgpuRenderBundleEncoderRelease(encoder); }
         }
     }
 

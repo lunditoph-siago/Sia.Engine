@@ -10,7 +10,8 @@ public sealed partial class VisibilityPbrFeature
     private readonly FixedGeometryGpu? _fixedGeometry;
 
     private uint4 RasterConfig => _fixedGeometry is { } geometry
-        ? new(geometry.Stride, geometry.Count, geometry.DispatchDimension, geometry.SharedVertices ? 1u : 3u) : new(1, 0, _materialTiles.DispatchDimension, 0);
+        ? new((uint)System.Numerics.BitOperations.TrailingZeroCount(geometry.Stride), geometry.Count,
+            geometry.DispatchDimension, geometry.SharedVertices ? 1u : 3u) : new(0, 0, _materialTiles.DispatchDimension, 0);
 
     public static VisibilityPbrFeature CreateFixedScene(in GpuFrame frame, PbrSceneAsset asset,
         ReadOnlySpan<VisibilityInstance> instances, WGPUTextureFormat outputFormat,
@@ -45,10 +46,12 @@ public sealed partial class VisibilityPbrFeature
         for (var instance = 0; instance < instances.Length; instance++) {
             var index = instances[instance].AssetIndex;
             foreach (var cluster in clusters[index]) {
-                work[count++] = new(new(cluster.Bounds.Box.Min, 0), new(cluster.Bounds.Box.Max, 0),
+                var firstTriangle = offsets[index] + (uint)cluster.TriangleOffset / 3;
+                var meshlet = combined.Triangles.Span[(int)firstTriangle].x;
+                var minimum = cluster.Bounds.Box.Min;
+                work[count++] = new(minimum.x, minimum.y, minimum.z, combined.Meshlets.Span[(int)meshlet].x, new(cluster.Bounds.Box.Max, 0),
                     new(cluster.Bounds.Center, cluster.Bounds.Radius), new(cluster.Bounds.ConeAxis, cluster.Bounds.ConeCutoff),
-                    new(offsets[index] + (uint)cluster.TriangleOffset / 3, (uint)instance, (uint)cluster.TriangleCount,
-                        packedOffset + offsets[index] + (uint)cluster.TriangleOffset / 3));
+                    new(firstTriangle, (uint)instance, (uint)cluster.TriangleCount, packedOffset + firstTriangle));
             }
         }
         var scene = new SceneLodData(combined, [], ranges, default, 1, (uint)capacity,

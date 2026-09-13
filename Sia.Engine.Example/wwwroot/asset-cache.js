@@ -5,14 +5,23 @@ const paths = new Set(['Bistro.siapbr', 'BistroFinest.siapbr'].map(name => new U
 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== scope.origin || !paths.has(url.pathname)
-      || event.request.headers.has('Range')
-      || !/^[a-f0-9]{64}$/i.test(url.searchParams.get('sha256') ?? '')) return;
-  const response = loadScene(event.request);
-  event.respondWith(response.then(result => result.response));
+  const request = event.request;
+  const url = new URL(request.url);
+  if (url.origin !== scope.origin || (request.cache === 'only-if-cached' && request.mode !== 'same-origin')) return;
+  const scene = request.method === 'GET' && paths.has(url.pathname) && !request.headers.has('Range')
+    && /^[a-f0-9]{64}$/i.test(url.searchParams.get('sha256') ?? '');
+  const response = scene ? loadScene(request) : fetch(request).then(response => ({ response }));
+  event.respondWith(response.then(result => isolatedResponse(result.response)));
   event.waitUntil(response.then(result => result.cached));
 });
+
+function isolatedResponse(response) {
+  if (response.type === 'opaque' || response.status === 0) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 function cachedResponse(response, hit) {
   const headers = new Headers(response.headers);

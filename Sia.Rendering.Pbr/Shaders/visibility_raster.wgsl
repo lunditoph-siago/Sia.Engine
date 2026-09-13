@@ -37,7 +37,7 @@ fn shared_position(index: u32) -> vec4<f32> {
     let vertex = select(index >> 1u, index, visibility_camera.raster.w == 4u);
     let work = visibility_work[vertex / 256u];
     let offset = visibility_triangles[work.x].x;
-    let source = visibility_vertices[visibility_indices[offset + vertex % 256u]].position_normal_x.xyz;
+    let source = visibility_vertices[visibility_indices[offset + vertex % 256u]].xyz;
     return visibility_clip(source, work.y);
 }
 
@@ -53,7 +53,11 @@ fn indexed(@builtin(vertex_index) index: u32) -> RasterOutput {
 
 @vertex
 fn indexed_shadow(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+#ifdef WORLD_SPACE_GEOMETRY
+    return visibility_clip(visibility_vertices[index].xyz, 0u);
+#else
     return shared_position(index);
+#endif
 }
 
 struct FirstRasterOutput {

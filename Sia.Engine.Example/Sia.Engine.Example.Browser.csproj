@@ -10,6 +10,8 @@
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
     <WasmEnableSIMD>true</WasmEnableSIMD>
+    <WasmEnableThreads>true</WasmEnableThreads>
+    <RestoreAdditionalProjectSources>$(RestoreAdditionalProjectSources);https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet11/nuget/v3/index.json</RestoreAdditionalProjectSources>
     <WasmBuildNative>true</WasmBuildNative>
     <WasmAllowUndefinedSymbols>true</WasmAllowUndefinedSymbols>
     <EmccFlags>--use-port=emdawnwebgpu</EmccFlags>

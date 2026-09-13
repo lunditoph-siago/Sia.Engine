@@ -173,14 +173,9 @@ public sealed partial class VisibilityPbrFeature :
         var acquired = new List<Entity>();
         try {
             var buffers = new[] {
-                UploadPacked<MeshVertex, PackedVertexGpu>(world, device, queue, geometry.Vertices.Span,
-                    PackedVertexGpu.From, limits, acquired),
+                UploadVertices(world, device, queue, geometry.Vertices.Span, limits, acquired),
                 Upload(world, device, queue, geometry.Indices.Span, WGPUBufferUsage.Storage, limits, acquired),
-                UploadPacked<uint4, TriangleGpu>(world, device, queue, geometry.Triangles.Span,
-                    triangle => {
-                        var meshlet = geometry.Meshlets.Span[(int)triangle.x];
-                        return new(meshlet.x, geometry.Indices.Span[checked((int)(meshlet.y + triangle.y))]);
-                    }, limits, acquired),
+                UploadTriangles(world, device, queue, geometry, limits, acquired),
                 Upload<InstanceGpu>(world, device, queue, gpuInstances, WGPUBufferUsage.Storage, limits, acquired)
             };
             var (materialGpu, textures, materialParameters) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
