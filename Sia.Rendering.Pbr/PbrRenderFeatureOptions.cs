@@ -10,6 +10,9 @@ public sealed record PbrRenderFeatureOptions
     /// <summary>Trace current-frame scene reflections on low-roughness Visibility surfaces.</summary>
     public bool ScreenSpaceReflections { get; init; } = true;
 
+    /// <summary>Reuse low-resolution screen rays for local diffuse bounce and indirect occlusion.</summary>
+    public bool ScreenSpaceIndirectLighting { get; init; } = true;
+
     public RenderGraphTextureKey HdrTarget { get; init; } = new("pbr-hdr");
 
     public RenderGraphPassKey SkyboxPass { get; init; } = new("pbr-skybox");

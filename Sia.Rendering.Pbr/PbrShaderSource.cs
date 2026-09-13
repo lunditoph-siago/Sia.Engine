@@ -30,7 +30,14 @@ public static class PbrShaderSource
     public static string LoadForwardPbr() => Load(k_ResourcePrefix + "forward_pbr.wgsl");
     internal static string LoadTransparentPbr(bool transmission = false) => Load(k_ResourcePrefix + "transparent_pbr.wgsl",
         transmission ? new Dictionary<string, string> { ["OPTICAL_TRANSMISSION"] = "true" } : null);
-    internal static string LoadScreenReflections() => Load(k_ResourcePrefix + "screen_reflections.wgsl");
+    internal static string LoadScreenLighting(bool gather, bool reflections, bool indirect)
+    {
+        var definitions = new Dictionary<string, string>();
+        if (gather) { definitions["SCREEN_GATHER"] = "true"; }
+        if (reflections) { definitions["SCREEN_REFLECTIONS"] = "true"; }
+        if (indirect) { definitions["SCREEN_INDIRECT"] = "true"; }
+        return Load(k_ResourcePrefix + "screen_lighting.wgsl", definitions);
+    }
 
     public static string LoadClusterLightCulling() => Load(k_ResourcePrefix + "cluster_light_culling.wgsl");
 

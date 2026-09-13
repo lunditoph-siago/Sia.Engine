@@ -1,7 +1,7 @@
 #import pbr::scene_lighting::{scene_lighting}
 
 #ifdef OPTICAL_TRANSMISSION
-#import pbr::screen_trace::{trace_scene, scene_color, project_scene}
+#import pbr::screen_trace::{trace_scene, scene_color}
 #else
 struct GlassCamera { view_proj: mat4x4<f32>, world_position: vec4<f32>, inverse_view_proj: mat4x4<f32> }
 @group(0) @binding(0) var<uniform> camera: GlassCamera;
