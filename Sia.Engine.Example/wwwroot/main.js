@@ -1,3 +1,5 @@
+import { createBrowserInput } from './browser-input.js';
+
 const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
 const pipeline = parameters.get('pipeline') ?? 'pbr';
@@ -15,26 +17,46 @@ let atmosphereEnabled = parameters.get('atmosphere') === 'on';
 let inspectionCommands = atmosphereEnabled ? 32 : 0;
 let inspectionDistance = NaN;
 let failed = false;
+let updateBrowserInput;
+let inputPending = false, inputDirty = false;
+const controller = document.getElementById('touch-controller');
+const input = createBrowserInput(sendBrowserInput, () => {
+  if (!loading.hidden || failed) return false;
+  closeSettings();
+  canvas.focus();
+  return true;
+}, () => pipeline === 'pbr' && hasCameraFocus(), () => { inspectionCommands |= 4; sendBrowserInput(); });
+
+async function sendBrowserInput() {
+  inputDirty = true;
+  if (!updateBrowserInput || inputPending) return;
+  inputPending = true;
+  try {
+    while (inputDirty && updateBrowserInput) {
+      inputDirty = false;
+      const state = input.take();
+      await updateBrowserInput(getCanvasWidth(), getCanvasHeight(), takeInspectionCommands(), takeInspectionDistance(),
+        state.right, state.forward, state.up, state.yaw, state.pitch, state.turnRight, state.turnUp, state.speed);
+    }
+  } catch (error) { showError(String(error)); }
+  finally { inputPending = false; }
+}
 
 function closeSettings() {
   inspection.hidden = true;
   settingsToggle.setAttribute('aria-expanded', 'false');
+  controller.hidden = pipeline !== 'pbr' || !loading.hidden || failed;
+  sendBrowserInput();
 }
 
 settingsToggle.addEventListener('click', () => {
   inspection.hidden = !inspection.hidden;
   settingsToggle.setAttribute('aria-expanded', String(!inspection.hidden));
+  if (!inspection.hidden) input.reset();
+  controller.hidden = pipeline !== 'pbr' || !inspection.hidden;
+  sendBrowserInput();
 });
 canvas.addEventListener('pointerdown', () => { closeSettings(); canvas.focus(); });
-canvas.addEventListener('contextmenu', event => event.preventDefault());
-window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !inspection.hidden) {
-    closeSettings();
-    settingsToggle.focus();
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  } else if (event.target !== canvas) event.stopImmediatePropagation();
-}, true);
 document.getElementById('retry').addEventListener('click', () => location.reload());
 
 function setLoadingState(stage, progress) {
@@ -55,7 +77,7 @@ function setSceneReady() {
   loading.setAttribute('aria-busy', 'false');
   inspection.disabled = false;
   settingsToggle.disabled = false;
-  document.getElementById('explore-hint').hidden = pipeline !== 'pbr';
+  controller.hidden = pipeline !== 'pbr';
   canvas.focus();
 }
 
@@ -63,14 +85,16 @@ function hasCameraFocus() {
   return !failed && inspection.hidden && document.hasFocus() && document.activeElement === canvas;
 }
 
-distanceControl.addEventListener('input', () => { inspectionDistance = distanceControl.valueAsNumber / 1000; });
-tourControl.addEventListener('click', () => { inspectionCommands |= 1; });
-materialControl.addEventListener('click', () => { inspectionCommands |= 2; });
-resetControl.addEventListener('click', () => { inspectionCommands |= 4; });
+for (const type of ['resize', 'focus', 'blur']) window.addEventListener(type, sendBrowserInput);
+for (const type of ['focus', 'blur']) canvas.addEventListener(type, sendBrowserInput);
+distanceControl.addEventListener('input', () => { inspectionDistance = distanceControl.valueAsNumber / 1000; sendBrowserInput(); });
+tourControl.addEventListener('click', () => { inspectionCommands |= 1; sendBrowserInput(); });
+materialControl.addEventListener('click', () => { inspectionCommands |= 2; sendBrowserInput(); });
+resetControl.addEventListener('click', () => { inspectionCommands |= 4; sendBrowserInput(); });
+document.getElementById('scene-stop').addEventListener('click', () => { input.reset(); inspectionCommands |= 512; sendBrowserInput(); });
 atmosphereControl.addEventListener('click', () => {
-  atmosphereEnabled = !atmosphereEnabled;
   inspectionCommands ^= 32;
-  atmosphereControl.textContent = atmosphereEnabled ? 'Disable atmosphere' : 'Enable atmosphere';
+  sendBrowserInput();
 });
 
 function takeInspectionCommands() {
@@ -98,7 +122,7 @@ function compareLodAtCamera(pose) {
 
 function setInspectionStatus(distance, flags) {
   const touring = (flags & 1) !== 0, triangles = (flags & 2) !== 0, atmosphere = (flags & 4) !== 0;
-  atmosphereEnabled = atmosphere !== ((inspectionCommands & 32) !== 0);
+  atmosphereEnabled = atmosphere;
   document.getElementById('inspection-status').textContent = pipeline === 'pbr'
     ? (finest ? 'Geometry · Full detail' : 'Geometry · Automatic LOD') : '135 bunnies · Automatic LOD';
   distanceControl.value = Math.round(distance * 1000);
@@ -112,12 +136,6 @@ function setInspectionStatus(distance, flags) {
 function getCanvasWidth() { return Math.max(1, Math.round(window.innerWidth)); }
 function getCanvasHeight() { return Math.max(1, Math.round(window.innerHeight)); }
 function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
-function readFrameState(heap, offset) {
-  heap[offset] = getCanvasWidth();
-  heap[offset + 1] = getCanvasHeight();
-  heap[offset + 2] = takeInspectionCommands();
-  heap[offset + 3] = takeInspectionDistance();
-}
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
   credit.textContent = attribution;
@@ -127,12 +145,13 @@ function setSceneAttribution(attribution) {
 
 function showError(message) {
   if (failed) return;
+  controller.hidden = true;
+  input.reset();
   document.getElementById('loading-title').textContent = loading.hidden ? 'Scene interrupted' : 'Unable to open scene';
   document.getElementById('loading-stage').textContent = message;
   failed = true;
   closeSettings();
   settingsToggle.disabled = true;
-  document.getElementById('explore-hint').hidden = true;
   loading.hidden = false;
   loading.setAttribute('aria-busy', 'false');
   document.getElementById('loading-percent').textContent = '';
@@ -150,16 +169,18 @@ if (pipeline === 'bunny') {
 }
 if (pipeline === 'pbr') {
   document.getElementById('inspection-distance-row').hidden = true;
+  document.getElementById('camera-speed-row').hidden = false;
   tourControl.hidden = true;
   resetControl.textContent = 'Reset view';
   atmosphereControl.hidden = false;
-  document.getElementById('inspection-help').textContent = 'WASD: move · Q/E: down/up · Right-drag or arrows: look · Shift: fast · C: slow · R: reset · M: triangles · B: atmosphere';
+  document.getElementById('inspection-help').textContent = 'Touch: left stick to move, drag the right half to look, hold ↑ / ↓ to change height. Keyboard: WASD to move, Q / E down / up, arrows or right mouse drag to look, Shift to move faster, R to reset.';
   const lodControl = document.getElementById('inspection-lod');
   lodControl.hidden = false;
   lodControl.textContent = finest ? 'Compare automatic LOD' : 'Use full detail';
   lodControl.addEventListener('click', () => {
     lodControl.disabled = true;
     inspectionCommands |= 64;
+    sendBrowserInput();
   });
 }
 for (const link of document.querySelectorAll('nav a')) {
@@ -222,15 +243,22 @@ try {
   // Preload runtime/timer/HTTP workers plus the four bounded CPU decoder workers.
   // Synchronous thread startup cannot wait for a new browser worker to load.
   // Worker-generated traces in this runtime cannot be reused by native UI calls.
-  const { runMain, Module, setModuleImports } = await dotnet
+  const { runMain, Module, setModuleImports, getAssemblyExports, getConfig } = await dotnet
     .withRuntimeOptions(['--no-jiterpreter-traces-enabled'])
     .withConfig({ pthreadPoolInitialSize: 16 }).withApplicationArguments(...args).create();
   Module.canvas = canvas;
-  Module.siaFrame = { read: readFrameState, publish: setInspectionStatus, compare: compareLodAtCamera };
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getBrowserFeatureLevel, setSceneAttribution, setLoadingState, setSceneReady, showError });
+  setModuleImports('main.js', { getBrowserFeatureLevel, setSceneAttribution, setLoadingState, setSceneReady, showError, setInspectionStatus, compareLodAtCamera });
+  const exports = await getAssemblyExports(getConfig().mainAssemblyName);
+  updateBrowserInput = exports.Sia.Engine.Example.Program.UpdateBrowserInput;
+  await sendBrowserInput();
   const exitCode = await runMain();
+  updateBrowserInput = undefined;
+  input.reset();
+  controller.hidden = true;
+  inspection.disabled = true;
+  settingsToggle.disabled = true;
   if (exitCode !== 0) showError(`The engine stopped with exit code ${exitCode}.`);
 } catch (error) {
   console.error('[startup]', error);

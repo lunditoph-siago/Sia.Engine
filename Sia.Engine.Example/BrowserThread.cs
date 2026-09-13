@@ -10,6 +10,7 @@ namespace Sia.Engine.Example;
 internal sealed partial class BrowserThread
 {
     private readonly int _managed = Environment.CurrentManagedThreadId;
+    private readonly SynchronizationContext _imports = SynchronizationContext.Current!;
     private readonly GraphicsContext _graphics = new();
     private BrowserThread() { }
     public static async Task<BrowserThread> StartAsync()
@@ -37,6 +38,17 @@ internal sealed partial class BrowserThread
     }
 
     public Task RunFramesAsync(Func<double, bool> frame) => RunGraphicsAsync(() => FrameLoop.RunAsync(frame));
+
+    public Task RunImportsAsync(Action action)
+    {
+        VerifyGraphicsAccess();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _imports.Post(_ => {
+            try { VerifyAccess(); action(); completion.SetResult(); }
+            catch (Exception error) { completion.SetException(error); }
+        }, null);
+        return completion.Task;
+    }
 
     private sealed class GraphicsContext : SynchronizationContext
     {

@@ -11,7 +11,7 @@
     :root { color-scheme: dark; font: 14px system-ui, sans-serif; color: #edf2f7; background: #101419; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-    #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+    #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
     button, a, summary, input { -webkit-tap-highlight-color: transparent; }
     button, a, summary { touch-action: manipulation; }
     button { color: inherit; font: inherit; cursor: pointer; }
@@ -33,12 +33,20 @@
     .controls button, #retry { min-height: 44px; padding: 10px 14px; background: #ffffff0a; border: 1px solid #ffffff24; border-radius: 8px; text-align: left; }
     .controls button:hover, #retry:hover { background: #ffffff18; }
     .distance { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: #b5c1cc; }
-    #inspection-distance { flex: 1; min-width: 0; height: 44px; accent-color: #9dc8e5; }
+    #inspection-distance, #camera-speed { flex: 1; min-width: 0; height: 44px; accent-color: #9dc8e5; }
     .help { margin-top: 20px; padding-top: 16px; border-top: 1px solid #ffffff18; }
     summary { cursor: pointer; min-height: 32px; }
     #inspection-help { line-height: 1.8; color: #b5c1cc; font-size: 12px; }
-    #explore-hint { position: fixed; left: max(20px, env(safe-area-inset-left)); bottom: max(20px, env(safe-area-inset-bottom)); margin: 0; padding: 8px 12px; border-radius: 8px; color: #e0e7ed; background: #101419b8; font-size: 12px; pointer-events: none; }
-    #credits { position: fixed; right: max(20px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); max-width: min(360px, calc(100vw - 40px)); color: #bdc9d3; font-size: 11px; background: #101419d9; border-radius: 8px; padding: 8px 12px; }
+    #touch-controller { position: fixed; inset: 0; z-index: 2; pointer-events: none; user-select: none; }
+    .stick { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); width: clamp(96px, 22vw, 128px); aspect-ratio: 1; border: 1px solid #ffffff38; border-radius: 50%; background: radial-gradient(circle, #18253090 42%, #10141980 43%); touch-action: none; pointer-events: auto; }
+    #move-pad { left: max(20px, env(safe-area-inset-left)); }
+    #look-zone { position: absolute; inset: 0 0 0 50%; pointer-events: auto; touch-action: none; }
+    .stick-thumb { position: absolute; width: 36%; height: 36%; left: 32%; top: 32%; border: 1px solid #d1e8f099; border-radius: 50%; background: #b6d7e540; transform: translate(var(--stick-x, 0px), var(--stick-y, 0px)); pointer-events: none; }
+    .stick-label { position: absolute; bottom: 10%; width: 100%; text-align: center; font-size: 9px; letter-spacing: .16em; color: #d6e2e9bb; pointer-events: none; }
+    .elevation { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); right: max(20px, env(safe-area-inset-right)); display: flex; flex-direction: column; gap: 8px; }
+    .elevation button { width: 44px; height: 44px; border: 1px solid #ffffff38; border-radius: 50%; color: #e6f0f5; background: #101419a6; font-size: 20px; pointer-events: auto; touch-action: none; }
+    .elevation button.held { background: #8eb8ca88; }
+    #credits { position: fixed; z-index: 3; right: max(20px, env(safe-area-inset-right)); top: max(78px, calc(env(safe-area-inset-top) + 70px)); max-width: min(360px, calc(100vw - 40px)); color: #bdc9d3; font-size: 11px; background: #101419d9; border-radius: 8px; padding: 8px 12px; }
     #credits summary { min-height: auto; text-align: right; }
     .asset-credit { display: block; margin-top: 10px; color: inherit; line-height: 1.65; overflow-wrap: anywhere; }
     #loading { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: #101419f5; padding: 32px; }
@@ -55,7 +63,6 @@
       nav a { padding-inline: 12px; }
       #settings-toggle { padding-inline: 12px; }
       #inspection { top: 70px; right: 10px; width: calc(100vw - 20px); }
-      #explore-hint { display: none; }
     }
   </style>
 </head>
@@ -75,19 +82,25 @@
     <div class="panel-title">Scene settings</div>
     <p id="inspection-status"></p>
     <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
+    <label id="camera-speed-row" class="distance" hidden>Slow <input id="camera-speed" type="range" min="1" max="16" value="4" aria-label="Move speed" /> Fast</label>
     <div class="controls">
       <button id="inspection-tour" type="button">Pause tour</button>
       <button id="inspection-reset" type="button">Return near</button>
       <button id="inspection-material" type="button">Show triangles</button>
       <button id="inspection-atmosphere" type="button" hidden>Enable atmosphere</button>
       <button id="inspection-lod" type="button" hidden>Compare automatic LOD</button>
+      <button id="scene-stop" type="button">Stop scene</button>
     </div>
     <details class="help">
       <summary>Controls</summary>
-      <p id="inspection-help">W / S or ↑ / ↓: near / far · Space: pause · M: material · R: reset</p>
+      <p id="inspection-help">Drag the distance slider to move closer or farther. Use the controls above to pause the tour, reset the view or change shading.</p>
     </details>
   </fieldset>
-  <p id="explore-hint" hidden>WASD to move · Right-drag to look</p>
+  <div id="touch-controller" hidden aria-label="Camera touch controls">
+    <div id="move-pad" class="stick" role="group" aria-label="Move joystick"><span class="stick-thumb"></span><span class="stick-label">MOVE</span></div>
+    <div id="look-zone" role="group" aria-label="Drag to look"></div>
+    <div class="elevation"><button id="move-up" type="button" aria-label="Move up">↑</button><button id="move-down" type="button" aria-label="Move down">↓</button></div>
+  </div>
   <details id="credits" hidden>
     <summary>Credits</summary>
     <a id="bunny-credit" class="asset-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">Stanford Bunny · Stanford University Computer Graphics Laboratory</a>
