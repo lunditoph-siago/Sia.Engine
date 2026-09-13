@@ -48,7 +48,7 @@ fn classify(@builtin(global_invocation_id) thread: vec3<u32>,
             let bit = firstTrailingBit(mask);
             let material = local * 32u + bit;
             let index = atomicAdd(&tiles[material * stride], 1u);
-            atomicStore(&tiles[material * stride + 1u + index], group.y * dimensions.x + group.x);
+            atomicStore(&tiles[material * stride + 1u + index], (group.y << 16u) | group.x);
             atomicMax(&dispatches[material * 3u], min(index + 1u, visibility_camera.raster.z));
             atomicMax(&dispatches[material * 3u + 1u], index / visibility_camera.raster.z + 1u);
             mask &= mask - 1u;

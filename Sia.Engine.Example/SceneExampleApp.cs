@@ -48,6 +48,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _patchTour = distance is null && pipeline == ScenePipeline.Bunny;
     }
 
+#if !BROWSER
     public void Run()
     {
         Initialize();
@@ -79,6 +80,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             Wgpu.ProcessEvents(_instance);
         }
     }
+
+#endif
 
     private void Initialize()
     {

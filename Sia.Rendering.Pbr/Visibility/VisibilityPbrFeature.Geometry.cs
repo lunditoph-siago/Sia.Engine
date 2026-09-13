@@ -15,34 +15,58 @@ public sealed partial class VisibilityPbrFeature
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct TriangleGpu(uint VertexOffset, uint PackedCorners);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct PackedVertexGpu(float4 PositionNormalX, float4 NormalYZUv, float4 Tangent)
+    private static Entity UploadVertices(World world, WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue,
+        ReadOnlySpan<MeshVertex> vertices, WGPULimits limits, List<Entity> acquired)
     {
-        public static PackedVertexGpu From(MeshVertex vertex) => new(
-            new(vertex.Position, vertex.Normal.x),
-            new(vertex.Normal.y, vertex.Normal.z, vertex.UV.x, vertex.UV.y), vertex.Tangent);
+        // One 48-byte-per-vertex buffer, with contiguous attribute planes so depth
+        // draws fetch only the position plane. All source float bits are preserved.
+        var length = System.Math.Max(1, vertices.Length);
+        var entity = Allocate(world, device, (ulong)length * 48,
+            WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst, limits, acquired);
+        var staging = ArrayPool<float4>.Shared.Rent(System.Math.Min(16384, length));
+        try {
+            for (var plane = 0; plane < 3; plane++) {
+                for (var offset = 0; offset < vertices.Length;) {
+                    var count = System.Math.Min(staging.Length, vertices.Length - offset);
+                    for (var i = 0; i < count; i++) {
+                        var vertex = vertices[offset + i];
+                        staging[i] = plane switch {
+                            0 => new(vertex.Position, vertex.Normal.x),
+                            1 => new(vertex.Normal.y, vertex.Normal.z, vertex.UV.x, vertex.UV.y),
+                            _ => vertex.Tangent
+                        };
+                    }
+                    Wgpu.WriteBuffer<float4>(queue, entity.GetWgpu<WGPUBuffer>(),
+                        ((ulong)plane * (ulong)length + (ulong)offset) * 16, staging.AsSpan(0, count));
+                    offset += count;
+                }
+            }
+        }
+        finally { ArrayPool<float4>.Shared.Return(staging); }
+        return entity;
     }
 
-    private static unsafe Entity UploadPacked<TSource, T>(World world,
-        WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue, ReadOnlySpan<TSource> source,
-        Func<TSource, T> pack, WGPULimits limits, List<Entity> acquired) where T : unmanaged
+    private static Entity UploadTriangles(World world, WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue,
+        MeshletRasterData geometry, WGPULimits limits, List<Entity> acquired)
     {
-        var size = checked((ulong)System.Math.Max(1, source.Length) * (ulong)sizeof(T));
-        if (size > limits.MaxBufferSize || size > limits.MaxStorageBufferBindingSize) {
-            throw new ArgumentException("The resident geometry buffer exceeds the device binding limit.");
-        }
-        var entity = Own(world, Wgpu.CreateBuffer(device,
-            new WGPUBufferDescriptor { Size = size, Usage = WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst }), acquired);
-        var staging = ArrayPool<T>.Shared.Rent(System.Math.Min(16384, System.Math.Max(1, source.Length)));
+        var triangles = geometry.Triangles.Span;
+        var length = System.Math.Max(1, triangles.Length);
+        var entity = Allocate(world, device, (ulong)length * 8,
+            WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst, limits, acquired);
+        var staging = ArrayPool<TriangleGpu>.Shared.Rent(System.Math.Min(16384, length));
         try {
-            for (var offset = 0; offset < source.Length;) {
-                var count = System.Math.Min(staging.Length, source.Length - offset);
-                for (var i = 0; i < count; i++) { staging[i] = pack(source[offset + i]); }
-                Wgpu.WriteBuffer<T>(queue, entity.GetWgpu<WGPUBuffer>(), (ulong)offset * (ulong)sizeof(T), staging.AsSpan(0, count));
+            for (var offset = 0; offset < triangles.Length;) {
+                var count = System.Math.Min(staging.Length, triangles.Length - offset);
+                for (var i = 0; i < count; i++) {
+                    var triangle = triangles[offset + i];
+                    var meshlet = geometry.Meshlets.Span[(int)triangle.x];
+                    staging[i] = new(meshlet.x, geometry.Indices.Span[checked((int)(meshlet.y + triangle.y))]);
+                }
+                Wgpu.WriteBuffer<TriangleGpu>(queue, entity.GetWgpu<WGPUBuffer>(), (ulong)offset * 8, staging.AsSpan(0, count));
                 offset += count;
             }
         }
-        finally { ArrayPool<T>.Shared.Return(staging); }
+        finally { ArrayPool<TriangleGpu>.Shared.Return(staging); }
         return entity;
     }
 }

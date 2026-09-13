@@ -47,7 +47,7 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
     let ordinal = group.x + group.y * visibility_camera.raster.z;
     if (ordinal >= material_tiles[base]) { return; }
     let tile = material_tiles[base + 1u + ordinal];
-    let thread = vec3<u32>(vec2<u32>(tile % dimensions.x, tile / dimensions.x) * 8u + local.xy, 0u);
+    let thread = vec3<u32>(vec2<u32>(tile & 65535u, tile >> 16u) * 8u + local.xy, 0u);
     if (any(thread.xy >= size)) { return; }
     let pixel = vec2<i32>(thread.xy);
     let id = textureLoad(visibility, pixel, 0).x;
@@ -146,13 +146,16 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
     }
     if (instance.material.w != 0.0 && dot(cross(world_b.xyz - world_a.xyz, world_c.xyz - world_a.xyz),
         visibility_camera.eye.xyz - world_a.xyz) < 0.0) { normal = -normal; }
-    let mr = textureSampleGrad(metallic_roughness_map, metallic_roughness_sampler, uv, i32(material_parameters.layers.z), uv_dx, uv_dy).gb;
-    let metallic = clamp(instance.material.x * material_parameters.color_metallic.w * mr.y, 0.0, 1.0);
-    let roughness = clamp(instance.material.y * material_parameters.emissive_roughness.w * mr.x, 0.045, 1.0);
+    let orm = textureSampleGrad(metallic_roughness_map, metallic_roughness_sampler, uv, i32(material_parameters.layers.z), uv_dx, uv_dy).rgb;
+    let metallic = clamp(instance.material.x * material_parameters.color_metallic.w * orm.b, 0.0, 1.0);
+    let roughness = clamp(instance.material.y * material_parameters.emissive_roughness.w * orm.g, 0.045, 1.0);
     var occlusion = 1.0;
     if (material_parameters.texture_factors.y != 0.0) {
-        occlusion = mix(1.0, textureSampleGrad(occlusion_map, occlusion_sampler, uv, i32(material_parameters.layers.w), uv_dx, uv_dy).r,
-            material_parameters.texture_factors.y);
+        var sampled = orm.r;
+        if (material_parameters.texture_factors.w == 0.0) {
+            sampled = textureSampleGrad(occlusion_map, occlusion_sampler, uv, i32(material_parameters.layers.w), uv_dx, uv_dy).r;
+        }
+        occlusion = mix(1.0, sampled, material_parameters.texture_factors.y);
     }
     var emissive = vec3<f32>(0.0);
     if (any(material_parameters.emissive_roughness.rgb != vec3<f32>(0.0)) && any(instance.emissive.rgb != vec3<f32>(0.0))) {

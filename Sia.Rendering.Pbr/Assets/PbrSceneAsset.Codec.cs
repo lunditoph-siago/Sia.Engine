@@ -94,6 +94,7 @@ public sealed partial class PbrSceneAsset
             var attribution = reader.ReadString();
             Require(attribution.Length <= 16384, "PBR scene attribution is too long.");
             var geometry = new MeshPatchAsset[Count(reader, 4, 4096)];
+            var blobs = new (int Offset, int Length, int Budget)[geometry.Length];
             var remaining = maximumDecodedBytes - raw.Length;
             for (var i = 0; i < geometry.Length; i++) {
                 var blobLength = Count(reader, 1, int.MaxValue);
@@ -102,8 +103,20 @@ public sealed partial class PbrSceneAsset
                 var decoded = blob.StartsWith("SIAGZIP\0"u8) && blob.Length >= 24
                     ? BinaryPrimitives.ReadInt64LittleEndian(blob[8..]) : blob.Length;
                 Require(decoded >= 0 && decoded <= remaining, "PBR geometry exceeds the aggregate decoded byte budget.");
-                geometry[i] = MeshPatchAsset.Decode(blob, cancellationToken, remaining);
+                blobs[i] = ((int)stream.Position - blobLength, blobLength, remaining);
                 remaining -= (int)decoded;
+            }
+            try {
+                Parallel.For(0, geometry.Length, new ParallelOptions {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = System.Math.Min(4, Environment.ProcessorCount)
+                }, i => {
+                    var blob = blobs[i];
+                    geometry[i] = MeshPatchAsset.Decode(raw.AsSpan(blob.Offset, blob.Length), cancellationToken, blob.Budget);
+                });
+            }
+            catch (AggregateException error) when (error.InnerExceptions.All(exception => exception is InvalidDataException or ArgumentException)) {
+                throw new InvalidDataException("Invalid PBR geometry records.", error);
             }
             var textures = new PbrTextureData[Count(reader, 34, 4096)];
             for (var i = 0; i < textures.Length; i++) {

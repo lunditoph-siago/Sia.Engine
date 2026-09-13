@@ -18,8 +18,10 @@ internal sealed partial class SceneExampleApp
     private float _patchDistance;
     private float _patchTourPhase;
     private bool _patchTour;
+#if !BROWSER
     private uint _patchKeys;
-    private string? _patchStatus;
+#endif
+    private (int Distance, bool Touring, VisibilityDebugMode Mode, bool Atmosphere)? _patchStatus;
 
     private unsafe void InitializePatchLod()
     {
@@ -63,6 +65,7 @@ internal sealed partial class SceneExampleApp
 
     private unsafe void InitializeInspectionControls()
     {
+#if !BROWSER
         GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
             if (action == InputAction.Press) {
                 if (_pipeline == ScenePipeline.Pbr) { _cameraPressed.Add(key); }
@@ -77,24 +80,26 @@ internal sealed partial class SceneExampleApp
         Console.WriteLine(_pipeline == ScenePipeline.Pbr
             ? "WASD: move. Q/E: down/up. Right drag or arrows: look. Shift: fast. C: slow. R: reset. M: material. B: atmosphere."
             : "W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
+#endif
     }
 
     private void UpdatePatchInspection(float deltaTime)
     {
-        bool Down(Key key) => Glfw.GetKey(_window, key) != InputAction.Release;
-        var pressed = _patchKeys;
-        _patchKeys = 0;
 #if BROWSER
-        pressed |= (uint)TakeInspectionCommands();
+        var pressed = (uint)_browserCommands;
         _cameraFocused = (pressed & 128) != 0;
         _compareLodRequested = (pressed & 64) != 0;
         if ((pressed & 256) != 0) {
-            var distance = TakeInspectionDistance();
+            var distance = _browserDistance;
             if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
                 _patchDistance = (float)System.Math.Clamp(distance, 0, 1);
                 _patchTour = false;
             }
         }
+#else
+        bool Down(Key key) => Glfw.GetKey(_window, key) != InputAction.Release;
+        var pressed = _patchKeys;
+        _patchKeys = 0;
 #endif
         if (_pipeline == ScenePipeline.Bunny && (pressed & 1) != 0) {
             _patchTour = !_patchTour;
@@ -113,6 +118,7 @@ internal sealed partial class SceneExampleApp
             var environment = _sceneWorld!.AcquireAddon<EnvironmentLighting>();
             environment.Atmosphere = environment.Atmosphere is null ? new SkyAtmosphere() : null;
         }
+#if !BROWSER
         if (_pipeline == ScenePipeline.Bunny) {
             var direction = (Down(Key.S) || Down(Key.Down) ? 1 : 0) - (Down(Key.W) || Down(Key.Up) ? 1 : 0);
             var step = ((pressed & 8) != 0 ? 1 : 0) - ((pressed & 16) != 0 ? 1 : 0);
@@ -121,22 +127,23 @@ internal sealed partial class SceneExampleApp
                 _patchDistance = System.Math.Clamp(_patchDistance + direction * deltaTime * 0.25f + step * 0.01f, 0, 1);
             }
         }
+#endif
         if (_patchTour) {
             _patchTourPhase = (_patchTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;
             _patchDistance = (1 - MathF.Cos(_patchTourPhase)) * 0.5f;
         }
-        var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
-            : $"{_materialInstanceCount} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
         var atmosphere = _pipeline == ScenePipeline.Pbr && _sceneWorld!.AcquireAddon<EnvironmentLighting>().Atmosphere is not null;
-        var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
-        var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
-            : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
-        var status = $"{scene} | {_visibilityLod!.DebugMode} | {camera}{lighting}";
+        var status = ((int)(_patchDistance * 100), _patchTour, _visibilityLod!.DebugMode, atmosphere);
         if (_patchStatus != status) {
             _patchStatus = status;
-            Glfw.SetTitle(_window, "Sia.Engine - " + status);
+            var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
+                : $"{_materialInstanceCount} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
+            var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
+            var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
+                : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
+            Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_visibilityLod.DebugMode} | {camera}{lighting}");
 #if BROWSER
-            SetInspectionStatus(status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
+            _browserInspection = (_patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
 #endif
         }
     }

@@ -87,7 +87,8 @@ public sealed partial class VisibilityPbrFeature
             }
             var p = source.Parameters;
             parameters[i] = new(new(p.BaseColor, p.Metallic), new(p.EmissiveColor * p.EmissiveStrength, p.Roughness),
-                new(source.NormalScale, source.OcclusionStrength, source.Normal is null ? 0 : 1, 0),
+                new(source.NormalScale, source.OcclusionStrength, source.Normal is null ? 0 : 1,
+                    source.MetallicRoughness is not null && ReferenceEquals(source.MetallicRoughness, source.Occlusion) ? 1 : 0),
                 new(maps[0].Layer, maps[1].Layer, maps[2].Layer, maps[3].Layer), new(maps[4].Layer, (uint)batch, 0, 0));
         }
         return (result.ToArray(), textures.ToArray(), Upload<MaterialParametersGpu>(world, device, queue, parameters,
