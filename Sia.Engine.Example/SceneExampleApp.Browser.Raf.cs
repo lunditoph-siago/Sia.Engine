@@ -1,44 +1,23 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.JavaScript;
 
 namespace Sia.Engine.Example;
 
 #if BROWSER
-internal sealed unsafe partial class SceneExampleApp
+internal sealed partial class SceneExampleApp
 {
-    [DllImport("__Internal_emscripten", EntryPoint = "emscripten_request_animation_frame_loop", ExactSpelling = true, CallingConvention = CallingConvention.Cdecl)]
-    private static extern void EmscriptenRequestAnimationFrameLoop(delegate* unmanaged[Cdecl]<double, void*, int> callback, void* userData);
+    [JSImport("nextAnimationFrame", "main.js")]
+    private static partial Task<double> NextAnimationFrame();
 
-    private Task RunAnimationFrameLoopAsync()
+    private async Task RunAnimationFrameLoopAsync()
     {
-        var state = new AnimationFrameLoopState(this);
-        var handle = GCHandle.Alloc(state);
-        try { EmscriptenRequestAnimationFrameLoop(&OnAnimationFrame, (void*)GCHandle.ToIntPtr(handle)); }
-        catch { handle.Free(); throw; }
-        return state.Completion.Task;
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static int OnAnimationFrame(double timestamp, void* userData)
-    {
-        var handle = GCHandle.FromIntPtr((nint)userData);
-        var state = (AnimationFrameLoopState)handle.Target!;
-        try {
-            if (state.App.RenderAnimationFrame(timestamp)) return 1;
-            handle.Free();
-            state.Completion.TrySetResult();
+        while (true) {
+            var timestamp = await NextAnimationFrame();
+            CaptureBrowserState();
+            var running = await Program.BrowserOwner.RunGraphicsAsync(() =>
+                Task.FromResult(RenderAnimationFrame(timestamp)));
+            PublishBrowserState();
+            if (!running) return;
         }
-        catch (Exception exception) {
-            handle.Free();
-            state.Completion.TrySetException(exception);
-        }
-        return 0;
-    }
-
-    private sealed class AnimationFrameLoopState(SceneExampleApp app)
-    {
-        public SceneExampleApp App { get; } = app;
-        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 }
 #endif

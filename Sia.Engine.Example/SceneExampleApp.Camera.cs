@@ -57,8 +57,8 @@ internal sealed partial class SceneExampleApp
 #if BROWSER
         if (_compareLodRequested) {
             _compareLodRequested = false;
-            CompareLodAtCamera(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                $"{eye.x:F6},{eye.y:F6},{eye.z:F6},{target.x:F6},{target.y:F6},{target.z:F6}"));
+            _browserComparePose = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"{eye.x:F6},{eye.y:F6},{eye.z:F6},{target.x:F6},{target.y:F6},{target.z:F6}");
         }
 #endif
     }

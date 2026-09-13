@@ -19,9 +19,6 @@ internal sealed partial class SceneExampleApp
     private void BuildMaterialScene()
     {
         var scene = _materialScene ?? throw new InvalidOperationException("A cooked PBR scene is required.");
-#if BROWSER
-        SetSceneAttribution(scene.Attribution);
-#endif
         _opaqueScene = OpaqueScene(scene);
         var world = _sceneWorld!;
         _materialBounds = new(new float3(float.PositiveInfinity), new float3(float.NegativeInfinity));

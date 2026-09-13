@@ -85,11 +85,11 @@ internal sealed partial class SceneExampleApp
         var pressed = _patchKeys;
         _patchKeys = 0;
 #if BROWSER
-        pressed |= (uint)TakeInspectionCommands();
+        pressed |= (uint)_browserCommands;
         _cameraFocused = (pressed & 128) != 0;
         _compareLodRequested = (pressed & 64) != 0;
         if ((pressed & 256) != 0) {
-            var distance = TakeInspectionDistance();
+            var distance = _browserDistance;
             if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
                 _patchDistance = (float)System.Math.Clamp(distance, 0, 1);
                 _patchTour = false;
@@ -136,7 +136,7 @@ internal sealed partial class SceneExampleApp
             _patchStatus = status;
             Glfw.SetTitle(_window, "Sia.Engine - " + status);
 #if BROWSER
-            SetInspectionStatus(status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
+            _browserInspection = (status, _patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
 #endif
         }
     }

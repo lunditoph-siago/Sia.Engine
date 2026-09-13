@@ -92,7 +92,7 @@ public sealed partial class VisibilityPbrFeature
             var workBuffer = Allocate(_world, device, System.Math.Max(1u, _fixedGeometry?.Count ?? triangleCapacity ?? TriangleCapacity) * 8ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc, limits, acquired);
             var indirect = Upload<uint>(_world, device, queue, _gpuLod is not null ? new uint[20] :
-                _fixedGeometry is not null ? [0, 1, 0, 0, 0, 0, 0, 0] : [0, 1, 0, 0],
+                _fixedGeometry is not null ? [0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1] : [0, 1, 0, 0],
                 WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc | (_gpuLod is null && _fixedGeometry is null ? 0 : WGPUBufferUsage.Storage), limits, acquired);
             WGPUBindGroupEntry[] entries = [BufferEntry(0, uniform), BufferEntry(1, _geometry[0]),
                 BufferEntry(3, _geometry[1]), BufferEntry(4, _geometry[2]), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)];

@@ -111,6 +111,8 @@ function setInspectionStatus(status, distance, touring, triangles, atmosphere) {
 function getCanvasWidth() { return Math.max(1, Math.round(window.innerWidth)); }
 function getCanvasHeight() { return Math.max(1, Math.round(window.innerHeight)); }
 function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
+function takeFrameState() { return [getCanvasWidth(), getCanvasHeight(), takeInspectionCommands(), takeInspectionDistance()]; }
+function nextAnimationFrame() { return new Promise(requestAnimationFrame); }
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
   credit.textContent = attribution;
@@ -160,6 +162,42 @@ for (const link of document.querySelectorAll('nav a')) {
 }
 
 try {
+  const isolationKey = 'sia.engine.isolation-reload';
+  if ('serviceWorker' in navigator) {
+    try {
+      const workerUrl = import.meta.resolve('./asset-cache.js');
+      await navigator.serviceWorker.register(workerUrl, { updateViaCache: 'none' });
+      if (navigator.serviceWorker.controller?.scriptURL !== workerUrl) {
+        await new Promise((resolve, reject) => {
+          const changed = () => {
+            if (navigator.serviceWorker.controller?.scriptURL !== workerUrl) return;
+            clearTimeout(timeout);
+            navigator.serviceWorker.removeEventListener('controllerchange', changed);
+            resolve();
+          };
+          const timeout = setTimeout(() => {
+            navigator.serviceWorker.removeEventListener('controllerchange', changed);
+            reject(new Error('The scene service worker did not take control.'));
+          }, 10000);
+          navigator.serviceWorker.addEventListener('controllerchange', changed);
+          changed();
+        });
+      }
+    } catch (error) {
+      if (!crossOriginIsolated) throw error;
+      console.warn('Scene cache unavailable:', error);
+    }
+  }
+  if (!crossOriginIsolated) {
+    if (!navigator.serviceWorker?.controller || sessionStorage.getItem(isolationKey) === '1') {
+      sessionStorage.removeItem(isolationKey);
+      throw new Error('The browser could not enable scene processing. Try reloading this page.');
+    }
+    sessionStorage.setItem(isolationKey, '1');
+    location.reload();
+    await new Promise(() => {});
+  }
+  sessionStorage.removeItem(isolationKey);
   setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
@@ -172,25 +210,20 @@ try {
     if (!parameters.has('scene')) {
       const hash = finest ? canvas.dataset.bistroFinestSha256 : canvas.dataset.bistroSha256;
       scene.searchParams.set('sha256', hash);
-      if ('serviceWorker' in navigator) {
-        try {
-          setLoadingState('Opening scene cache', NaN);
-          await navigator.serviceWorker.register(import.meta.resolve('./asset-cache.js'), { updateViaCache: 'none' });
-          await navigator.serviceWorker.ready;
-          if (!navigator.serviceWorker.controller) {
-            await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
-          }
-        } catch (error) { console.warn('Scene cache unavailable:', error); }
-      }
     }
     args.push('--scene', scene.href);
   }
   setLoadingState('Starting engine runtime', NaN);
-  const { runMain, Module, setModuleImports } = await dotnet.withApplicationArguments(...args).create();
+  // Preload runtime/timer/HTTP workers plus the four bounded CPU decoder workers.
+  // Synchronous thread startup cannot wait for a new browser worker to load.
+  // Worker-generated traces in this runtime cannot be reused by native UI calls.
+  const { runMain, Module, setModuleImports } = await dotnet
+    .withRuntimeOptions(['--no-jiterpreter-traces-enabled'])
+    .withConfig({ pthreadPoolInitialSize: 16 }).withApplicationArguments(...args).create();
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getCanvasWidth, getCanvasHeight, getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, compareLodAtCamera, setLoadingState, setSceneReady, showError, takeInspectionCommands, takeInspectionDistance });
+  setModuleImports('main.js', { getBrowserFeatureLevel, setInspectionStatus, setSceneAttribution, compareLodAtCamera, setLoadingState, setSceneReady, showError, takeFrameState, nextAnimationFrame });
   const exitCode = await runMain();
   if (exitCode !== 0) showError(`The engine stopped with exit code ${exitCode}.`);
 } catch (error) {

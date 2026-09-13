@@ -19,9 +19,9 @@ public sealed partial class VisibilityPbrFeature
 
     private readonly record struct FixedGeometryGpu(Entity Source, Entity Indices, Entity Layout, Entity Cull, Entity Scan, Entity Emit,
         uint Count, uint Stride, uint DispatchDimension, HzbGpu Hzb,
-        Entity CullLayout, Entity CullMain, Entity CullPost, Entity ScanPost, Entity EmitPost, bool SharedVertices);
+        Entity CullLayout, Entity CullMain, Entity CullPost, Entity ScanPost, Entity EmitLayout, Entity Compact, bool SharedVertices);
 
-    private readonly record struct ClusterViewGpu(Entity Prefix, Entity Blocks, Entity Group, Entity CullGroup);
+    private readonly record struct ClusterViewGpu(Entity Prefix, Entity Blocks, Entity Group, Entity CullGroup, Entity EmitGroup);
 
     private float4 RasterOrigin(float4x4 projection)
     {
@@ -40,6 +40,7 @@ public sealed partial class VisibilityPbrFeature
         var stride = 1u;
         uint triangles = 0;
         foreach (var cluster in clusters) { stride = System.Math.Max(stride, cluster.Work.z); triangles = checked(triangles + cluster.Work.z); }
+        stride = System.Numerics.BitOperations.RoundUpToPowerOf2(stride);
         _ = checked((uint)clusters.Length * System.Math.Max(stride * 3u, 256u) * 2u);
         _ = checked(triangles * 3u);
         if (CompactionGroups((uint)clusters.Length) > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
@@ -61,18 +62,21 @@ public sealed partial class VisibilityPbrFeature
         ];
         var layout = Layout(world, device, entries, acquired);
         var cullLayout = Layout(world, device, entries.AsSpan(0, 7), acquired);
+        var emitLayout = Layout(world, device, entries.Where(entry => entry.Binding != 6).ToArray(), acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityClusters(worldSpace), "visibility-clusters"), acquired);
         var pipeline = PipelineLayout(world, device, [layout], acquired);
+        var emitPipeline = PipelineLayout(world, device, [emitLayout], acquired);
         var hzb = CreateHzbGpu(world, device, acquired);
         var cullPipeline = PipelineLayout(world, device, [cullLayout, hzb.Layout], acquired);
         return new(source, indices, layout, ComputePipeline(world, device, shader, pipeline, "cull", acquired),
             ComputePipeline(world, device, shader, pipeline, "scan", acquired),
-            ComputePipeline(world, device, shader, pipeline, "emit", acquired),
+            ComputePipeline(world, device, shader, emitPipeline, "emit", acquired),
             (uint)clusters.Length, stride, limits.MaxComputeWorkgroupsPerDimension, hzb, cullLayout,
             ComputePipeline(world, device, shader, cullPipeline, "cull_main", acquired),
             ComputePipeline(world, device, shader, cullPipeline, "cull_post", acquired),
             ComputePipeline(world, device, shader, pipeline, "scan_post", acquired),
-            ComputePipeline(world, device, shader, pipeline, "emit_post", acquired),
+            emitLayout,
+            ComputePipeline(world, device, shader, pipeline, "compact", acquired),
             WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0);
     }
 
@@ -80,14 +84,15 @@ public sealed partial class VisibilityPbrFeature
         WGPULimits limits, List<Entity> acquired)
     {
         var device = _device.GetWgpu<WGPUDevice>();
-        var prefix = Allocate(_world, device, System.Math.Max(1u, geometry.Count) * 8ul, WGPUBufferUsage.Storage, limits, acquired);
+        var prefix = Allocate(_world, device, geometry.Count * 16ul + 8, WGPUBufferUsage.Storage, limits, acquired);
         var blocks = Allocate(_world, device, CompactionGroups(geometry.Count) * 8ul, WGPUBufferUsage.Storage, limits, acquired);
         WGPUBindGroupEntry[] entries = [BufferEntry(0, uniform), BufferEntry(1, geometry.Source),
             BufferEntry(2, _geometry[3]), BufferEntry(3, prefix), BufferEntry(4, blocks),
             BufferEntry(5, work), BufferEntry(6, indirect), BufferEntry(7, _geometry[1]), BufferEntry(8, geometry.Indices)];
         var group = Own(_world, BindGroup(geometry.Layout, entries), acquired);
         var cullGroup = Own(_world, BindGroup(geometry.CullLayout, entries.AsSpan(0, 7)), acquired);
-        return new(prefix, blocks, group, cullGroup);
+        var emitGroup = Own(_world, BindGroup(geometry.EmitLayout, entries.Where(entry => entry.Binding != 6).ToArray()), acquired);
+        return new(prefix, blocks, group, cullGroup, emitGroup);
     }
 
     private sealed partial class ViewState
@@ -115,7 +120,8 @@ public sealed partial class VisibilityPbrFeature
                 .Read(s_HzbKey, RenderGraphBufferUsage.Storage).Read(s_HzbParamsKey, RenderGraphBufferUsage.Uniform)
                 .Read(s_GeometryKeys[1], RenderGraphBufferUsage.Storage).Write(s_ClusterIndicesKey, RenderGraphBufferUsage.Storage)
                 .ReadWrite(s_ClusterPrefixKey, RenderGraphBufferUsage.Storage).Write(s_ClusterBlocksKey, RenderGraphBufferUsage.Storage)
-                .ReadWrite(s_WorkKey, RenderGraphBufferUsage.Storage).ReadWrite(s_IndirectKey, RenderGraphBufferUsage.Storage);
+                .ReadWrite(s_WorkKey, RenderGraphBufferUsage.Storage)
+                .ReadWrite(s_IndirectKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect);
 
         public void BuildClusterPostGraph(ref RenderGraphBuildContext graph)
         {
@@ -147,10 +153,11 @@ public sealed partial class VisibilityPbrFeature
                 Wgpu.SetBindGroup(pass, 0, view.Group.GetWgpu<WGPUBindGroup>());
                 Wgpu.SetComputePipeline(pass, (post ? geometry.ScanPost : geometry.Scan).GetWgpu<WGPUComputePipeline>());
                 Wgpu.DispatchWorkgroups(pass, 1);
-                Wgpu.SetComputePipeline(pass, (post ? geometry.EmitPost : geometry.Emit).GetWgpu<WGPUComputePipeline>());
-                var clusters = System.Math.Max(1u, geometry.Count);
-                Wgpu.DispatchWorkgroups(pass, System.Math.Min(clusters, geometry.DispatchDimension),
-                    System.Math.Min((clusters + geometry.DispatchDimension - 1) / geometry.DispatchDimension, geometry.DispatchDimension));
+                Wgpu.SetComputePipeline(pass, geometry.Compact.GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroups(pass, width, height);
+                Wgpu.SetBindGroup(pass, 0, view.EmitGroup.GetWgpu<WGPUBindGroup>());
+                Wgpu.SetComputePipeline(pass, geometry.Emit.GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroupsIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), 32);
             }
             finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
         }

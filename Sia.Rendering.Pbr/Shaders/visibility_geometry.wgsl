@@ -35,9 +35,9 @@ fn visibility_clip(position: vec3<f32>, instance: u32) -> vec4<f32> {
 }
 
 fn visibility_triangle_work(index: u32) -> vec2<u32> {
-    let stride = visibility_camera.raster.x;
-    let work = visibility_work[index / stride];
-    return vec2<u32>(work.x + index % stride, work.y);
+    let shift = visibility_camera.raster.x;
+    let work = visibility_work[index >> shift];
+    return vec2<u32>(work.x + (index & ((1u << shift) - 1u)), work.y);
 }
 
 fn visibility_vertex(triangle: u32, corner: u32) -> VisibilityVertex {

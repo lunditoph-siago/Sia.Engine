@@ -5,6 +5,8 @@ namespace Sia.Engine.Example;
 #if BROWSER
 public static partial class Program
 {
+    internal static BrowserThread BrowserOwner { get; private set; } = null!;
+
     [JSImport("setLoadingState", "main.js")]
     internal static partial void SetLoadingState(string stage, double progress);
 
@@ -16,6 +18,7 @@ public static partial class Program
 
     private static async Task<ReadOnlyMemory<byte>> DownloadSceneAsync(string path)
     {
+        BrowserOwner.VerifyAccess();
         using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         return await SceneDownload.DownloadAsync(client, path, SetLoadingState);
     }

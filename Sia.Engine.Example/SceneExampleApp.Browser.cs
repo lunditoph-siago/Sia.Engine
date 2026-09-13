@@ -12,16 +12,28 @@ internal sealed partial class SceneExampleApp
     private double? _previousAnimationFrameTime;
     private bool _cameraFocused;
     private bool _compareLodRequested;
+    private WindowSize _browserSize;
+    private int _browserCommands;
+    private double _browserDistance;
+    private string _browserFeatureLevel = "core";
+    private string? _browserComparePose;
+    private (string Status, double Distance, bool Touring, bool Triangles, bool Atmosphere)? _browserInspection;
 
     public async Task RunAsync()
     {
-        await InitializeAsync();
+        CaptureBrowserState();
+        _browserFeatureLevel = GetBrowserFeatureLevel();
+        if (_materialScene is { } scene) SetSceneAttribution(scene.Attribution);
+        await Program.BrowserOwner.RunGraphicsAsync(async () => { await InitializeAsync(); return 0; });
+        PublishBrowserState();
+        Program.SetSceneReady();
         Console.WriteLine($"Sia.Engine browser {_pipeline} example - Esc to close.");
         await RunAnimationFrameLoopAsync();
     }
 
     private bool RenderAnimationFrame(double timestampMilliseconds)
     {
+        Program.BrowserOwner.VerifyGraphicsAccess();
         ThrowGpuError();
         if (Glfw.ShouldClose(_window)) return false;
         ResizeWindowToCanvas();
@@ -42,6 +54,7 @@ internal sealed partial class SceneExampleApp
 
     private async Task InitializeAsync()
     {
+        Program.BrowserOwner.VerifyGraphicsAccess();
         Glfw.Initialize();
         _glfwInitialized = true;
         var initialSize = GetCanvasSize();
@@ -66,7 +79,6 @@ internal sealed partial class SceneExampleApp
         ResizeIfNeeded(force: true);
         UpdateScene(0f);
         RenderFrame();
-        Program.SetSceneReady();
     }
 
     private void ResizeWindowToCanvas()
@@ -78,14 +90,29 @@ internal sealed partial class SceneExampleApp
         }
     }
 
-    private static WindowSize GetCanvasSize() =>
-        new(GetCanvasWidth(), GetCanvasHeight());
+    private WindowSize GetCanvasSize() => _browserSize;
 
-    [JSImport("getCanvasWidth", "main.js")]
-    private static partial int GetCanvasWidth();
+    private void CaptureBrowserState()
+    {
+        Program.BrowserOwner.VerifyAccess();
+        var state = TakeFrameState();
+        _browserSize = new((int)state[0], (int)state[1]);
+        _browserCommands = (int)state[2];
+        _browserDistance = state[3];
+    }
 
-    [JSImport("getCanvasHeight", "main.js")]
-    private static partial int GetCanvasHeight();
+    private void PublishBrowserState()
+    {
+        Program.BrowserOwner.VerifyAccess();
+        if (_browserInspection is { } state) {
+            SetInspectionStatus(state.Status, state.Distance, state.Touring, state.Triangles, state.Atmosphere);
+            _browserInspection = null;
+        }
+        if (_browserComparePose is { } pose) { _browserComparePose = null; CompareLodAtCamera(pose); }
+    }
+
+    [JSImport("takeFrameState", "main.js")]
+    private static partial double[] TakeFrameState();
 
     [JSImport("setInspectionStatus", "main.js")]
     private static partial void SetInspectionStatus(string status, double distance, bool touring, bool triangles, bool atmosphere);
@@ -93,18 +120,12 @@ internal sealed partial class SceneExampleApp
     [JSImport("setSceneAttribution", "main.js")]
     private static partial void SetSceneAttribution(string attribution);
 
-    [JSImport("takeInspectionCommands", "main.js")]
-    private static partial int TakeInspectionCommands();
-
-    [JSImport("takeInspectionDistance", "main.js")]
-    private static partial double TakeInspectionDistance();
-
     [JSImport("compareLodAtCamera", "main.js")]
     private static partial void CompareLodAtCamera(string pose);
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
-        if (GetBrowserFeatureLevel() == "compatibility") {
+        if (_browserFeatureLevel == "compatibility") {
             return await Wgpu.RequestAdapterAsync(_instance,
                 BuildAdapterOptions(WGPUFeatureLevel.Compatibility, WGPUPowerPreference.Undefined));
         }

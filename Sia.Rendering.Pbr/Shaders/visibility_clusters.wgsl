@@ -142,6 +142,10 @@ fn scan_blocks(lane: u32, post: bool) {
         draw[6] = select(0u, draw[5], post);
         draw[5] = draw[6] + carry.x;
         draw[7] = select(0u, draw[7], post) + carry.y;
+        draw[8] = min(carry.x, camera.raster.z);
+        draw[9] = min((carry.x + camera.raster.z - 1u) / camera.raster.z, camera.raster.z);
+        draw[10] = 1u;
+        prefix[camera.raster.y * 2u] = vec2<u32>(carry.x, draw[6]);
     }
 }
 
@@ -151,36 +155,43 @@ fn scan(@builtin(local_invocation_index) lane: u32) { scan_blocks(lane, false); 
 @compute @workgroup_size(256)
 fn scan_post(@builtin(local_invocation_index) lane: u32) { scan_blocks(lane, true); }
 
-fn emit_cluster(index: u32, lane: u32, post: bool) {
+// Preserve source order while dispatching index generation only for survivors.
+@compute @workgroup_size(256)
+fn compact(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let index = (group.x + group.y * camera.raster.z) * 256u + lane;
     if (index >= camera.raster.y) { return; }
     let entry = prefix[index];
     if ((entry.x >> 31u) == 0u) { return; }
-    var offset = blocks[index / 256u] + (entry & vec2<u32>(0x3fffffffu, 0xffffffffu));
-    if (post) { offset.x += draw[6]; }
+    let offset = blocks[index / 256u] + (entry & vec2<u32>(0x3fffffffu, 0xffffffffu));
+    prefix[camera.raster.y + offset.x] = vec2<u32>(index, offset.y);
+}
+
+fn emit_cluster(ordinal: u32, lane: u32) {
+    let range = prefix[camera.raster.y * 2u];
+    if (ordinal >= range.x) { return; }
+    let entry = prefix[camera.raster.y + ordinal];
+    let index = entry.x;
+    let offset = vec2<u32>(ordinal + range.y, entry.y);
     let cluster = clusters[index].work;
     if (lane == 0u) { work[offset.x] = cluster.xy; }
     for (var triangle = lane; triangle < cluster.z; triangle += 64u) {
         let packed = topology[cluster.w + triangle];
         let base = (offset.y + triangle) * 3u;
         indices[base] = select(((offset.x * 256u + (packed & 255u)) << 1u),
-            (((offset.x * camera.raster.x + triangle) * 3u) << 1u) | 1u, camera.raster.w != 2u);
-        if (camera.raster.w == 1u) { indices[base] = ((offset.x * camera.raster.x + triangle) << 1u) | 1u; }
+            ((((offset.x << camera.raster.x) + triangle) * 3u) << 1u) | 1u, camera.raster.w != 2u);
+        if (camera.raster.w == 1u) { indices[base] = (((offset.x << camera.raster.x) + triangle) << 1u) | 1u; }
         indices[base + 1u] = select((offset.x * 256u + ((packed >> 8u) & 255u)) << 1u,
-            (((offset.x * camera.raster.x + triangle) * 3u + 1u) << 1u) | 1u, camera.raster.w == 3u);
+            ((((offset.x << camera.raster.x) + triangle) * 3u + 1u) << 1u) | 1u, camera.raster.w == 3u);
         indices[base + 2u] = select((offset.x * 256u + ((packed >> 16u) & 255u)) << 1u,
-            (((offset.x * camera.raster.x + triangle) * 3u + 2u) << 1u) | 1u, camera.raster.w == 3u);
-    }
-}
-
-fn emit_indices(group: vec3<u32>, lane: u32, post: bool) {
-    let step = min(max(1u, camera.raster.y), camera.raster.z * camera.raster.z);
-    for (var index = group.x + group.y * camera.raster.z; index < camera.raster.y; index += step) {
-        emit_cluster(index, lane, post);
+            ((((offset.x << camera.raster.x) + triangle) * 3u + 2u) << 1u) | 1u, camera.raster.w == 3u);
     }
 }
 
 @compute @workgroup_size(64)
-fn emit(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) { emit_indices(group, lane, false); }
-
-@compute @workgroup_size(64)
-fn emit_post(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) { emit_indices(group, lane, true); }
+fn emit(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let count = prefix[camera.raster.y * 2u].x;
+    let step = min(count, camera.raster.z * camera.raster.z);
+    for (var ordinal = group.x + group.y * camera.raster.z; ordinal < count; ordinal += step) {
+        emit_cluster(ordinal, lane);
+    }
+}
