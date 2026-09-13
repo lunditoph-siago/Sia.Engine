@@ -43,6 +43,7 @@ public sealed class PbrViewState
     internal ProceduralSky? PreparedSky { get; set; }
 
     internal AtmosphereGpuState? Atmosphere { get; set; }
+    internal PbrScreenReflections? ScreenReflections { get; set; }
     internal SkyAtmosphere? ActiveAtmosphere { get; set; }
 
     internal ulong EnvironmentRevision { get; set; }

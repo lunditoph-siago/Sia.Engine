@@ -16,6 +16,7 @@ public sealed unsafe class PbrTransparentScene
     private readonly Entity _cameraLayout;
     private readonly Entity _pipeline;
     private readonly Draw[] _draws;
+    internal bool HasTransmission { get; }
     private readonly List<(RenderGraphBufferKey Key, Entity Buffer, RenderGraphBufferUsage Usage)> _buffers = [];
     private readonly List<VisibilityPbrFeature.MaterialTextureGpu> _textures = [];
 
@@ -23,12 +24,13 @@ public sealed unsafe class PbrTransparentScene
     {
         ArgumentNullException.ThrowIfNull(scene);
         _world = frame.ResourceWorld; _device = frame.Device; _queue = frame.Queue;
+        HasTransmission = scene.Materials.ToArray().Any(material => material.Transmission > 0);
         var acquired = new List<Entity>();
         var device = _device.GetWgpu<WGPUDevice>();
         VisibilityPbrFeature.ValidateTextureCapacity(scene.Materials.ToArray().Where(material => material.AlphaBlend).ToArray(), Wgpu.GetLimits(device));
         try {
-            var cameraEntry = UniformLayout(0, 80);
-            _cameraLayout = Layout([cameraEntry]);
+            var cameraEntry = UniformLayout(0, 144);
+            _cameraLayout = Layout(HasTransmission ? [cameraEntry, SceneTextureLayout(1, false), SceneTextureLayout(2, true)] : [cameraEntry]);
             var entries = new WGPUBindGroupLayoutEntry[11];
             entries[0] = UniformLayout(0, 192);
             for (uint i = 0; i < 5; i++) {
@@ -53,7 +55,7 @@ public sealed unsafe class PbrTransparentScene
             var pipelineLayout = Own(Wgpu.CreatePipelineLayout(device, new WGPUPipelineLayoutDescriptor {
                 BindGroupLayoutCount = 4, BindGroupLayouts = layouts
             }));
-            var shader = Own(Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadTransparentPbr(), "pbr-transparent"));
+            var shader = Own(Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadTransparentPbr(HasTransmission), "pbr-transparent"));
             _pipeline = Own(CreatePipeline(device, shader.GetWgpu<WGPUShaderModule>(), pipelineLayout.GetWgpu<WGPUPipelineLayout>()));
             var meshes = new Dictionary<int, (Entity Vertices, Entity Indices, uint Count, float3 Center)>();
             var maps = new Dictionary<PbrTextureData, VisibilityPbrFeature.MaterialTextureGpu>(ReferenceEqualityComparer.Instance);
@@ -72,7 +74,7 @@ public sealed unsafe class PbrTransparentScene
                 var uniform = Upload<MaterialGpu>([new(instance.Transform, math.transpose(math.inverse(instance.Transform)),
                     new(p.BaseColor, material.Opacity), new(p.EmissiveColor * p.EmissiveStrength, 0),
                     new(p.Metallic, p.Roughness, material.NormalScale, material.OcclusionStrength),
-                    new(material.DoubleSided ? 1 : 0, material.Normal is null ? 0 : 1, 0, 0))],
+                    new(material.DoubleSided ? 1 : 0, material.Normal is null ? 0 : 1, material.Transmission, material.Thickness))],
                     WGPUBufferUsage.Uniform, RenderGraphBufferUsage.Uniform);
                 var bindings = new WGPUBindGroupEntry[11];
                 bindings[0] = BufferEntry(0, uniform);
@@ -128,7 +130,8 @@ public sealed unsafe class PbrTransparentScene
         if (view.Owner != this) { throw new InvalidOperationException("A view cannot share different transparent scenes."); }
         var camera = extracted.CameraMatrices;
         Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Camera.GetWgpu<WGPUBuffer>(), 0,
-            [new(camera.ViewProj, new(camera.WorldPosition, 1))]);
+            [new(camera.ViewProj, new(camera.WorldPosition, 1), math.inverse(camera.ViewProj))]);
+        view.Width = (uint)extracted.Viewport.Width; view.Height = (uint)extracted.Viewport.Height;
         view.Draws = _draws.OrderByDescending(draw => math.lengthsq(draw.Center - camera.WorldPosition)).ToArray();
     }
 
@@ -157,16 +160,29 @@ public sealed unsafe class PbrTransparentScene
     {
         public PbrTransparentScene Owner { get; }
         public Entity Camera { get; }
-        public Entity Group { get; }
+        public Entity Group { get; private set; }
+        public uint Width { get; set; }
+        public uint Height { get; set; }
+        private WgpuHandle<WGPUTextureView> _color, _depth;
         public Draw[] Draws { get; set; } = [];
         public RenderGraphBufferKey CameraKey { get; } = new("transparent-camera");
         public View(PbrTransparentScene owner)
         {
             Owner = owner;
             Camera = owner._world.OwnWgpu(Wgpu.CreateBuffer(owner._device.GetWgpu<WGPUDevice>(),
-                new WGPUBufferDescriptor { Size = 80, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst }));
-            try { Group = owner._world.OwnWgpu(PbrTransparentScene.Group(owner._device.GetWgpu<WGPUDevice>(), owner._cameraLayout, [BufferEntry(0, Camera)])); }
+                new WGPUBufferDescriptor { Size = 144, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst }));
+            try { if (!owner.HasTransmission) { Group = owner._world.OwnWgpu(PbrTransparentScene.Group(owner._device.GetWgpu<WGPUDevice>(), owner._cameraLayout, [BufferEntry(0, Camera)])); } }
             catch { Camera.Destroy(); throw; }
+        }
+        public void BindScene(WgpuHandle<WGPUTextureView> color, WgpuHandle<WGPUTextureView> depth)
+        {
+            if (Group.IsValid && color.DangerousGetHandle() == _color.DangerousGetHandle()
+                && depth.DangerousGetHandle() == _depth.DangerousGetHandle()) { return; }
+            var next = PbrTextureBindGroups.Create(Owner._world, Owner._device.GetWgpu<WGPUDevice>(), Owner._cameraLayout,
+                [BufferEntry(0, Camera), new WGPUBindGroupEntry { Binding = 1, TextureView = (WGPUTextureView*)color.DangerousGetHandle() },
+                    new WGPUBindGroupEntry { Binding = 2, TextureView = (WGPUTextureView*)depth.DangerousGetHandle() }], color, depth);
+            if (Group.IsValid) { Group.Destroy(); }
+            Group = next; _color = color; _depth = depth;
         }
         public void Declare(RenderGraphPassDeclarationBuilder declaration)
         {
@@ -194,6 +210,14 @@ public sealed unsafe class PbrTransparentScene
         var entry = WGPUBindGroupLayoutEntry.Default;
         entry.Binding = binding; entry.Visibility = WGPUShaderStage.Vertex | WGPUShaderStage.Fragment;
         entry.Buffer.Type = WGPUBufferBindingType.Uniform; entry.Buffer.MinBindingSize = size; return entry;
+    }
+    private static WGPUBindGroupLayoutEntry SceneTextureLayout(uint binding, bool depth)
+    {
+        var entry = WGPUBindGroupLayoutEntry.Default;
+        entry.Binding = binding; entry.Visibility = WGPUShaderStage.Fragment;
+        entry.Texture.SampleType = depth ? WGPUTextureSampleType.Depth : WGPUTextureSampleType.Float;
+        entry.Texture.ViewDimension = WGPUTextureViewDimension._2D;
+        return entry;
     }
     private static WGPUBindGroupEntry BufferEntry(uint binding, Entity buffer) => new() {
         Binding = binding, Buffer = (WGPUBuffer*)buffer.GetWgpu<WGPUBuffer>().DangerousGetHandle(),
@@ -244,7 +268,7 @@ public sealed unsafe class PbrTransparentScene
         }
     }
     internal sealed record Draw(Entity Vertices, Entity Indices, uint Count, Entity Group, float3 Center);
-    [StructLayout(LayoutKind.Sequential)] private readonly record struct CameraGpu(float4x4 Matrix, float4 Eye);
+    [StructLayout(LayoutKind.Sequential)] private readonly record struct CameraGpu(float4x4 Matrix, float4 Eye, float4x4 Inverse);
     [StructLayout(LayoutKind.Sequential)] private readonly record struct MaterialGpu(float4x4 Transform, float4x4 Normal,
         float4 Color, float4 Emission, float4 Factors, float4 Flags);
 }

@@ -7,6 +7,9 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed record PbrRenderFeatureOptions
 {
+    /// <summary>Trace current-frame scene reflections on low-roughness Visibility surfaces.</summary>
+    public bool ScreenSpaceReflections { get; init; } = true;
+
     public RenderGraphTextureKey HdrTarget { get; init; } = new("pbr-hdr");
 
     public RenderGraphPassKey SkyboxPass { get; init; } = new("pbr-skybox");
