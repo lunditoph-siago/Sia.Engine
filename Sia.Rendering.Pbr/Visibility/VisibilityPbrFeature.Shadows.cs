@@ -10,8 +10,10 @@ public sealed partial class VisibilityPbrFeature
 {
     private Entity _shadowRaster;
 
-    internal void PrepareShadows(in RenderFeatureContext<RenderFrameContext> context, ShadowGpuStore shadows, ShadowAtlasConfig config)
+    internal void PrepareShadows(in RenderFeatureContext<RenderFrameContext> context, PbrViewState lighting,
+        ShadowAtlasConfig config, bool noForwardCasters)
     {
+        var shadows = lighting.Shadows;
         var main = context.View.PersistentResources.GetRequired<ViewState>();
         var layers = new SortedSet<int>();
         if (shadows.HasDirectionalShadow) {
@@ -24,7 +26,7 @@ public sealed partial class VisibilityPbrFeature
                 var indices = CreateShadowIndices(acquired);
                 var lod = CreateShadowLod(acquired);
                 var raster = CreateRaster(_world, _device.GetWgpu<WGPUDevice>(), _geometryLayout, acquired, shadow: true,
-                    indexed: _fixedGeometry is not null || indices is not null, doubleSided: _doubleSided.Any(value => value));
+                    indexed: _fixedGeometry is not null || indices is not null, doubleSided: _doubleSided.Any(value => value), worldSpace: _worldSpaceGeometry);
                 _shadowIndices = indices; _shadowRaster = raster; _shadowLod = lod;
             }
             catch { for (var i = acquired.Count - 1; i >= 0; i--) { acquired[i].Destroy(); } throw; }
@@ -50,9 +52,17 @@ public sealed partial class VisibilityPbrFeature
             var old = main.Shadows[layer]; main.Shadows.Remove(layer); ReleaseShadowView(old);
         }
         foreach (var layer in layers) {
-            var view = main.Shadows[layer].View;
-            view.Width = config.TileResolution; view.Height = config.TileResolution;
+            var shadow = main.Shadows[layer];
+            var view = shadow.View;
             var projection = shadows.LayerViewProj(layer);
+            // Fixed-scene geometry and instances are immutable. Dynamic LOD scenes
+            // and mixed forward casters must continue rendering their shadows.
+            shadow.Cacheable = _fixedGeometry is not null && noForwardCasters && DebugMode == VisibilityDebugMode.Shaded;
+            if (!shadow.Cacheable) { shadow.Rendered = null; }
+            shadow.Pending = new(lighting.ShadowAtlas.Texture, projection, config.TileResolution);
+            shadow.Reuse = shadow.Cacheable && shadow.Rendered == shadow.Pending;
+            if (shadow.Reuse) { lighting.RetainedShadowLayers.Add(layer); continue; }
+            view.Width = config.TileResolution; view.Height = config.TileResolution;
             Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0,
                 [new(projection, default, new(config.TileResolution, config.TileResolution, TriangleCount, 0), default, default,
                     RasterConfig with { w = _shadowIndices is not null ? 4u : _fixedGeometry is null ? 0u : 2u }, RasterOrigin(projection))]);
@@ -78,7 +88,15 @@ public sealed partial class VisibilityPbrFeature
         graph.UseComputePass(new("visibility-shadows"), "visibility-shadows", main.DeclareShadows, main.RenderShadows);
     }
 
-    private sealed record ShadowView(int Layer, ViewState View, Entity[] Resources, Entity IndexGroup);
+    private readonly record struct ShadowContent(Entity Atlas, float4x4 Projection, uint Resolution);
+
+    private sealed record ShadowView(int Layer, ViewState View, Entity[] Resources, Entity IndexGroup)
+    {
+        public ShadowContent? Rendered { get; set; }
+        public ShadowContent Pending { get; set; }
+        public bool Cacheable { get; set; }
+        public bool Reuse { get; set; }
+    }
 
     private sealed partial class ViewState
     {
@@ -107,6 +125,7 @@ public sealed partial class VisibilityPbrFeature
         {
             if (Owner.DebugMode != VisibilityDebugMode.Shaded) { return; }
             foreach (var shadow in Shadows.Values.OrderBy(static value => value.Layer)) {
+                if (shadow.Reuse) { continue; }
                 var view = shadow.View;
                 if (Owner._fixedGeometry is not null) { view.CullClusters(context); }
                 if (Owner._gpuLod is not null) {
@@ -134,6 +153,7 @@ public sealed partial class VisibilityPbrFeature
                     } else { Wgpu.DrawIndirect(pass, view.Indirect.GetWgpu<WGPUBuffer>()); }
                 }
                 finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }
+                shadow.Rendered = shadow.Cacheable ? shadow.Pending : null;
             }
         }
     }

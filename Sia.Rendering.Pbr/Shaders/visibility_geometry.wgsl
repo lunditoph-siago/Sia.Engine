@@ -26,6 +26,14 @@ struct VisibilityInstance {
 @group(0) @binding(5) var<storage, read> visibility_instances: array<VisibilityInstance>;
 @group(0) @binding(6) var<storage, read> visibility_work: array<vec2<u32>>;
 
+fn visibility_clip(position: vec3<f32>, instance: u32) -> vec4<f32> {
+#ifdef WORLD_SPACE_GEOMETRY
+    return visibility_camera.view_projection * vec4<f32>(position, 1.0);
+#else
+    return visibility_camera.view_projection * visibility_instances[instance].transform * vec4<f32>(position, 1.0);
+#endif
+}
+
 fn visibility_triangle_work(index: u32) -> vec2<u32> {
     let stride = visibility_camera.raster.x;
     let work = visibility_work[index / stride];

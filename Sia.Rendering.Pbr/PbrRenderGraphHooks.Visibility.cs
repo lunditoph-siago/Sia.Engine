@@ -12,18 +12,38 @@ public static partial class PbrRenderGraphHooks
         var state = graph.UseState(static () => new TransparencyState());
         state.View = view; state.Lighting = lighting; state.Color = color; state.Depth = depth;
         state.Enabled = enabled;
+        if (enabled && view.Owner.HasTransmission) {
+            graph.UseTexture(TransparencyState.SceneColor, new RenderGraphTextureDescriptor("pbr-glass-scene",
+                RenderGraphTextureFormat.RGBA16Float, view.Width, view.Height));
+            graph.UseComputePass(new("pbr-glass-snapshot"), "pbr-glass-snapshot",
+                state.DeclareSnapshot, state.CopySnapshot);
+        }
         graph.UsePass(new("pbr-transparent"), "pbr-transparent", state.Declare, state.Render);
     }
 
     private sealed class TransparencyState
     {
+        internal static readonly RenderGraphTextureKey SceneColor = new("pbr-glass-scene");
         public PbrTransparentScene.View View { get; set; } = null!;
         public PbrViewState Lighting { get; set; } = null!;
         public RenderGraphTextureKey Color { get; set; }
         public RenderGraphTextureKey Depth { get; set; }
         public bool Enabled { get; set; }
+        public void DeclareSnapshot(RenderGraphPassDeclarationBuilder declaration) => declaration
+            .Read(Color, RenderGraphTextureUsage.CopySource).Write(SceneColor, RenderGraphTextureUsage.CopyDestination);
+        public unsafe void CopySnapshot(WgpuReactiveRenderGraphPassContext context)
+        {
+            var source = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)context.GetTexture(Color).DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
+            var target = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)context.GetTexture(SceneColor).DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
+            var size = new WGPUExtent3D { Width = View.Width, Height = View.Height, DepthOrArrayLayers = 1 };
+            WgpuUnsafe.wgpuCommandEncoderCopyTextureToTexture((WGPUCommandEncoder*)context.CommandEncoder.DangerousGetHandle(), &source, &target, &size);
+        }
         public void Declare(RenderGraphPassDeclarationBuilder declaration)
         {
+            if (Enabled && View.Owner.HasTransmission) {
+                declaration.Read(SceneColor, RenderGraphTextureUsage.TextureBinding)
+                    .Read(Depth, RenderGraphTextureUsage.TextureBinding);
+            }
             View.Declare(declaration);
             declaration.ReadWrite(Color, RenderGraphTextureUsage.RenderAttachment)
                 .Read(Depth, RenderGraphTextureUsage.RenderAttachment)
@@ -39,6 +59,7 @@ public static partial class PbrRenderGraphHooks
         public void Render(WgpuReactiveRenderGraphPassContext context)
         {
             if (!Enabled) { return; }
+            if (View.Owner.HasTransmission) { View.BindScene(context.GetTextureView(SceneColor), context.GetTextureView(Depth)); }
             var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(Color, WGPULoadOp.Load),
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Depth, WGPULoadOp.Undefined,
                     WGPUStoreOp.Undefined, DepthReadOnly: true));

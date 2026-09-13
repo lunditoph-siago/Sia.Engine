@@ -26,6 +26,7 @@ public sealed partial class VisibilityPbrFeature :
     private readonly Entity _raster;
     private readonly ResolveGpu _resolve;
     private readonly OutputGpu _output;
+    private bool _worldSpaceGeometry;
     private VisibilityDebugMode _mode;
 
     public VisibilityDebugMode DebugMode
@@ -185,16 +186,18 @@ public sealed partial class VisibilityPbrFeature :
             var (materialGpu, textures, materialParameters) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
             var geometryLayout = CreateGeometryLayout(world, device, acquired);
             var resolveLayout = CreateResolveLayout(world, device, acquired);
+            var worldSpace = fixedClusters is not null && transforms.All(transform => transform.Equals(float4x4.identity));
             var raster = CreateRaster(world, device, geometryLayout, acquired, indexed: fixedClusters is not null,
-                doubleSided: sourceMaterials.Any(material => material.DoubleSided));
-            var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired);
+                doubleSided: sourceMaterials.Any(material => material.DoubleSided), worldSpace: worldSpace);
+            var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired, worldSpace);
             var materialTiles = CreateMaterialTiles(world, device, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
             var gpuLod = scene is not null && fixedClusters is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
-            var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired);
+            var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired, worldSpace);
             return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry) {
                 InstanceCapacity = (uint)gpuInstances.Length,
+                _worldSpaceGeometry = worldSpace,
                 _doubleSided = sourceMaterials.Select(material => material.DoubleSided).ToArray(),
                 _assetBounds = assetBounds,
                 ShadowBounds = shadowBounds

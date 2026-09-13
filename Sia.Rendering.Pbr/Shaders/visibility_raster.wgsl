@@ -11,8 +11,7 @@ fn vertex(@builtin(vertex_index) index: u32) -> RasterOutput {
     let work = visibility_triangle_work(work_index);
     let source = visibility_vertex(work.x, index % 3u);
     var result: RasterOutput;
-    result.position = visibility_camera.view_projection * visibility_instances[work.y].transform
-        * vec4<f32>(source.position.xyz, 1.0);
+    result.position = visibility_clip(source.position.xyz, work.y);
     result.id = work_index + 1u;
     result.double_sided = visibility_instances[work.y].material.w;
     return result;
@@ -39,7 +38,7 @@ fn shared_position(index: u32) -> vec4<f32> {
     let work = visibility_work[vertex / 256u];
     let offset = visibility_triangles[work.x].x;
     let source = visibility_vertices[visibility_indices[offset + vertex % 256u]].position_normal_x.xyz;
-    return visibility_camera.view_projection * visibility_instances[work.y].transform * vec4<f32>(source, 1.0);
+    return visibility_clip(source, work.y);
 }
 
 @vertex
@@ -49,8 +48,7 @@ fn indexed(@builtin(vertex_index) index: u32) -> RasterOutput {
     let id = reference / 3u;
     let work = visibility_triangle_work(id);
     let source = visibility_vertex(work.x, reference % 3u);
-    return RasterOutput(visibility_camera.view_projection * visibility_instances[work.y].transform
-        * vec4<f32>(source.position.xyz, 1.0), id + 1u, visibility_instances[work.y].material.w);
+    return RasterOutput(visibility_clip(source.position.xyz, work.y), id + 1u, visibility_instances[work.y].material.w);
 }
 
 @vertex
@@ -70,8 +68,7 @@ fn indexed_first(@builtin(vertex_index) index: u32) -> FirstRasterOutput {
     let id = index >> 1u;
     let work = visibility_triangle_work(id);
     let source = visibility_vertex(work.x, 0u);
-    return FirstRasterOutput(visibility_camera.view_projection * visibility_instances[work.y].transform
-        * vec4<f32>(source.position.xyz, 1.0), id + 1u, visibility_instances[work.y].material.w);
+    return FirstRasterOutput(visibility_clip(source.position.xyz, work.y), id + 1u, visibility_instances[work.y].material.w);
 }
 
 @fragment

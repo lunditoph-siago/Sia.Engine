@@ -22,12 +22,15 @@ public static class PbrShaderSource
         k_ResourcePrefix + "visibility_parallel_lod.wgsl",
         k_ResourcePrefix + "visibility_materials.wgsl",
         k_ResourcePrefix + "scene_lighting.wgsl",
+        k_ResourcePrefix + "screen_trace.wgsl",
     ];
 
     public static string LoadDepthPrepass() => Load(k_ResourcePrefix + "depth_prepass.wgsl");
 
     public static string LoadForwardPbr() => Load(k_ResourcePrefix + "forward_pbr.wgsl");
-    internal static string LoadTransparentPbr() => Load(k_ResourcePrefix + "transparent_pbr.wgsl");
+    internal static string LoadTransparentPbr(bool transmission = false) => Load(k_ResourcePrefix + "transparent_pbr.wgsl",
+        transmission ? new Dictionary<string, string> { ["OPTICAL_TRANSMISSION"] = "true" } : null);
+    internal static string LoadScreenReflections() => Load(k_ResourcePrefix + "screen_reflections.wgsl");
 
     public static string LoadClusterLightCulling() => Load(k_ResourcePrefix + "cluster_light_culling.wgsl");
 
@@ -41,9 +44,9 @@ public static class PbrShaderSource
 
     public static string LoadToneMapping() => Load(k_ResourcePrefix + "tone_mapping.wgsl");
 
-    internal static string LoadVisibilityRaster() => Load(k_ResourcePrefix + "visibility_raster.wgsl");
+    internal static string LoadVisibilityRaster(bool worldSpace = false) => LoadGeometry("visibility_raster", worldSpace);
 
-    internal static string LoadVisibilityResolve() => Load(k_ResourcePrefix + "visibility_resolve.wgsl");
+    internal static string LoadVisibilityResolve(bool worldSpace = false) => LoadGeometry("visibility_resolve", worldSpace);
     internal static string LoadVisibilityMaterialTiles() => Load(k_ResourcePrefix + "visibility_material_tiles.wgsl");
     internal static string LoadVisibilityLighting() => Load(k_ResourcePrefix + "visibility_lighting.wgsl");
 
@@ -52,17 +55,20 @@ public static class PbrShaderSource
     internal static string LoadVisibilityHzb() => Load(k_ResourcePrefix + "visibility_hzb.wgsl");
 
     internal static string LoadVisibilityCompact() => Load(k_ResourcePrefix + "visibility_compact.wgsl");
-    internal static string LoadVisibilityClusters() => Load(k_ResourcePrefix + "visibility_clusters.wgsl");
+    internal static string LoadVisibilityClusters(bool worldSpace = false) => LoadGeometry("visibility_clusters", worldSpace);
     internal static string LoadVisibilityShadowIndices() => Load(k_ResourcePrefix + "visibility_shadow_indices.wgsl");
 
     internal static string LoadAtmosphere(string name) => Load(k_ResourcePrefix + "atmosphere_" + name + ".wgsl");
 
-    private static string Load(string entryResourceName)
+    private static string LoadGeometry(string name, bool worldSpace) => Load(k_ResourcePrefix + name + ".wgsl",
+        worldSpace ? new Dictionary<string, string> { ["WORLD_SPACE_GEOMETRY"] = "true" } : null);
+
+    private static string Load(string entryResourceName, IReadOnlyDictionary<string, string>? definitions = null)
     {
         var registry = BuildModuleRegistry();
         var entrySource = ReadResource(entryResourceName);
         var result = WgslPreprocessor.Process(
-            entrySource, null, (importPath, _) =>
+            entrySource, definitions, (importPath, _) =>
                 registry.TryGetValue(importPath, out var source) ? source : null);
         if (result.HasErrors) {
             throw new InvalidOperationException(

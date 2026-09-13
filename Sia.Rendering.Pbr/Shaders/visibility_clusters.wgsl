@@ -22,7 +22,11 @@ var<workgroup> sums: array<vec2<u32>, 256>;
 
 fn backfacing(cluster: Cluster) -> bool {
     if (cluster.cone.w >= 1.0 || instances[cluster.work.y].material.w != 0.0) { return false; }
+#ifdef WORLD_SPACE_GEOMETRY
+    let origin = camera.raster_origin;
+#else
     let origin = transpose(instances[cluster.work.y].normal_transform) * camera.raster_origin;
+#endif
     let direction = origin.xyz - cluster.sphere.xyz * origin.w;
     let distance = length(direction);
     let bound = distance * cluster.cone.w + cluster.sphere.w * abs(origin.w);
@@ -31,22 +35,31 @@ fn backfacing(cluster: Cluster) -> bool {
     return facing < -bound - max(1e-6, distance * 1e-5);
 }
 
+// Plane support bounds replace eight projected corners. The roundoff margin is
+// based on the largest possible clip coordinate, so borderline boxes stay visible.
 fn outside_frustum(cluster: Cluster) -> bool {
+#ifdef WORLD_SPACE_GEOMETRY
+    let matrix = camera.view_projection;
+#else
     let matrix = camera.view_projection * instances[cluster.work.y].transform;
-    var outside_xy = vec4<bool>(true);
-    var outside_z = vec2<bool>(true);
-    for (var corner = 0u; corner < 8u; corner++) {
-        let point = select(cluster.minimum.xyz, cluster.maximum.xyz,
-            (vec3<u32>(corner) & vec3<u32>(1u, 2u, 4u)) != vec3<u32>(0u));
-        var clip = matrix * vec4<f32>(point, 1.0);
-        if (any((bitcast<vec4<u32>>(clip) & vec4<u32>(0x7f800000u)) == vec4<u32>(0x7f800000u))) { return false; }
-        let magnitude = max(max(abs(clip.x), abs(clip.y)), max(abs(clip.z), abs(clip.w)));
-        if (magnitude < 1.17549435e-38 || magnitude > 8.50705917e37) { return false; }
-        clip /= magnitude;
-        outside_xy &= vec4<f32>(clip.x + clip.w, clip.w - clip.x, clip.y + clip.w, clip.w - clip.y) < vec4<f32>(-1e-5);
-        outside_z &= vec2<f32>(clip.z, clip.w - clip.z) < vec2<f32>(-1e-5);
+#endif
+    let center = (cluster.minimum.xyz + cluster.maximum.xyz) * 0.5;
+    let extent = (cluster.maximum.xyz - cluster.minimum.xyz) * 0.5;
+    let clip = matrix * vec4<f32>(center, 1.0);
+    let radius = abs(matrix[0]) * extent.x + abs(matrix[1]) * extent.y + abs(matrix[2]) * extent.z;
+    let bound = abs(clip) + radius;
+    let magnitude = max(max(bound.x, bound.y), max(bound.z, bound.w));
+    if (!(magnitude >= 1.17549435e-38 && magnitude <= 8.50705917e37)) { return false; }
+    let rows = transpose(matrix);
+    let margin = magnitude * 1e-5;
+    for (var axis=0u; axis<3u; axis++) {
+        let lower = select(rows[3] + rows[axis], rows[2], axis == 2u);
+        let upper = rows[3] - rows[axis];
+        let lo = dot(lower, vec4<f32>(center, 1.0)) + dot(abs(lower.xyz), extent);
+        let hi = dot(upper, vec4<f32>(center, 1.0)) + dot(abs(upper.xyz), extent);
+        if (lo < -margin || hi < -margin) { return true; }
     }
-    return any(outside_xy) || any(outside_z);
+    return false;
 }
 
 fn inclusive_sum(lane: u32, value: vec2<u32>) -> vec2<u32> {

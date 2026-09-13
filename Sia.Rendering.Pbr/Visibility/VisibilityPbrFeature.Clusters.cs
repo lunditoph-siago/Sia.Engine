@@ -35,7 +35,7 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe FixedGeometryGpu CreateFixedGeometry(World world, WgpuHandle<WGPUDevice> device,
-        WgpuHandle<WGPUQueue> queue, ReadOnlySpan<FixedClusterGpu> clusters, WGPULimits limits, List<Entity> acquired)
+        WgpuHandle<WGPUQueue> queue, ReadOnlySpan<FixedClusterGpu> clusters, WGPULimits limits, List<Entity> acquired, bool worldSpace)
     {
         var stride = 1u;
         uint triangles = 0;
@@ -61,7 +61,7 @@ public sealed partial class VisibilityPbrFeature
         ];
         var layout = Layout(world, device, entries, acquired);
         var cullLayout = Layout(world, device, entries.AsSpan(0, 7), acquired);
-        var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityClusters(), "visibility-clusters"), acquired);
+        var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityClusters(worldSpace), "visibility-clusters"), acquired);
         var pipeline = PipelineLayout(world, device, [layout], acquired);
         var hzb = CreateHzbGpu(world, device, acquired);
         var cullPipeline = PipelineLayout(world, device, [cullLayout, hzb.Layout], acquired);

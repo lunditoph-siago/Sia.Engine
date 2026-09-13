@@ -294,6 +294,7 @@ public static partial class PbrRenderGraphHooks
 
         public void Render(WgpuReactiveRenderGraphPassContext context)
         {
+            if (_viewState!.RetainedShadowLayers.Contains(layer)) { return; }
             var renderPass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphDepthStencilAttachment(
                     _shadowAtlasKey, WGPULoadOp.Clear,
