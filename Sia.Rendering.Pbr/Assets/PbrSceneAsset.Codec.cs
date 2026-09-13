@@ -9,7 +9,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class PbrSceneAsset
 {
-    private const int HeaderSize = 56;
+    private const int HeaderSize = 52;
 
     public byte[] Encode(CancellationToken cancellationToken = default)
     {
@@ -61,11 +61,10 @@ public sealed partial class PbrSceneAsset
         output.Write(new byte[HeaderSize]);
         using (var compressed = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true)) { compressed.Write(raw); }
         var result = output.ToArray();
-        "SIAPBR01"u8.CopyTo(result);
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(8), FormatVersion);
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(12), raw.Length);
-        BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(16), result.Length);
-        SHA256.HashData(raw).CopyTo(result, 24);
+        "SIAPBR\0\0"u8.CopyTo(result);
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(8), raw.Length);
+        BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(12), result.Length);
+        SHA256.HashData(raw).CopyTo(result, 20);
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
@@ -75,11 +74,9 @@ public sealed partial class PbrSceneAsset
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
-        Require(bytes.Length > HeaderSize && bytes[..8].SequenceEqual("SIAPBR01"u8), "Invalid PBR scene header.");
-        var version = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
-        Require(version is 1 or 2 or FormatVersion, "Unsupported PBR scene version.");
-        var length = BinaryPrimitives.ReadInt32LittleEndian(bytes[12..]);
-        Require(length >= 13 && length <= maximumDecodedBytes && BinaryPrimitives.ReadInt64LittleEndian(bytes[16..]) == bytes.Length,
+        Require(bytes.Length > HeaderSize && bytes[..8].SequenceEqual("SIAPBR\0\0"u8), "Invalid PBR scene header.");
+        var length = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
+        Require(length >= 13 && length <= maximumDecodedBytes && BinaryPrimitives.ReadInt64LittleEndian(bytes[12..]) == bytes.Length,
             "Invalid PBR scene length or decoded byte budget.");
         var raw = new byte[length];
         fixed (byte* pointer = bytes) {
@@ -89,7 +86,7 @@ public sealed partial class PbrSceneAsset
             catch (EndOfStreamException error) { throw new InvalidDataException("Truncated PBR scene payload.", error); }
             Require(compressed.ReadByte() == -1, "PBR scene exceeds its declared decoded length.");
         }
-        Require(CryptographicOperations.FixedTimeEquals(SHA256.HashData(raw), bytes.Slice(24, 32)), "PBR scene checksum mismatch.");
+        Require(CryptographicOperations.FixedTimeEquals(SHA256.HashData(raw), bytes.Slice(20, 32)), "PBR scene checksum mismatch.");
         cancellationToken.ThrowIfCancellationRequested();
         using var stream = new MemoryStream(raw, writable: false);
         using var reader = new BinaryReader(stream);
@@ -102,7 +99,7 @@ public sealed partial class PbrSceneAsset
                 var blobLength = Count(reader, 1, int.MaxValue);
                 var blob = raw.AsSpan((int)stream.Position, blobLength);
                 stream.Position += blobLength;
-                var decoded = blob.StartsWith("SIAGZIP1"u8) && blob.Length >= 24
+                var decoded = blob.StartsWith("SIAGZIP\0"u8) && blob.Length >= 24
                     ? BinaryPrimitives.ReadInt64LittleEndian(blob[8..]) : blob.Length;
                 Require(decoded >= 0 && decoded <= remaining, "PBR geometry exceeds the aggregate decoded byte budget.");
                 geometry[i] = MeshPatchAsset.Decode(blob, cancellationToken, remaining);
@@ -122,15 +119,15 @@ public sealed partial class PbrSceneAsset
                 }
                 textures[i] = PbrTextureData.Create(width, height, srgb, levels, sampler);
             }
-            var materials = new PbrMaterialAsset[Count(reader, version == 1 ? 64 : version == 2 ? 70 : 78, 4096)];
+            var materials = new PbrMaterialAsset[Count(reader, 78, 4096)];
             for (var i = 0; i < materials.Length; i++) {
                 var parameters = new PbrMaterial(Vector(reader), reader.ReadSingle(), reader.ReadSingle(), Vector(reader), reader.ReadSingle());
                 var normalScale = reader.ReadSingle(); var occlusionStrength = reader.ReadSingle();
-                var doubleSided = version >= 2 && reader.ReadBoolean();
-                var alphaBlend = version >= 2 && reader.ReadBoolean();
-                var opacity = version >= 2 ? reader.ReadSingle() : 1;
-                var transmission = version >= 3 ? reader.ReadSingle() : 0;
-                var thickness = version >= 3 ? reader.ReadSingle() : 0;
+                var doubleSided = reader.ReadBoolean();
+                var alphaBlend = reader.ReadBoolean();
+                var opacity = reader.ReadSingle();
+                var transmission = reader.ReadSingle();
+                var thickness = reader.ReadSingle();
                 materials[i] = new(parameters, Texture(), Texture(), Texture(), Texture(), Texture(), normalScale, occlusionStrength,
                     doubleSided, alphaBlend, opacity, transmission, thickness);
             }

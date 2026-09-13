@@ -142,7 +142,7 @@ if (cookPath is not null) {
     Console.WriteLine(JsonSerializer.Serialize(new {
         Asset = destination, Source = sourcePath, Fixture = sourcePath is null ? fixture : null,
         GridSize = sourcePath is null ? (int?)gridSize : null, Vertices = source.Vertices.Length, Bytes = bytes.Length, Compressed = compress,
-        MeshPatchAsset.FormatVersion, cooked.BuilderVersion, cooked.SourceHash, cooked.Settings,
+        cooked.SourceHash, cooked.Settings,
         cooked.Build.SourceTriangleCount, cooked.Build.RemovedDegenerateTriangleCount,
         cooked.Build.SimplificationCount, cooked.Build.TargetMissCount, cooked.Build.UnreducedGroupCount,
         Nodes = cooked.Build.Tree.Nodes.Length, cooked.Build.Tree.RootCount,
@@ -196,7 +196,7 @@ foreach (var size in sizes) {
             }
             var asset = new AssetResult(loaded is null ? buildSeconds : null, tree.Nodes.Length, tree.RootCount,
                 tree.Nodes.Span[..tree.RootCount].ToArray().Sum(n => n.TriangleCount), tree.Nodes.ToArray().Sum(n => (long)n.TriangleCount),
-                assetPath, loaded?.SourceHash, loaded?.Settings ?? buildSettings, loaded?.BuilderVersion, readMilliseconds, decodeMilliseconds);
+                assetPath, loaded?.SourceHash, loaded?.Settings ?? buildSettings, readMilliseconds, decodeMilliseconds);
             try {
                 var startup = Stopwatch.StartNew();
                 using var scene = new BenchmarkScene(gpu, tree, instances, resolution.Width, resolution.Height,
@@ -273,7 +273,7 @@ static string WriteAsset(string path, byte[] bytes)
 internal sealed record CaseInput(int? GridSize, int SourceTriangles, int InstanceCount, string Scenario, uint Width, uint Height,
     int TriangleBudget, int RefinementBudget, int RefinementNodes);
 internal sealed record AssetResult(double? BuildSeconds, int Nodes, int Roots, int RootTriangles, long ResidentTriangles,
-    string? Path, string? SourceHash, MeshPatchBuildSettings Settings, int? BuilderVersion, double ReadMilliseconds, double DecodeAndValidateMilliseconds);
+    string? Path, string? SourceHash, MeshPatchBuildSettings Settings, double ReadMilliseconds, double DecodeAndValidateMilliseconds);
 internal sealed record CapacityResult(ulong WorkCapacityBytes, ulong BufferCapacityBytes, int GraphPassCount);
 internal sealed record CaseResult(CaseInput Input, string Status, string? Reason, AssetResult? Asset, CapacityResult? Capacity, FrameSample[]? Samples,
     PipelineResult? Pipeline = null, StartupResult? Startup = null);

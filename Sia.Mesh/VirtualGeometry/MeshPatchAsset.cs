@@ -4,25 +4,20 @@ namespace Sia.Engine.Mesh;
 
 public sealed partial class MeshPatchAsset
 {
-    public const int FormatVersion = 2;
-    public const int CurrentBuilderVersion = 3;
-
     public MeshPatchBuildResult Build { get; }
     public MeshPatchBuildSettings Settings { get; }
     public string SourceHash { get; }
-    public int BuilderVersion { get; }
 
-    private MeshPatchAsset(MeshPatchBuildResult build, MeshPatchBuildSettings settings, string sourceHash, int builderVersion)
+    private MeshPatchAsset(MeshPatchBuildResult build, MeshPatchBuildSettings settings, string sourceHash)
     {
         Build = build;
         Settings = settings;
         SourceHash = sourceHash;
-        BuilderVersion = builderVersion;
     }
 
     public MeshPatchAsset ExtractFinest() => new(
         new(Build.Tree.ExtractFinest(), Build.SourceTriangleCount, Build.RemovedDegenerateTriangleCount, 0, 0, 0),
-        Settings, SourceHash, BuilderVersion);
+        Settings, SourceHash);
 
     public static MeshPatchAsset Cook(MeshData source, MeshPatchBuildSettings? settings = null,
         CancellationToken cancellationToken = default)
@@ -52,6 +47,6 @@ public sealed partial class MeshPatchAsset
             writer.UInt(index);
             hash.AppendData(buffer[..4]);
         }
-        return new(build, options, Convert.ToHexString(hash.GetHashAndReset()), CurrentBuilderVersion);
+        return new(build, options, Convert.ToHexString(hash.GetHashAndReset()));
     }
 }
