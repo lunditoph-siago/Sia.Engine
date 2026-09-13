@@ -15,7 +15,9 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_ClusterIndicesKey = new("visibility-cluster-indices");
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct FixedClusterGpu(float4 Minimum, float4 Maximum, float4 Sphere, float4 Cone, uint4 Work);
+    // Sia float3 occupies 16 bytes; scalars share WGSL vec3's padding with the offset.
+    private readonly record struct FixedClusterGpu(float MinimumX, float MinimumY, float MinimumZ, uint VertexOffset,
+        float4 Maximum, float4 Sphere, float4 Cone, uint4 Work);
 
     private readonly record struct FixedGeometryGpu(Entity Source, Entity Indices, Entity Layout, Entity Cull, Entity Scan, Entity Emit,
         uint Count, uint Stride, uint DispatchDimension, HzbGpu Hzb,

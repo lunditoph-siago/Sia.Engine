@@ -8,7 +8,7 @@ struct Instance {
     transform: mat4x4<f32>, normal_transform: mat4x4<f32>,
     color: vec4<f32>, material: vec4<f32>, emissive: vec4<f32>, roots: vec4<u32>,
 }
-struct Cluster { minimum: vec4<f32>, maximum: vec4<f32>, sphere: vec4<f32>, cone: vec4<f32>, work: vec4<u32> }
+struct Cluster { minimum: vec3<f32>, vertex_offset: u32, maximum: vec4<f32>, sphere: vec4<f32>, cone: vec4<f32>, work: vec4<u32> }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<storage, read> clusters: array<Cluster>;
 @group(0) @binding(2) var<storage, read> instances: array<Instance>;
@@ -177,6 +177,17 @@ fn emit_cluster(ordinal: u32, lane: u32) {
     for (var triangle = lane; triangle < cluster.z; triangle += 64u) {
         let packed = topology[cluster.w + triangle];
         let base = (offset.y + triangle) * 3u;
+#ifdef WORLD_SPACE_GEOMETRY
+        // Depth-only draws need no triangle identity or instance transform.
+        // Resolve the vertex map once here instead of chasing it in each cascade.
+        if (camera.raster.w == 2u) {
+            let vertices = clusters[index].vertex_offset;
+            indices[base] = topology[vertices + (packed & 255u)];
+            indices[base + 1u] = topology[vertices + ((packed >> 8u) & 255u)];
+            indices[base + 2u] = topology[vertices + ((packed >> 16u) & 255u)];
+            continue;
+        }
+#endif
         indices[base] = select(((offset.x * 256u + (packed & 255u)) << 1u),
             ((((offset.x << camera.raster.x) + triangle) * 3u) << 1u) | 1u, camera.raster.w != 2u);
         if (camera.raster.w == 1u) { indices[base] = (((offset.x << camera.raster.x) + triangle) << 1u) | 1u; }
