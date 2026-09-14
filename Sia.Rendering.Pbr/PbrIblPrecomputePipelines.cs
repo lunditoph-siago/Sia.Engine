@@ -118,21 +118,26 @@ public sealed unsafe class PbrIblPrecomputePipelines
         WgpuHandle<WGPUDevice> device,
         WgpuHandle<WGPUShaderModule> shaderModule,
         WgpuHandle<WGPUPipelineLayout> pipelineLayout,
-        WGPUTextureFormat colorFormat)
+        WGPUTextureFormat colorFormat,
+        WGPUTextureFormat surfaceFormat = WGPUTextureFormat.Undefined)
     {
         var vertexEntryPoint = "vertex"u8;
         var fragmentEntryPoint = "fragment"u8;
         fixed (byte* vertexEntry = vertexEntryPoint)
         fixed (byte* fragmentEntry = fragmentEntryPoint) {
-            var colorTarget = WGPUColorTargetState.Default;
-            colorTarget.Format = colorFormat;
-            colorTarget.WriteMask = WGPUColorWriteMask.All;
+            var targets = stackalloc WGPUColorTargetState[2];
+            targets[0] = WGPUColorTargetState.Default;
+            targets[0].Format = colorFormat;
+            targets[0].WriteMask = WGPUColorWriteMask.All;
+            targets[1] = WGPUColorTargetState.Default;
+            targets[1].Format = surfaceFormat;
+            targets[1].WriteMask = WGPUColorWriteMask.All;
 
             var fragment = WGPUFragmentState.Default;
             fragment.Module = (WGPUShaderModule*)shaderModule.DangerousGetHandle();
             fragment.EntryPoint = new WGPUStringView { Data = fragmentEntry, Length = (nuint)fragmentEntryPoint.Length };
-            fragment.TargetCount = 1;
-            fragment.Targets = &colorTarget;
+            fragment.TargetCount = surfaceFormat == WGPUTextureFormat.Undefined ? 1u : 2u;
+            fragment.Targets = targets;
 
             var descriptor = WGPURenderPipelineDescriptor.Default;
             descriptor.Layout = (WGPUPipelineLayout*)pipelineLayout.DangerousGetHandle();

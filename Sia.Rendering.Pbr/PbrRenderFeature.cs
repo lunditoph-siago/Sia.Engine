@@ -70,9 +70,9 @@ public sealed class PbrRenderFeature :
             visibility.Prepare(in context, sceneLighting: true);
             visibility.PrepareShadows(in context, state, extracted.ShadowConfig, extracted.AllItems.Length == 0);
             Renderer.PrepareVisibility(state, in frame, extracted, visibility.DebugMode);
-            if (Options.ScreenSpaceReflections) {
-                state.ScreenReflections ??= new PbrScreenReflections(in frame);
-                state.ScreenReflections.Prepare(in frame, extracted);
+            if (Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) {
+                state.ScreenLighting ??= new PbrScreenLighting(in frame, Options.ScreenSpaceReflections, Options.ScreenSpaceIndirectLighting);
+                state.ScreenLighting.Prepare(in frame, extracted);
             }
         }
     }
@@ -131,8 +131,8 @@ public sealed class PbrRenderFeature :
             PbrRenderGraphHooks.UseForwardPbrPass(
                 ref graph, Renderer, state, phase, Options.ForwardPass, Options.HdrTarget, frameContext.DepthTarget, WGPULoadOp.Load);
         }
-        if (Options.ScreenSpaceReflections && Visibility is { } reflectiveVisibility) {
-            state.ScreenReflections!.BuildGraph(ref graph, Options.HdrTarget, frameContext.DepthTarget,
+        if ((Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) && Visibility is { } reflectiveVisibility) {
+            state.ScreenLighting!.BuildGraph(ref graph, Options.HdrTarget, frameContext.DepthTarget,
                 reflectiveVisibility, state, extracted);
         }
         if (Transparency is { } transparency) {
