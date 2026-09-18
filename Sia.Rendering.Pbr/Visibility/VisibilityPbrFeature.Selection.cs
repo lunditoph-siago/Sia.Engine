@@ -4,19 +4,12 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-public enum VisibilityLodTraversal { BestFirst, Parallel }
-
 public readonly record struct VisibilityLodSettings(float TargetPixelError, MeshPatchBudget Budget)
 {
-    public VisibilityLodTraversal Traversal { get; init; }
-    public int MaxTraversalPasses { get; init; } = 32;
     public VisibilityShadowLodSettings? Shadows { get; init; }
 }
 
-public readonly record struct VisibilityShadowLodSettings(float TargetPixelError, MeshPatchBudget Budget)
-{
-    public int MaxTraversalPasses { get; init; } = 32;
-}
+public readonly record struct VisibilityShadowLodSettings(float TargetPixelError, MeshPatchBudget Budget);
 
 public sealed partial class VisibilityPbrFeature
 {

@@ -191,7 +191,7 @@ public sealed partial class VisibilityPbrFeature
 
         private void Raster(WgpuReactiveRenderGraphPassContext context, bool post)
         {
-            if (Timing is not null) { TimedRaster(context, post); return; }
+            if (Timing is not null && IsCheckpoint(context)) { TimedRaster(context, post); return; }
             var pass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphColorAttachment(Owner.VisibilityTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear),
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear));
@@ -285,7 +285,7 @@ public sealed partial class VisibilityPbrFeature
                 _outputGroup = next;
                 _outputSource = source;
             }
-            if (Timing is not null) { TimedOutput(context); return; }
+            if (Timing is not null && IsCheckpoint(context)) { TimedOutput(context); return; }
             var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(
                 Frame.ColorTarget, Frame.ColorLoadOp, Cacheable: Frame.ColorCacheable));
             Wgpu.SetRenderPipeline(pass, Owner._output.Pipeline.GetWgpu<WGPURenderPipeline>());

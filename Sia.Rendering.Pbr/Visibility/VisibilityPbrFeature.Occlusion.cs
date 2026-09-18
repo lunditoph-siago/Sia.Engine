@@ -37,12 +37,20 @@ public sealed partial class VisibilityPbrFeature
             BufferLayout(1, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
             BufferLayout(2, WGPUBufferBindingType.Uniform, 32, WGPUShaderStage.Compute)
         ], acquired);
+        var reduce2Layout = Layout(world, device, [
+            TextureLayout(0, WGPUTextureSampleType.UnfilterableFloat, WGPUShaderStage.Compute),
+            BufferLayout(1, WGPUBufferBindingType.Storage, 4, WGPUShaderStage.Compute),
+            BufferLayout(2, WGPUBufferBindingType.Uniform, 32, WGPUShaderStage.Compute),
+            BufferLayout(3, WGPUBufferBindingType.Uniform, 32, WGPUShaderStage.Compute)
+        ], acquired);
         var reducePipelineLayout = PipelineLayout(world, device, [reduceLayout], acquired);
+        var reduce2PipelineLayout = PipelineLayout(world, device, [reduce2Layout], acquired);
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityHzb(), "visibility-hzb"), acquired);
         var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
-        return new(layout, reduceLayout,
+        return new(layout, reduceLayout, reduce2Layout,
             ComputePipeline(world, device, shader, reducePipelineLayout, "seed", acquired),
             ComputePipeline(world, device, shader, reducePipelineLayout, "reduce", acquired),
+            ComputePipeline(world, device, shader, reduce2PipelineLayout, "reduce2", acquired),
             core ? null : ComputePipeline(world, device, shader, reducePipelineLayout, "read_after_post", acquired));
     }
 
@@ -180,7 +188,7 @@ public sealed partial class VisibilityPbrFeature
             _postDepthReadGroup ??= Owner.OwnTextureBindGroup(gpu.ReduceLayout,
                 [TextureEntry(0, depth), BufferEntry(1, hzb.PostDepthRead!.Value),
                     BufferEntry(2, hzb.ReduceParameters) with { Size = 32 }], depth);
-            var pass = BeginCompute(context);
+            var pass = context.GetOrBeginComputePass();
             try {
                 Wgpu.SetComputePipeline(pass, gpu.ReadAfterPost!.Value.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, _postDepthReadGroup.Value.GetWgpu<WGPUBindGroup>());
@@ -236,7 +244,17 @@ public sealed partial class VisibilityPbrFeature
             if (_hzbGroups.Length == 0 || _hzbDepth != depth) {
                 var acquired = new List<Entity>();
                 try {
-                    for (var level = 0; level < hzb.LevelCount; level++) {
+                    var seedParameters = BufferEntry(2, hzb.ReduceParameters) with { Offset = 0, Size = 32 };
+                    acquired.Add(Owner.OwnTextureBindGroup(gpu.ReduceLayout,
+                        [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), seedParameters], depth));
+                    var level = 1;
+                    for (; level + 1 < hzb.LevelCount; level += 2) {
+                        var lower = BufferEntry(2, hzb.ReduceParameters) with { Offset = (ulong)level * hzb.ReduceStride, Size = 32 };
+                        var upper = BufferEntry(3, hzb.ReduceParameters) with { Offset = (ulong)(level + 1) * hzb.ReduceStride, Size = 32 };
+                        acquired.Add(Owner.OwnTextureBindGroup(gpu.Reduce2Layout,
+                            [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), lower, upper], depth));
+                    }
+                    if (level < hzb.LevelCount) {
                         var parameters = BufferEntry(2, hzb.ReduceParameters) with { Offset = (ulong)level * hzb.ReduceStride, Size = 32 };
                         acquired.Add(Owner.OwnTextureBindGroup(gpu.ReduceLayout,
                             [TextureEntry(0, depth), BufferEntry(1, hzb.Buffer), parameters], depth));
@@ -252,9 +270,19 @@ public sealed partial class VisibilityPbrFeature
             }
             var pass = BeginCompute(context);
             try {
-                for (var level = 0; level < _hzbGroups.Length; level++) {
-                    Wgpu.SetComputePipeline(pass, (level == 0 ? gpu.Seed : gpu.Reduce).GetWgpu<WGPUComputePipeline>());
-                    Wgpu.SetBindGroup(pass, 0, _hzbGroups[level].GetWgpu<WGPUBindGroup>());
+                var group = 0;
+                Wgpu.SetComputePipeline(pass, gpu.Seed.GetWgpu<WGPUComputePipeline>());
+                Wgpu.SetBindGroup(pass, 0, _hzbGroups[group++].GetWgpu<WGPUBindGroup>());
+                Wgpu.DispatchWorkgroups(pass, (hzb.Levels[0].x + 7) / 8, (hzb.Levels[0].y + 7) / 8);
+                var level = 1;
+                for (; level + 1 < hzb.LevelCount; level += 2) {
+                    Wgpu.SetComputePipeline(pass, gpu.Reduce2.GetWgpu<WGPUComputePipeline>());
+                    Wgpu.SetBindGroup(pass, 0, _hzbGroups[group++].GetWgpu<WGPUBindGroup>());
+                    Wgpu.DispatchWorkgroups(pass, (hzb.Levels[level + 1].x + 7) / 8, (hzb.Levels[level + 1].y + 7) / 8);
+                }
+                if (level < hzb.LevelCount) {
+                    Wgpu.SetComputePipeline(pass, gpu.Reduce.GetWgpu<WGPUComputePipeline>());
+                    Wgpu.SetBindGroup(pass, 0, _hzbGroups[group++].GetWgpu<WGPUBindGroup>());
                     Wgpu.DispatchWorkgroups(pass, (hzb.Levels[level].x + 7) / 8, (hzb.Levels[level].y + 7) / 8);
                 }
             }
@@ -272,7 +300,8 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct HzbViewGpu(Entity Buffer, Entity Parameters, Entity Group, Entity ReduceParameters, Entity? PostDepthRead, int LevelCount, uint ReduceStride,
         Entity[] Owned, HzbLevelsGpu Levels, uint Width, uint Height, uint Factor);
 
-    private readonly record struct HzbGpu(Entity Layout, Entity ReduceLayout, Entity Seed, Entity Reduce, Entity? ReadAfterPost);
+    private readonly record struct HzbGpu(Entity Layout, Entity ReduceLayout, Entity Reduce2Layout,
+        Entity Seed, Entity Reduce, Entity Reduce2, Entity? ReadAfterPost);
 
     private readonly record struct OcclusionGpu(HzbGpu Hzb, Entity CullMain, Entity CullPost, Entity EmitPost);
 }
