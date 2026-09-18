@@ -52,11 +52,7 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, shader, selectLayout, "select_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
             scene.StateCapacity, limits.MaxComputeWorkgroupsPerDimension, occlusion,
-            CreateCompactionGpu(world, device, acquired), enableTiming) {
-            ParameterData = parameterData,
-            Parallel = settings.Traversal == VisibilityLodTraversal.Parallel
-                ? CreateParallelLod(world, device, shader, layout, scene.StateCapacity, (uint)settings.MaxTraversalPasses, acquired) : null
-        };
+            CreateCompactionGpu(world, device, acquired), enableTiming) { ParameterData = parameterData };
     }
 
     private static unsafe Entity ComputePipeline(World world, WgpuHandle<WGPUDevice> device, Entity shader,
@@ -86,16 +82,14 @@ public sealed partial class VisibilityPbrFeature
     {
         var state = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 20ul,
             WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
-        var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Parallel?.ScratchBytes ?? lod.Capacity * 4ul, WGPUBufferUsage.Storage, limits, acquired);
+        var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 4ul, WGPUBufferUsage.Storage, limits, acquired);
         var dispatch = Allocate(_world, _device.GetWgpu<WGPUDevice>(), 72,
             WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc, limits, acquired);
         var group = Own(_world, BindGroup(lod.Layout, [BufferEntry(0, camera), BufferEntry(1, lod.Parameters),
             BufferEntry(2, lod.Patches), BufferEntry(3, _geometry[3]), BufferEntry(4, state), BufferEntry(5, heap),
             BufferEntry(6, indirect), BufferEntry(7, work)]), acquired);
         var dispatchGroup = Own(_world, BindGroup(lod.DispatchLayout, [BufferEntry(2, dispatch)]), acquired);
-        return new(state, heap, dispatch, group, dispatchGroup, CreateCompactionView(lod, state, heap, indirect, limits, acquired)) {
-            Parallel = lod.Parallel is { } parallel ? CreateParallelLodView(parallel, dispatch, lod.Capacity, limits, acquired) : null
-        };
+        return new(state, heap, dispatch, group, dispatchGroup, CreateCompactionView(lod, state, heap, indirect, limits, acquired));
     }
 
     private static void BuildLodGraph(ref RenderGraphBuildContext graph, ViewState view, LodGpu lod)
@@ -129,11 +123,8 @@ public sealed partial class VisibilityPbrFeature
         public void ProjectLod(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, LodConfiguration!.Value.Project, Owner.InstanceCount);
 
-        public void SelectLod(WgpuReactiveRenderGraphPassContext context)
-        {
-            if (Lod!.Value.Parallel is { } parallel) { SelectParallelLod(context, parallel); }
-            else { DispatchLod(context, LodConfiguration!.Value.Select, 1, Lod.Value.DispatchGroup); }
-        }
+        public void SelectLod(WgpuReactiveRenderGraphPassContext context) =>
+            DispatchLod(context, LodConfiguration!.Value.Select, 1, Lod!.Value.DispatchGroup);
 
         public void EmitLod(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, LodConfiguration!.Value.Emit, 0, indirectOffset: 12);
@@ -164,11 +155,7 @@ public sealed partial class VisibilityPbrFeature
         Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming)
     {
         public LodParamsGpu ParameterData { get; init; }
-        public ParallelLodGpu? Parallel { get; init; }
     }
 
-    private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Dispatch, Entity Group, Entity DispatchGroup, CompactionViewGpu Compaction)
-    {
-        public ParallelLodViewGpu? Parallel { get; init; }
-    }
+    private readonly record struct LodViewGpu(Entity State, Entity Heap, Entity Dispatch, Entity Group, Entity DispatchGroup, CompactionViewGpu Compaction);
 }

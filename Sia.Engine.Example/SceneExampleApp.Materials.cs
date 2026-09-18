@@ -68,10 +68,9 @@ internal sealed partial class SceneExampleApp
         var settings = new VisibilityLodSettings(4, new(checked(roots + 8192), checked(meshlets + 16384), checked(triangles + 1048576)) {
             MaxRefinementCandidates = 4096, MaxRefinementNodes = 16384
         }) {
-            Traversal = VisibilityLodTraversal.Parallel, MaxTraversalPasses = 48,
             Shadows = new(8, new(checked(roots + 512), checked(meshlets + 2048), checked(triangles + 131072)) {
                 MaxRefinementCandidates = 512, MaxRefinementNodes = 2048
-            }) { MaxTraversalPasses = 24 }
+            })
         };
         _visibilityLod = _finest
             ? VisibilityPbrFeature.CreateFixedScene(in frame, scene, scene.Instances.Span.ToArray().Select(instance =>

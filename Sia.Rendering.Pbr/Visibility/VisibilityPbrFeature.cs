@@ -102,8 +102,8 @@ public sealed partial class VisibilityPbrFeature :
     {
         ArgumentNullException.ThrowIfNull(tree);
         ValidateLod(lod);
-        if (lod.Traversal != VisibilityLodTraversal.BestFirst || lod.Shadows is not null) {
-            throw new ArgumentException("Parallel traversal and independent shadow settings require GPU LOD.", nameof(lod));
+        if (lod.Shadows is not null) {
+            throw new ArgumentException("Independent shadow settings require GPU LOD.", nameof(lod));
         }
         var (geometry, meshlets) = tree.CopyGeometry();
         return Create(in frame, MeshletRasterData.Create(geometry, meshlets), instances, albedo, outputFormat, mode, tree, lod);
@@ -113,13 +113,11 @@ public sealed partial class VisibilityPbrFeature :
     {
         if (!float.IsFinite(lod.TargetPixelError) || lod.TargetPixelError < 0 || lod.Budget.MaxPatches < 0
             || lod.Budget.MaxMeshlets < 0 || lod.Budget.MaxTriangles < 0
-            || lod.Budget.MaxRefinementCandidates < 0 || lod.Budget.MaxRefinementNodes < 0
-            || !Enum.IsDefined(lod.Traversal)
-            || (lod.Traversal == VisibilityLodTraversal.Parallel && lod.MaxTraversalPasses <= 0)) {
+            || lod.Budget.MaxRefinementCandidates < 0 || lod.Budget.MaxRefinementNodes < 0) {
             throw new ArgumentOutOfRangeException(nameof(lod));
         }
         if (lod.Shadows is { } shadow) {
-            ValidateLod(new(shadow.TargetPixelError, shadow.Budget) { Traversal = lod.Traversal, MaxTraversalPasses = shadow.MaxTraversalPasses });
+            ValidateLod(new(shadow.TargetPixelError, shadow.Budget));
             if (shadow.Budget.MaxPatches > lod.Budget.MaxPatches || shadow.Budget.MaxMeshlets > lod.Budget.MaxMeshlets
                 || shadow.Budget.MaxTriangles > lod.Budget.MaxTriangles || shadow.Budget.MaxRefinementNodes > lod.Budget.MaxRefinementNodes
                 || shadow.Budget.MaxRefinementCandidates > lod.Budget.MaxRefinementCandidates) {
