@@ -19,7 +19,6 @@ public static class PbrShaderSource
         k_ResourcePrefix + "atmosphere.wgsl",
         k_ResourcePrefix + "visibility_geometry.wgsl",
         k_ResourcePrefix + "visibility_occlusion.wgsl",
-        k_ResourcePrefix + "visibility_parallel_lod.wgsl",
         k_ResourcePrefix + "visibility_materials.wgsl",
         k_ResourcePrefix + "scene_lighting.wgsl",
         k_ResourcePrefix + "screen_trace.wgsl",

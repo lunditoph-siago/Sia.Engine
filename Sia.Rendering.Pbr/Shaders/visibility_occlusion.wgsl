@@ -36,6 +36,7 @@ fn occluded(minimum_bounds: vec3<f32>, maximum_bounds: vec3<f32>, matrix: mat4x4
         first = vec2<u32>(minimum) / factor;
         last = vec2<u32>(maximum) / factor;
     }
+    if ((last.x - first.x + 1u) * (last.y - first.y + 1u) > 64u) { return false; }
     let mip = hierarchy.levels[level];
     var farthest = 0.0;
     for (var y = first.y; y <= last.y; y++) {

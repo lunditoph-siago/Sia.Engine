@@ -132,9 +132,14 @@ internal sealed class BenchmarkScene : IDisposable
         var props = new GraphProps(this, slot.Buffer);
         if (_mount is { } mount) { mount.Update(props); }
         else { _mount = _graphWorld.Mount(BuildGraph, props); }
+        slot.MountMs = clock.Elapsed.TotalMilliseconds;
+        clock.Restart();
         _graphWorld.FlushReactive();
+        slot.FlushMs = clock.Elapsed.TotalMilliseconds;
+        clock.Restart();
         _registry.Execute();
-        slot.EncodeMs = clock.Elapsed.TotalMilliseconds;
+        slot.ExecuteMs = clock.Elapsed.TotalMilliseconds;
+        slot.EncodeMs = slot.MountMs + slot.FlushMs + slot.ExecuteMs;
         slot.Mapping = Wgpu.MapBufferReadAsync(slot.Buffer.GetWgpu<WGPUBuffer>(), 0, _readbackSize);
         if (!_pending.TryWrite(index)) { throw new InvalidOperationException("The bounded readback queue is full."); }
         _nextSlot = (index + 1) % _readbacks.Length;
@@ -181,7 +186,8 @@ internal sealed class BenchmarkScene : IDisposable
             || ((ulong)status[0] + status[8]) / 3 > status[12] || status[12] > _feature.TriangleCapacity
             || status[18] > status[17] || status[17] > status[16] || status[19] > status[16]
             || status[17] > _refinementBudget || status[16] > _projectionBudget) {
-            throw new InvalidOperationException("GPU statistics violate the visibility work-list contract.");
+            throw new InvalidOperationException("GPU statistics violate the visibility work-list contract. Status: ["
+                + string.Join(", ", status) + $"]; TriangleCapacity={_feature.TriangleCapacity}, RefinementBudget={_refinementBudget}, ProjectionBudget={_projectionBudget}.");
         }
         Dictionary<string, double>? durations = null;
         if (_gpu.TimingEnabled) {
@@ -198,7 +204,7 @@ internal sealed class BenchmarkScene : IDisposable
             status[13], status[14], status[15], triangles * 16ul,
             triangles == 0 ? null : (double)_width * _height / triangles,
             float.IsFinite(error) ? error : null, !float.IsFinite(error), (status[6] & 1) != 0, (status[6] & 2) != 0);
-        return new(slot.Sequence, slot.PrepareMs, slot.EncodeMs, waitMs,
+        return new(slot.Sequence, slot.PrepareMs, slot.EncodeMs, slot.MountMs, slot.FlushMs, slot.ExecuteMs, waitMs,
             Stopwatch.GetElapsedTime(slot.Started).TotalMilliseconds, durations, counters);
     }
 
@@ -244,11 +250,12 @@ internal sealed class BenchmarkScene : IDisposable
         public Entity Buffer { get; } = buffer;
         public Task? Mapping;
         public long Sequence, Started;
-        public double PrepareMs, EncodeMs;
+        public double PrepareMs, EncodeMs, MountMs, FlushMs, ExecuteMs;
     }
 }
 
-internal sealed record FrameSample(long Sequence, double PrepareMilliseconds, double EncodeAndSubmitMilliseconds, double WaitAndReadMilliseconds,
+internal sealed record FrameSample(long Sequence, double PrepareMilliseconds, double EncodeAndSubmitMilliseconds,
+    double MountMilliseconds, double FlushMilliseconds, double ExecuteMilliseconds, double WaitAndReadMilliseconds,
     double EndToEndMilliseconds,
     IReadOnlyDictionary<string, double>? GpuMilliseconds, FrameCounters Counters);
 

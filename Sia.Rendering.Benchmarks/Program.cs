@@ -25,6 +25,7 @@ var compress = false;
 var view = "clip";
 var fixture = "grid";
 var gridSize = 64;
+var repeats = 1;
 var buildSettings = MeshPatchBuildSettings.Default;
 if (args.Contains("--help")) {
     Console.WriteLine("""
@@ -43,6 +44,8 @@ if (args.Contains("--help")) {
           --suite smoke|scale|instances [--fixture grid|terrain|plane --size N]
         Framing: --view clip|frontal (frontal fits the asset bounds with a fixed orthographic view).
         Rendering options: --refinement-budget N --refinement-nodes N --in-flight N --no-timing
+          --repeats N (rerun each case N times in a fresh scene; reports cross-run RepeatSpread
+          alongside the usual per-frame distribution, to separate device-clock noise from a real change)
         """);
     return;
 }
@@ -69,6 +72,7 @@ for (var i = 0; i < args.Length; i++) {
         case "--view": view = args[i]; break;
         case "--fixture": fixture = args[i]; break;
         case "--size": gridSize = int.Parse(args[i]); break;
+        case "--repeats": repeats = int.Parse(args[i]); break;
         case "--leaf-triangles": buildSettings = buildSettings with { MaxLeafTriangles = int.Parse(args[i]) }; break;
         case "--children": buildSettings = buildSettings with { MaxChildren = int.Parse(args[i]) }; break;
         case "--ratio": buildSettings = buildSettings with { ParentTriangleRatio = float.Parse(args[i], CultureInfo.InvariantCulture) }; break;
@@ -110,6 +114,7 @@ if (scenePath is not null) {
 if (suite is not ("smoke" or "scale" or "instances") || warmup < 0 || frames < 1 || refinementBudget < 0 || refinementNodes < 0 || inFlightFrames is < 1 or > 64) {
     throw new ArgumentException("Invalid suite, frame counts, or refinement budget.");
 }
+if (repeats < 1) { throw new ArgumentException("--repeats must be at least 1."); }
 if (gridSize < 1 || fixture is not ("grid" or "terrain" or "plane") || (assetPath is not null && (cookPath is not null || suite == "scale"))) {
     throw new ArgumentException("Invalid asset/fixture options. --asset cannot be combined with --cook or --suite scale.");
 }
@@ -198,29 +203,50 @@ foreach (var size in sizes) {
                 tree.Nodes.Span[..tree.RootCount].ToArray().Sum(n => n.TriangleCount), tree.Nodes.ToArray().Sum(n => (long)n.TriangleCount),
                 assetPath, loaded?.SourceHash, loaded?.Settings ?? buildSettings, readMilliseconds, decodeMilliseconds);
             try {
-                var startup = Stopwatch.StartNew();
-                using var scene = new BenchmarkScene(gpu, tree, instances, resolution.Width, resolution.Height,
-                    new(int.MaxValue, int.MaxValue, input.TriangleBudget) {
-                        MaxRefinementCandidates = input.RefinementBudget, MaxRefinementNodes = input.RefinementNodes
-                    }, inFlightFrames);
-                var projection = Assets.Projection(scenario, view == "frontal" ? bounds : null, (float)resolution.Width / resolution.Height);
-                var setupMilliseconds = startup.Elapsed.TotalMilliseconds;
-                startup.Restart();
-                await foreach (var _ in scene.RenderAsync([projection])) { }
-                var firstFrameMilliseconds = startup.Elapsed.TotalMilliseconds;
-                await foreach (var _ in scene.RenderAsync(Enumerable.Repeat(projection, warmup))) { }
-                var samples = new FrameSample[frames];
-                var elapsed = Stopwatch.StartNew();
-                var sampleIndex = 0;
-                await foreach (var sample in scene.RenderAsync(Enumerable.Repeat(projection, frames))) { samples[sampleIndex++] = sample; }
-                elapsed.Stop();
-                var capacity = new CapacityResult(scene.WorkCapacityBytes, scene.BufferCapacityBytes, scene.GraphPassCount);
-                results.Add(new(input, "measured", null, asset, capacity, samples,
-                    new(elapsed.Elapsed.TotalMilliseconds, frames / elapsed.Elapsed.TotalSeconds, scene.PeakInFlight, scene.ReadbackCapacityBytes),
-                    new(setupMilliseconds, firstFrameMilliseconds)));
-                var median = Distribution.From(samples.Select(s => s.GpuMilliseconds?.Values.Sum() ?? double.NaN));
+                var allSamples = new List<FrameSample>(frames * repeats);
+                var repeatGpuMedians = new List<double>(repeats);
+                var repeatEndToEndMedians = new List<double>(repeats);
+                CapacityResult? capacity = null;
+                PipelineResult? pipeline = null;
+                StartupResult? startup = null;
+                for (var repeat = 0; repeat < repeats; repeat++) {
+                    var setupClock = Stopwatch.StartNew();
+                    using var scene = new BenchmarkScene(gpu, tree, instances, resolution.Width, resolution.Height,
+                        new(int.MaxValue, int.MaxValue, input.TriangleBudget) {
+                            MaxRefinementCandidates = input.RefinementBudget, MaxRefinementNodes = input.RefinementNodes
+                        }, inFlightFrames);
+                    gpu.CheckErrors();
+                    var projection = Assets.Projection(scenario, view == "frontal" ? bounds : null, (float)resolution.Width / resolution.Height);
+                    var setupMilliseconds = setupClock.Elapsed.TotalMilliseconds;
+                    setupClock.Restart();
+                    await foreach (var _ in scene.RenderAsync([projection])) { }
+                    var firstFrameMilliseconds = setupClock.Elapsed.TotalMilliseconds;
+                    await foreach (var _ in scene.RenderAsync(Enumerable.Repeat(projection, warmup))) { }
+                    var samples = new FrameSample[frames];
+                    var elapsed = Stopwatch.StartNew();
+                    var sampleIndex = 0;
+                    await foreach (var sample in scene.RenderAsync(Enumerable.Repeat(projection, frames))) { samples[sampleIndex++] = sample; }
+                    elapsed.Stop();
+                    capacity = new(scene.WorkCapacityBytes, scene.BufferCapacityBytes, scene.GraphPassCount);
+                    pipeline = new(elapsed.Elapsed.TotalMilliseconds, frames / elapsed.Elapsed.TotalSeconds, scene.PeakInFlight, scene.ReadbackCapacityBytes);
+                    startup = new(setupMilliseconds, firstFrameMilliseconds);
+                    allSamples.AddRange(samples);
+                    var repeatGpu = Distribution.From(samples.Select(s => s.GpuMilliseconds?.Values.Sum() ?? double.NaN));
+                    if (repeatGpu is not null) { repeatGpuMedians.Add(repeatGpu.MedianMilliseconds); }
+                    var repeatEndToEnd = Distribution.From(samples.Select(s => s.EndToEndMilliseconds));
+                    if (repeatEndToEnd is not null) { repeatEndToEndMedians.Add(repeatEndToEnd.MedianMilliseconds); }
+                    if (repeats > 1) {
+                        Console.WriteLine($"  repeat {repeat + 1}/{repeats}: {samples[^1].Counters.MainTriangles + samples[^1].Counters.PostTriangles} emitted; "
+                            + $"GPU stage sum median {(repeatGpu is null ? "unavailable" : $"{repeatGpu.MedianMilliseconds:F3} ms")}.");
+                    }
+                }
+                var spread = repeats > 1 ? new RepeatSpreadResult(repeats,
+                    CoefficientOfVariation(repeatGpuMedians), CoefficientOfVariation(repeatEndToEndMedians)) : null;
+                results.Add(new(input, "measured", null, asset, capacity, allSamples.ToArray(), pipeline, startup, spread));
+                var median = Distribution.From(allSamples.Select(s => s.GpuMilliseconds?.Values.Sum() ?? double.NaN));
                 var gpuTime = median is null ? "unavailable" : $"{median.MedianMilliseconds:F3} ms";
-                Console.WriteLine($"{sourceTriangles} / {resolution.Width}x{resolution.Height} / {scenario}: {samples[^1].Counters.MainTriangles + samples[^1].Counters.PostTriangles} emitted; GPU stage sum median {gpuTime}.");
+                var spreadText = spread is null ? "" : $" (repeat CV: gpu={FormatCv(spread.GpuStageSumMedianCv)}, e2e={FormatCv(spread.EndToEndMedianCv)})";
+                Console.WriteLine($"{sourceTriangles} / {resolution.Width}x{resolution.Height} / {scenario}: {allSamples[^1].Counters.MainTriangles + allSamples[^1].Counters.PostTriangles} emitted; GPU stage sum median {gpuTime}.{spreadText}");
             }
             catch (ArgumentException error) {
                 results.Add(new(input, "capacity-or-input-rejected", error.Message, asset, null, null));
@@ -235,7 +261,7 @@ var report = new {
     Adapter = gpu.Description, TimingRequested = timing, gpu.TimingEnabled,
     Limits = new { gpu.Limits.MaxBufferSize, gpu.Limits.MaxStorageBufferBindingSize, gpu.Limits.MaxComputeWorkgroupsPerDimension },
     TimingStages = VisibilityPbrFeature.GpuTimingStages.ToArray(),
-    Method = "Bounded frame stream; depth one serializes submissions. A separate first frame is drained before warmup; both are excluded from measured samples. SceneSetupAndUploadMilliseconds includes CPU resource setup and upload enqueue, not GPU upload completion. FirstFrameAndReadbackMilliseconds includes graph creation and completion. BuildSeconds is unavailable when loading cooked input; ReadMilliseconds and DecodeAndValidateMilliseconds are CPU startup costs. Warmup is drained and excluded. Pipeline elapsed time includes submission through final result consumption; FramesPerSecond is measured stream throughput. EndToEndMilliseconds runs from frame preparation to result readback. GPU stage sums are neither throughput nor total frame latency. WaitAndReadMilliseconds measures waiting when consuming the oldest pending result. ViewportPixelsPerEmittedTriangle is a viewport/work ratio, not measured coverage. BufferCapacityBytes includes graph buffers and every readback slot, excluding textures, driver allocations and query-set storage. Each measured frame has one graph submission, two geometry indirect draws and one output draw.",
+    Method = "Bounded frame stream; queue depth equals --in-flight (default 1, which serializes submissions; raise it to overlap CPU encode with GPU execution). A separate first frame is drained before warmup; both are excluded from measured samples. SceneSetupAndUploadMilliseconds includes CPU resource setup and upload enqueue, not GPU upload completion. FirstFrameAndReadbackMilliseconds includes graph creation and completion. BuildSeconds is unavailable when loading cooked input; ReadMilliseconds and DecodeAndValidateMilliseconds are CPU startup costs. Warmup is drained and excluded. Pipeline elapsed time includes submission through final result consumption; FramesPerSecond is measured stream throughput. EndToEndMilliseconds runs from frame preparation to result readback. GPU stage sums are neither throughput nor total frame latency, and enabling GPU timing (the default) forces every profiled stage into its own pass instead of letting compatible passes fuse, which inflates CpuEncodeAndSubmit/CpuExecute relative to a --no-timing run: compare like-for-like. CpuEncodeAndSubmit splits into CpuMount (ECS reactive graph mount/update) + CpuFlush (FlushReactive) + CpuExecute (render graph plan/bindings/command encoding and submission); on this machine CpuExecute dominates. WaitAndReadMilliseconds measures waiting when consuming the oldest pending result. ViewportPixelsPerEmittedTriangle is a viewport/work ratio, not measured coverage. BufferCapacityBytes includes graph buffers and every readback slot, excluding textures, driver allocations and query-set storage. Each measured frame has one graph submission, two geometry indirect draws and one output draw. With --repeats > 1, each case's summaries are recomputed per repeat and RepeatSpread reports the coefficient of variation of the per-repeat GpuStageSum/EndToEnd medians, to separate run-to-run device-clock noise from a real change.",
     Summaries = results.Select(result => new {
         result.Input, result.Status,
         GpuStageSum = result.Samples is { } samples ? Distribution.From(samples.Select(s => s.GpuMilliseconds?.Values.Sum() ?? double.NaN)) : null,
@@ -243,8 +269,11 @@ var report = new {
             ? VisibilityPbrFeature.GpuTimingStages.ToArray().ToDictionary(name => name, name => Distribution.From(timed.Select(s => s.GpuMilliseconds![name]))) : null,
         CpuPrepare = result.Samples is { } prepared ? Distribution.From(prepared.Select(s => s.PrepareMilliseconds)) : null,
         CpuEncodeAndSubmit = result.Samples is { } encoded ? Distribution.From(encoded.Select(s => s.EncodeAndSubmitMilliseconds)) : null,
+        CpuMount = result.Samples is { } mounted ? Distribution.From(mounted.Select(s => s.MountMilliseconds)) : null,
+        CpuFlush = result.Samples is { } flushed ? Distribution.From(flushed.Select(s => s.FlushMilliseconds)) : null,
+        CpuExecute = result.Samples is { } executed ? Distribution.From(executed.Select(s => s.ExecuteMilliseconds)) : null,
         EndToEnd = result.Samples is { } completed ? Distribution.From(completed.Select(s => s.EndToEndMilliseconds)) : null,
-        result.Pipeline
+        result.Pipeline, result.RepeatSpread
     }).ToArray(),
     Results = results
 };
@@ -252,6 +281,17 @@ var path = Path.GetFullPath(output);
 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 File.WriteAllText(path, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine(path);
+
+static double? CoefficientOfVariation(List<double> values)
+{
+    if (values.Count < 2) { return null; }
+    var mean = values.Average();
+    if (mean == 0) { return null; }
+    var variance = values.Sum(value => (value - mean) * (value - mean)) / (values.Count - 1);
+    return System.Math.Sqrt(variance) / mean;
+}
+
+static string FormatCv(double? cv) => cv is null ? "n/a" : $"{cv:P1}";
 
 static string WriteAsset(string path, byte[] bytes)
 {
@@ -276,9 +316,10 @@ internal sealed record AssetResult(double? BuildSeconds, int Nodes, int Roots, i
     string? Path, string? SourceHash, MeshPatchBuildSettings Settings, double ReadMilliseconds, double DecodeAndValidateMilliseconds);
 internal sealed record CapacityResult(ulong WorkCapacityBytes, ulong BufferCapacityBytes, int GraphPassCount);
 internal sealed record CaseResult(CaseInput Input, string Status, string? Reason, AssetResult? Asset, CapacityResult? Capacity, FrameSample[]? Samples,
-    PipelineResult? Pipeline = null, StartupResult? Startup = null);
+    PipelineResult? Pipeline = null, StartupResult? Startup = null, RepeatSpreadResult? RepeatSpread = null);
 internal sealed record StartupResult(double SceneSetupAndUploadMilliseconds, double FirstFrameAndReadbackMilliseconds);
 internal sealed record PipelineResult(double ElapsedMilliseconds, double FramesPerSecond, int PeakInFlight, ulong ReadbackCapacityBytes);
+internal sealed record RepeatSpreadResult(int Repeats, double? GpuStageSumMedianCv, double? EndToEndMedianCv);
 internal sealed record Distribution(double MedianMilliseconds, double P95Milliseconds, double MaximumMilliseconds)
 {
     public static Distribution? From(IEnumerable<double> values)

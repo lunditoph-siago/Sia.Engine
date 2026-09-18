@@ -29,8 +29,7 @@ public sealed partial class VisibilityPbrFeature
         var device = _device.GetWgpu<WGPUDevice>();
         var parameters = Upload<LodParamsGpu>(_world, device, _queue.GetWgpu<WGPUQueue>(), [data], WGPUBufferUsage.Uniform, Wgpu.GetLimits(device), acquired);
         var capacity = (uint)System.Math.Max(1ul, System.Math.Min(lod.Capacity, (ulong)shadow.Budget.MaxPatches + (uint)shadow.Budget.MaxRefinementNodes));
-        return lod with { Parameters = parameters, ParameterData = data, Capacity = capacity,
-            Parallel = lod.Parallel is { } parallel ? ConfigureParallelLod(parallel, capacity, (uint)shadow.MaxTraversalPasses) : null };
+        return lod with { Parameters = parameters, ParameterData = data, Capacity = capacity };
     }
 
     private void PrepareShadowLod()

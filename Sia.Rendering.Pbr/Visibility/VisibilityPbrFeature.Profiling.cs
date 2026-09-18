@@ -8,9 +8,7 @@ namespace Sia.Engine.Rendering.Pbr;
 public sealed partial class VisibilityPbrFeature
 {
     private static readonly string[] s_TimingStages = [
-        "visibility-lod-project", "visibility-lod-select", "visibility-cull-main", "visibility-compact-main",
-        "visibility-lod-emit", "visibility-raster", "visibility-hzb-main", "visibility-cull-post",
-        "visibility-compact-post", "visibility-emit-post", "visibility-raster-post",
+        "visibility-lod-select", "visibility-hzb-main", "visibility-raster",
         "visibility-material-tiles", "visibility-resolve", "visibility-output"
     ];
 
@@ -41,6 +39,8 @@ public sealed partial class VisibilityPbrFeature
                 (WGPUBuffer*)buffer.DangerousGetHandle(), (ulong)(s_TimingStages.Length - 1) * 16, 16);
         }
 
+        private static bool IsCheckpoint(WgpuReactiveRenderGraphPassContext context) => Array.IndexOf(s_TimingStages, context.Pass.Name) >= 0;
+
         private uint TimingIndex(WgpuReactiveRenderGraphPassContext context)
         {
             var stage = Array.IndexOf(s_TimingStages, context.Pass.Name);
@@ -50,7 +50,7 @@ public sealed partial class VisibilityPbrFeature
 
         private unsafe WgpuHandle<WGPUComputePassEncoder> BeginCompute(WgpuReactiveRenderGraphPassContext context)
         {
-            if (Timing is not { } timing) { return context.GetOrBeginComputePass(); }
+            if (Timing is not { } timing || !IsCheckpoint(context)) { return context.GetOrBeginComputePass(); }
             var index = TimingIndex(context);
             var timestamps = new WGPUPassTimestampWrites {
                 QuerySet = (WGPUQuerySet*)timing.Queries.GetWgpu<WGPUQuerySet>().DangerousGetHandle(),
