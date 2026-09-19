@@ -1,6 +1,6 @@
 #define_import_path pbr::scene_lighting
 
-#import pbr::clustered_forward::{ClusterConfig, cluster_z_slice_from_view_z, cluster_tile_from_screen, cluster_index}
+#import rendering::clustered_forward::{ClusterConfig, cluster_z_slice_from_view_z, cluster_tile_from_screen, cluster_index}
 #import pbr::pbr::{direct_lighting, indirect_lighting}
 #import pbr::shadows::{ShadowConfig, shadow_select_cascade, shadow_sample_pcf}
 

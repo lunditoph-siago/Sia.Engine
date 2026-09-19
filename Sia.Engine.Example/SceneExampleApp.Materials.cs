@@ -38,7 +38,7 @@ internal sealed partial class SceneExampleApp
         }
         if (_materialStream is { } stream) { _materialBounds = stream.Bounds; }
         var shadows = world.AcquireAddon<ShadowAtlasConfig>();
-        shadows.TileResolution = 512; shadows.CascadeCount = 3; shadows.MaxShadowedSpotLights = 1; shadows.ShadowDistance = 30;
+        shadows.TileResolution = _renderProfile.ShadowResolution; shadows.CascadeCount = 3; shadows.MaxShadowedSpotLights = 1; shadows.ShadowDistance = 30;
         world.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky { Intensity = .75f };
         var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
         world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
@@ -74,7 +74,7 @@ internal sealed partial class SceneExampleApp
                 MaxRefinementCandidates = 512, MaxRefinementNodes = 2048
             })
         };
-        _visibilityLod = _materialStream is { } stream ? VisibilityPbrFeature.CreateStreamScene(in frame, stream, _surfaceFormat, mode: _patchDebugMode)
+        _visibilityLod = _materialStream is { } stream ? VisibilityPbrFeature.CreateStreamScene(in frame, stream, _surfaceFormat, _renderProfile.DetailGeometryBytes, _renderProfile.UploadBytesPerFrame, mode: _patchDebugMode)
             : _finest
             ? VisibilityPbrFeature.CreateFixedScene(in frame, scene, scene.Instances.Span.ToArray().Select(instance =>
                 new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode)

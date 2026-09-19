@@ -229,6 +229,9 @@ try {
   setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
+  if (parameters.has('quality')) args.push('--quality', parameters.get('quality'));
+  if (parameters.has('benchmark-frames')) args.push('--benchmark-frames', parameters.get('benchmark-frames'));
+  if (parameters.has('benchmark-motion')) args.push('--benchmark-motion', parameters.get('benchmark-motion'));
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
   if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
   if (parameters.has('lod')) args.push('--lod', parameters.get('lod'));
@@ -240,8 +243,6 @@ try {
       scene.searchParams.set('sha256', hash);
     }
     args.push('--scene', scene.href);
-    if (parameters.has('benchmark-frames')) args.push('--benchmark-frames', parameters.get('benchmark-frames'));
-    if (parameters.has('benchmark-motion')) args.push('--benchmark-motion', parameters.get('benchmark-motion'));
   }
   setLoadingState('Starting engine runtime', NaN);
   // Preload runtime/timer/HTTP workers plus the four bounded CPU decoder workers.

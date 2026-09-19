@@ -11,14 +11,14 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
     [JsonSourceGenerationOptions(UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
     [JsonSerializable(typeof(Header))]
     private partial class StreamJsonContext : JsonSerializerContext;
-    internal sealed record Detail(string Id, PbrGeometryPage.Counts Size);
+    internal sealed record Detail(string Id, GeometryPage.Counts Size);
     private sealed record Geometry(int RootLength, Detail? Detail);
     private sealed record Instance(int Geometry, int Material, float[] Transform);
     private sealed record Header(int Version, byte[] Manifest, string[] Materials, int MaterialBytes, string[] Roots, Geometry[] Geometry, Instance[] Instances);
     private readonly AssetChunkCache _cache;
     private readonly AssetChunkManifest _manifest;
     internal Detail?[] Details { get; }
-    internal PbrGeometryPage[] RootPages { get; private set; }
+    internal GeometryPage[] RootPages { get; private set; }
     public ReadOnlyMemory<VisibilityInstance> Instances { get; }
     /// <summary>Resident materials and transparent geometry; opaque geometry uses GPU-ready pages.</summary>
     public PbrSceneAsset Bootstrap { get; }
@@ -26,11 +26,11 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
     public AssetChunkCacheStatistics Statistics => _cache.Statistics;
 
     private PbrSceneStream(AssetChunkCache cache, AssetChunkManifest manifest, Detail?[] details,
-        PbrSceneAsset bootstrap, PbrGeometryPage[] roots, VisibilityInstance[] instances)
+        PbrSceneAsset bootstrap, GeometryPage[] roots, VisibilityInstance[] instances)
     {
         _cache = cache; _manifest = manifest; Details = details; Bootstrap = bootstrap; RootPages = roots; Instances = instances;
         var minimum = new float3(float.PositiveInfinity); var maximum = new float3(float.NegativeInfinity);
-        var bounds = roots.Select(VisibilityPbrFeature.PageBounds).ToArray();
+        var bounds = roots.Select(page => page.Bounds).ToArray();
         foreach (var instance in instances) {
             var b = bounds[instance.AssetIndex];
             for (var i = 0; i < 8; i++) {
@@ -71,11 +71,11 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
             var bootstrap = await Task.Run(() => PbrSceneAsset.Decode(materialBytes, 256 * 1024 * 1024, cancellationToken), cancellationToken);
             var rootBytes = await ReadPartsAsync(header.Roots, (int)rootLength);
             var roots = await Task.Run(() => {
-                var result = new PbrGeometryPage[header.Geometry.Length]; var offset = 0;
+                var result = new GeometryPage[header.Geometry.Length]; var offset = 0;
                 for (var i = 0; i < result.Length; i++) {
                     cancellationToken.ThrowIfCancellationRequested();
                     var length = header.Geometry[i].RootLength;
-                    result[i] = PbrGeometryPage.Decode(rootBytes.AsMemory(offset, length)); offset += length;
+                    result[i] = GeometryPage.Decode(rootBytes.AsMemory(offset, length)); offset += length;
                 }
                 return result;
             }, cancellationToken);
@@ -99,7 +99,7 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
                 var bytes = new byte[length]; var offset = 0;
                 foreach (var id in ids) {
                     using var lease = await cache.AcquireAsync(manifest.GetChunk(id), cancellationToken: cancellationToken);
-                    var decoded = await Task.Run(() => PbrStreamBlock.Decode(lease.Memory.Span, System.Math.Min(4 * 1024 * 1024, length - offset)), cancellationToken);
+                    var decoded = await Task.Run(() => SceneStreamBlock.Decode(lease.Memory.Span, System.Math.Min(4 * 1024 * 1024, length - offset)), cancellationToken);
                     decoded.CopyTo(bytes, offset); offset += decoded.Length;
                 }
                 if (offset != length) throw new InvalidDataException("Startup decoded lengths do not match metadata.");
@@ -134,11 +134,11 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
         for (var i = 0; i < geometry.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
             var asset = source.Geometry.Span[opaqueGeometry[i]];
-            var root = PbrGeometryPage.Cook(asset.ExtractRoots());
+            var root = GeometryPage.Cook(asset.ExtractRoots());
             rootData.Write(root.Bytes.Span);
             Detail? detail = null;
             if (asset.Build.Tree.Nodes.Length > asset.Build.Tree.RootCount) {
-                var page = PbrGeometryPage.Cook(asset); var encoded = PbrStreamBlock.Encode(page.Bytes.Span); var chunk = AssetChunk.FromBytes(encoded);
+                var page = GeometryPage.Cook(asset); var encoded = SceneStreamBlock.Encode(page.Bytes.Span); var chunk = AssetChunk.FromBytes(encoded);
                 if (chunks.TryAdd(chunk.Id, chunk)) await write(chunk, encoded, cancellationToken);
                 detail = new(chunk.Id, page.Size);
             }
@@ -160,7 +160,7 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
             var ids = new List<string>();
             for (var offset = 0; offset < bytes.Length; offset += 4 * 1024 * 1024) {
                 var part = bytes.Slice(offset, System.Math.Min(4 * 1024 * 1024, bytes.Length - offset));
-                var encoded = PbrStreamBlock.Encode(part.Span); var chunk = AssetChunk.FromBytes(encoded);
+                var encoded = SceneStreamBlock.Encode(part.Span); var chunk = AssetChunk.FromBytes(encoded);
                 if (chunks.TryAdd(chunk.Id, chunk)) await write(chunk, encoded, cancellationToken);
                 ids.Add(chunk.Id);
             }

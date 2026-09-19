@@ -28,13 +28,4 @@ public sealed partial class VisibilityPbrFeature
         return bounds;
     }
 
-    private static void IncludeBounds(ref Aabb? bounds, Aabb? local, float4x4 transform)
-    {
-        if (local is not { } box) { return; }
-        var center = math.mul(transform, new float4(box.Center, 1)).xyz;
-        var half = box.HalfExtents;
-        var extent = math.abs(transform.c0.xyz) * half.x + math.abs(transform.c1.xyz) * half.y + math.abs(transform.c2.xyz) * half.z;
-        var world = new Aabb(center - extent, center + extent);
-        bounds = bounds is { } current ? Aabb.Union(current, world) : world;
-    }
 }

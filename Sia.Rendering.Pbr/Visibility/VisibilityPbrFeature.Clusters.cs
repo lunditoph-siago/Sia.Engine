@@ -14,11 +14,6 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_ClusterBlocksKey = new("visibility-cluster-blocks");
     private static readonly RenderGraphBufferKey s_ClusterIndicesKey = new("visibility-cluster-indices");
 
-    [StructLayout(LayoutKind.Sequential)]
-    // Sia float3 occupies 16 bytes; scalars share WGSL vec3's padding with the offset.
-    private readonly record struct FixedClusterGpu(float MinimumX, float MinimumY, float MinimumZ, uint VertexOffset,
-        float4 Maximum, float4 Sphere, float4 Cone, uint4 Work);
-
     private readonly record struct FixedGeometryGpu(Entity Source, Entity Indices, Entity Layout, Entity Cull, Entity Scan, Entity Emit,
         uint Count, uint Stride, uint DispatchDimension, HzbGpu Hzb,
         Entity CullLayout, Entity CullMain, Entity CullPost, Entity ScanPost, Entity EmitLayout, Entity Compact, Entity Cache, bool SharedVertices);
@@ -37,7 +32,7 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe FixedGeometryGpu CreateFixedGeometry(World world, WgpuHandle<WGPUDevice> device,
-        WgpuHandle<WGPUQueue> queue, ReadOnlySpan<FixedClusterGpu> clusters, WGPULimits limits, List<Entity> acquired, bool worldSpace,
+        WgpuHandle<WGPUQueue> queue, ReadOnlySpan<GeometryClusterGpu> clusters, WGPULimits limits, List<Entity> acquired, bool worldSpace,
         uint? reservedTriangles = null)
     {
         var stride = 1u;
