@@ -27,9 +27,12 @@ internal sealed unsafe partial class SceneExampleApp
     private RenderWorld? _renderWorld;
     private RenderFeaturePipeline<RenderFrameContext>? _renderPipeline;
     private Entity _camera;
+    private RenderProfile _renderProfile = RenderProfile.For(RenderQuality.Medium);
 
     private void InitializeScene()
     {
+        _renderProfile = RenderProfile.For(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
+        Console.WriteLine($"Render profile: {_renderProfile}");
         _sceneWorld = new World();
         _renderWorld = new RenderWorld();
 
@@ -70,12 +73,12 @@ internal sealed unsafe partial class SceneExampleApp
         }
 
         _sceneRenderer = new PbrRenderer(
-            PbrClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
+            ClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
             PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice),
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
         InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer, visibility: _visibilityLod, transparency: _transparency))
+            .Add(new PbrRenderFeature(_sceneRenderer, PbrRenderFeatureOptions.FromProfile(_renderProfile), visibility: _visibilityLod, transparency: _transparency))
             .Build();
     }
 

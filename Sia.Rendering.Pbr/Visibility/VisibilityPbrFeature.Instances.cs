@@ -13,12 +13,13 @@ public sealed partial class VisibilityPbrFeature
     private InstanceSnapshot? _extractedInstances;
     private InstanceSnapshot? _preparedInstances;
     private RenderWorld? _instanceRenderWorld;
-    private readonly VisibilityChanges _sceneChanges = new();
+    private readonly SceneChanges _sceneChanges = new();
     private ulong _instanceVersion => _sceneChanges.Version;
     private readonly List<Entity> _instanceQuery = [];
-    private VisibilityInstanceSlots? _instanceSlots;
+    private SceneInstanceSlots? _instanceSlots;
     private VisibilityInstance?[] _instanceSources = [];
     private InstanceGpu[] _instanceConverted = [];
+    private SceneBoundsTree? _instanceBounds;
 
     public static VisibilityPbrFeature CreateGpuScene(in GpuFrame frame, ReadOnlySpan<MeshPatchTree> assets,
         int instanceCapacity, VisibilityAlbedo albedo, VisibilityLodSettings lod,
@@ -75,6 +76,7 @@ public sealed partial class VisibilityPbrFeature
         feature._instanceSlots = new(instanceCapacity);
         feature._instanceSources = new VisibilityInstance?[instanceCapacity];
         feature._instanceConverted = new InstanceGpu[instanceCapacity];
+        feature._instanceBounds = new(instanceCapacity);
         return feature;
     }
 
@@ -92,12 +94,11 @@ public sealed partial class VisibilityPbrFeature
         }
         var slots = _instanceSlots!;
         var changed = slots.Synchronize(entities);
-        Aabb? shadowBounds = null;
         uint roots = 0, meshlets = 0, triangles = 0;
         for (var i = 0; i < slots.Length; i++) {
             if (slots.Owners[i] is not { } entity) {
                 changed |= _instanceSources[i] is not null;
-                _instanceSources[i] = null; _instanceConverted[i] = default;
+                _instanceSources[i] = null; _instanceConverted[i] = default; _instanceBounds!.Set(i, null);
                 continue;
             }
             var source = entity.Get<VisibilityInstance>();
@@ -111,6 +112,9 @@ public sealed partial class VisibilityPbrFeature
                 // but invert/validate matrices only for actual mutations.
                 var converted = ToGpu(source, binding, MaterialCount,
                     (uint)source.MaterialIndex < (uint)_doubleSided.Length && _doubleSided[source.MaterialIndex]);
+                Aabb? bounds = null;
+                BoundsTransform.Include(ref bounds, _assetBounds[source.AssetIndex], source.Transform);
+                _instanceBounds!.Set(i, bounds);
                 _instanceSources[i] = source; _instanceConverted[i] = converted; changed = true;
             } else if (!_instanceConverted[i].Roots.Equals(binding)) {
                 _instanceConverted[i] = _instanceConverted[i] with { Roots = binding }; changed = true;
@@ -118,7 +122,6 @@ public sealed partial class VisibilityPbrFeature
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
-            IncludeBounds(ref shadowBounds, _assetBounds[source.AssetIndex], source.Transform);
         }
         if (roots > _lod.Budget.MaxPatches || meshlets > _lod.Budget.MaxMeshlets || triangles > _lod.Budget.MaxTriangles) {
             throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
@@ -128,13 +131,13 @@ public sealed partial class VisibilityPbrFeature
         // could not publish a snapshot. Compare against the last accepted state.
         changed |= _extractedInstances is null || slots.Length != _extractedInstances.Instances.Length
             || !_instanceConverted.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Instances)
-            || !slots.Owners.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Entities);
+            || !slots.Owners[..slots.Length].SequenceEqual(_extractedInstances.Entities);
         if (!changed && _extractedInstances is { } retained) { retained.Frame = context.RenderWorld.FrameIndex; }
         else {
-            _extractedInstances = new(slots.Owners.AsSpan(0, slots.Length).ToArray(),
+            _extractedInstances = new(slots.Owners[..slots.Length].ToArray(),
                 _instanceConverted.AsSpan(0, slots.Length).ToArray(), roots, meshlets, triangles) { Frame = context.RenderWorld.FrameIndex };
         }
-        ShadowBounds = shadowBounds;
+        ShadowBounds = _instanceBounds!.Bounds;
         _instanceRenderWorld = context.RenderWorld;
     }
 
@@ -189,8 +192,8 @@ public sealed partial class VisibilityPbrFeature
                 if (previous is not null && i < previous.Instances.Length && instances[i] == previous.Instances[i]) continue;
                 Aabb? bounds = null;
                 if (previous is not null && i < previous.Instances.Length && previous.Entities[i] is not null)
-                    IncludeBounds(ref bounds, _assetBounds[(int)previous.Instances[i].Roots.w], previous.Instances[i].Transform);
-                if (snapshot.Entities[i] is not null) IncludeBounds(ref bounds, _assetBounds[(int)instances[i].Roots.w], instances[i].Transform);
+                    BoundsTransform.Include(ref bounds, _assetBounds[(int)previous.Instances[i].Roots.w], previous.Instances[i].Transform);
+                if (snapshot.Entities[i] is not null) BoundsTransform.Include(ref bounds, _assetBounds[(int)instances[i].Roots.w], instances[i].Transform);
                 _sceneChanges.Add(bounds);
             }
         }

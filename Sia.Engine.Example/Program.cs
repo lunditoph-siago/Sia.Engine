@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Math;
 
@@ -11,6 +12,7 @@ public static partial class Program
     internal static readonly Stopwatch StartupClock = Stopwatch.StartNew();
     internal static int BenchmarkFrames { get; private set; }
     internal static bool BenchmarkMotion { get; private set; }
+    internal static RenderQuality Quality { get; private set; } = RenderQuality.Medium;
     public static async Task<int> Main(string[] args)
     {
         try {
@@ -107,6 +109,10 @@ public static partial class Program
             if (i + 1 == args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
             else if (args[i] == "--scene") { scenePath = args[i + 1]; }
+            else if (args[i] == "--quality") { Quality = args[i + 1] switch {
+                "low" => RenderQuality.Low, "medium" => RenderQuality.Medium, "high" => RenderQuality.High,
+                _ => throw new ArgumentException("Expected --quality low|medium|high.")
+            }; }
             else if (args[i] == "--benchmark-frames") {
                 if (!int.TryParse(args[i + 1], out var frames) || frames is < 120 or > 10000) throw new ArgumentException("Expected --benchmark-frames 120..10000.");
                 BenchmarkFrames = frames;
