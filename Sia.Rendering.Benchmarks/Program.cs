@@ -6,6 +6,15 @@ using Sia.Engine.Rendering.Benchmarks;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Math;
 
+if (args.SequenceEqual(new[] { "--verify-gpu-scene" })) {
+    await BenchmarkScene.VerifyInstancesAsync();
+    return;
+}
+if (args.SequenceEqual(new[] { "--verify-visibility-cache" })) {
+    await VisibilityCacheVerification.RunAsync();
+    return;
+}
+
 var suite = "smoke";
 var output = "visibility-benchmark.json";
 var warmup = 10;
@@ -44,6 +53,8 @@ if (args.Contains("--help")) {
           --suite smoke|scale|instances [--fixture grid|terrain|plane --size N]
         Framing: --view clip|frontal (frontal fits the asset bounds with a fixed orthographic view).
         Rendering options: --refinement-budget N --refinement-nodes N --in-flight N --no-timing
+        GPU Scene mutation/readback regression: --verify-gpu-scene
+        Cached visibility pixel regression: --verify-visibility-cache
           --repeats N (rerun each case N times in a fresh scene; reports cross-run RepeatSpread
           alongside the usual per-frame distribution, to separate device-clock noise from a real change)
         """);

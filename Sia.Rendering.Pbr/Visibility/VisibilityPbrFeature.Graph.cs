@@ -77,7 +77,7 @@ public sealed partial class VisibilityPbrFeature
         graph.BindImportedBuffer(key, buffer);
     }
 
-    private ViewState CreateView(List<Entity>? resources = null, bool enableTiming = true, LodGpu? lodOverride = null, uint? triangleCapacity = null)
+    private ViewState CreateView(List<Entity>? resources = null, bool shadow = false, LodGpu? lodOverride = null, uint? triangleCapacity = null)
     {
         var acquired = resources ?? new List<Entity>();
         var device = _device.GetWgpu<WGPUDevice>();
@@ -98,8 +98,8 @@ public sealed partial class VisibilityPbrFeature
                 BufferEntry(3, _geometry[1]), BufferEntry(4, _geometry[2]), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)];
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
             var lodView = lodConfiguration is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
-            var timing = enableTiming && _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
-            var clusters = _fixedGeometry is { } fixedGeometry ? CreateClusterView(fixedGeometry, uniform, workBuffer, indirect, limits, acquired) : (ClusterViewGpu?)null;
+            var timing = !shadow && _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
+            var clusters = _fixedGeometry is { } fixedGeometry ? CreateClusterView(fixedGeometry, uniform, workBuffer, indirect, limits, acquired, shadow) : (ClusterViewGpu?)null;
             var materialGroup = Own(_world, BindGroup(_materialTiles.GeometryLayout,
                 [BufferEntry(0, uniform), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)]), acquired);
             return new(this, uniform, outputUniform, group, workBuffer, indirect, workItems, lodView) {
@@ -191,14 +191,15 @@ public sealed partial class VisibilityPbrFeature
 
         private void Raster(WgpuReactiveRenderGraphPassContext context, bool post)
         {
+            if (post && ReuseVisibility) return;
             if (Timing is not null && IsCheckpoint(context)) { TimedRaster(context, post); return; }
             var pass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphColorAttachment(Owner.VisibilityTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear),
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear));
             Wgpu.SetRenderPipeline(pass, Owner._raster.GetWgpu<WGPURenderPipeline>());
             Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-            if (Owner._fixedGeometry is { } geometry) {
-                Wgpu.SetIndexBuffer(pass, geometry.Indices.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
+            if (Owner._fixedGeometry is not null) {
+                Wgpu.SetIndexBuffer(pass, Clusters!.Value.Indices.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
                 Wgpu.DrawIndexedIndirect(pass, Indirect.GetWgpu<WGPUBuffer>());
             } else { Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), post ? 32ul : 0ul); }
         }

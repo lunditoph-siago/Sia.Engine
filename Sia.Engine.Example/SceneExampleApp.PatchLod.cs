@@ -137,7 +137,7 @@ internal sealed partial class SceneExampleApp
         if (_patchStatus != status) {
             _patchStatus = status;
             var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
-                : $"{_materialInstanceCount} instances | {(_finest ? "Fixed finest" : "Auto LOD")}";
+                : $"{_materialInstanceCount} instances | {(_materialStream is not null ? "Streamed detail" : _finest ? "Fixed finest" : "Auto LOD")}";
             var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
             var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
                 : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";

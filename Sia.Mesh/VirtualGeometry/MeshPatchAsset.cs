@@ -19,6 +19,13 @@ public sealed partial class MeshPatchAsset
         new(Build.Tree.ExtractFinest(), Build.SourceTriangleCount, Build.RemovedDegenerateTriangleCount, 0, 0, 0),
         Settings, SourceHash);
 
+    /// <summary>Returns a standalone coarse cut suitable for a resident streaming fallback.</summary>
+    public MeshPatchAsset ExtractRoots()
+    {
+        var tree = Build.Tree.ExtractRoots();
+        return new(new(tree, tree.FinestTriangleCount, 0, 0, 0, 0), Settings, SourceHash);
+    }
+
     public static MeshPatchAsset Cook(MeshData source, MeshPatchBuildSettings? settings = null,
         CancellationToken cancellationToken = default)
     {

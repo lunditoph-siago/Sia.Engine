@@ -12,7 +12,7 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Benchmarks;
 
-internal sealed class BenchmarkScene : IDisposable
+internal sealed partial class BenchmarkScene : IDisposable
 {
     private static readonly RenderGraphTextureKey s_Color = new("benchmark-color");
     private static readonly RenderGraphTextureKey s_Depth = new("benchmark-depth");
@@ -45,7 +45,7 @@ internal sealed class BenchmarkScene : IDisposable
     public int GraphPassCount => _registry.PreparePlan().Graph.Passes.Count;
 
     public BenchmarkScene(GpuDevice gpu, MeshPatchTree tree, VisibilityInstance[] instances, uint width, uint height, MeshPatchBudget budget,
-        int inFlightFrames = 1)
+        int inFlightFrames = 1, bool retainedInstances = false)
     {
         _gpu = gpu; _width = width; _height = height;
         _refinementBudget = budget.MaxRefinementCandidates;
@@ -59,7 +59,11 @@ internal sealed class BenchmarkScene : IDisposable
             _camera = _main.Create(HList.From(CameraMatrices.Identity));
             _main.AcquireAddon<Viewport>().Value = new((int)width, (int)height);
             _registry = _graphWorld.ConfigureWgpuRenderGraph(gpu.Device, gpu.Queue);
-            _feature = VisibilityPbrFeature.CreateGpuLod(in _frame, tree, instances,
+            if (retainedInstances) foreach (var instance in instances) _main.Create(HList.From(instance));
+            _feature = retainedInstances ? VisibilityPbrFeature.CreateGpuScene(in _frame, [tree], instances.Length,
+                new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]),
+                new(8, budget), WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: gpu.TimingEnabled)
+                : VisibilityPbrFeature.CreateGpuLod(in _frame, tree, instances,
                 new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]),
                 new(8, budget), WGPUTextureFormat.RGBA8Unorm,
                 enableGpuTiming: gpu.TimingEnabled);
@@ -126,6 +130,7 @@ internal sealed class BenchmarkScene : IDisposable
         _camera.Get<CameraMatrices>() = CameraMatrices.Identity with { ViewProj = projection, WorldPosition = new float3(0, 0, 3) };
         _render.BeginFrame();
         _context = new(_render, _render.GetOrCreateView(new("benchmark")), new(_frame, _camera, s_Color, s_Depth));
+        _feature.Extract(in _context);
         _feature.Prepare(in _context);
         slot.PrepareMs = clock.Elapsed.TotalMilliseconds;
         clock.Restart();

@@ -170,6 +170,10 @@ internal sealed unsafe partial class SceneExampleApp
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
             eye = new float3(-16.1f, 4.0f, 1.7f);
             UpdateFreeCamera(deltaTime, ref eye, ref target);
+            if (Program.BenchmarkMotion && Program.BenchmarkFrames > 0) {
+                var yaw = 1.4f * MathF.Sin((_benchmarkFrames - 120) * MathF.Tau / Program.BenchmarkFrames);
+                target = eye + math.mul(quaternion.RotateY(yaw), target - eye);
+            }
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
             _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
         }

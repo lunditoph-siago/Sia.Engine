@@ -21,9 +21,9 @@ public sealed partial class VisibilityPbrFeature
 
     private readonly record struct FixedGeometryGpu(Entity Source, Entity Indices, Entity Layout, Entity Cull, Entity Scan, Entity Emit,
         uint Count, uint Stride, uint DispatchDimension, HzbGpu Hzb,
-        Entity CullLayout, Entity CullMain, Entity CullPost, Entity ScanPost, Entity EmitLayout, Entity Compact, bool SharedVertices);
+        Entity CullLayout, Entity CullMain, Entity CullPost, Entity ScanPost, Entity EmitLayout, Entity Compact, Entity Cache, bool SharedVertices);
 
-    private readonly record struct ClusterViewGpu(Entity Prefix, Entity Blocks, Entity Group, Entity CullGroup, Entity EmitGroup);
+    private readonly record struct ClusterViewGpu(Entity Prefix, Entity Blocks, Entity Group, Entity CullGroup, Entity EmitGroup, Entity Indices);
 
     private float4 RasterOrigin(float4x4 projection)
     {
@@ -37,11 +37,13 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe FixedGeometryGpu CreateFixedGeometry(World world, WgpuHandle<WGPUDevice> device,
-        WgpuHandle<WGPUQueue> queue, ReadOnlySpan<FixedClusterGpu> clusters, WGPULimits limits, List<Entity> acquired, bool worldSpace)
+        WgpuHandle<WGPUQueue> queue, ReadOnlySpan<FixedClusterGpu> clusters, WGPULimits limits, List<Entity> acquired, bool worldSpace,
+        uint? reservedTriangles = null)
     {
         var stride = 1u;
         uint triangles = 0;
         foreach (var cluster in clusters) { stride = System.Math.Max(stride, cluster.Work.z); triangles = checked(triangles + cluster.Work.z); }
+        if (reservedTriangles is { } reservation) { triangles = reservation; stride = 128; }
         stride = System.Numerics.BitOperations.RoundUpToPowerOf2(stride);
         _ = checked((uint)clusters.Length * System.Math.Max(stride * 3u, 256u) * 2u);
         _ = checked(triangles * 3u);
@@ -79,27 +81,34 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, shader, pipeline, "scan_post", acquired),
             emitLayout,
             ComputePipeline(world, device, shader, pipeline, "compact", acquired),
+            ComputePipeline(world, device, shader, pipeline, "cache_draw", acquired),
             WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0);
     }
 
     private ClusterViewGpu CreateClusterView(FixedGeometryGpu geometry, Entity uniform, Entity work, Entity indirect,
-        WGPULimits limits, List<Entity> acquired)
+        WGPULimits limits, List<Entity> acquired, bool shadow)
     {
         var device = _device.GetWgpu<WGPUDevice>();
-        var prefix = Allocate(_world, device, geometry.Count * 16ul + 8, WGPUBufferUsage.Storage, limits, acquired);
+        var prefix = Allocate(_world, device, geometry.Count * 16ul + 16, WGPUBufferUsage.Storage, limits, acquired);
+        // Main views retain complete index lists. Shadow views share scratch space
+        // because their cached result is the atlas depth, not the index list.
+        var indices = shadow ? geometry.Indices : Allocate(_world, device, Wgpu.GetBufferSize(geometry.Indices.GetWgpu<WGPUBuffer>()),
+            WGPUBufferUsage.Storage | WGPUBufferUsage.Index, limits, acquired);
         var blocks = Allocate(_world, device, CompactionGroups(geometry.Count) * 8ul, WGPUBufferUsage.Storage, limits, acquired);
         WGPUBindGroupEntry[] entries = [BufferEntry(0, uniform), BufferEntry(1, geometry.Source),
             BufferEntry(2, _geometry[3]), BufferEntry(3, prefix), BufferEntry(4, blocks),
-            BufferEntry(5, work), BufferEntry(6, indirect), BufferEntry(7, _geometry[1]), BufferEntry(8, geometry.Indices)];
+            BufferEntry(5, work), BufferEntry(6, indirect), BufferEntry(7, _geometry[1]), BufferEntry(8, indices)];
         var group = Own(_world, BindGroup(geometry.Layout, entries), acquired);
         var cullGroup = Own(_world, BindGroup(geometry.CullLayout, entries.AsSpan(0, 7)), acquired);
         var emitGroup = Own(_world, BindGroup(geometry.EmitLayout, entries.Where(entry => entry.Binding != 6).ToArray()), acquired);
-        return new(prefix, blocks, group, cullGroup, emitGroup);
+        return new(prefix, blocks, group, cullGroup, emitGroup, indices);
     }
 
     private sealed partial class ViewState
     {
         public ClusterViewGpu? Clusters { get; init; }
+        public bool ReuseVisibility { get; set; }
+        public VisibilityContent? CachedVisibility { get; set; }
 
         public void BuildClusterGraph(ref RenderGraphBuildContext graph)
         {
@@ -108,7 +117,7 @@ public sealed partial class VisibilityPbrFeature
             ImportBuffer(ref graph, s_FixedClustersKey, geometry.Source, RenderGraphBufferUsage.Storage);
             ImportBuffer(ref graph, s_ClusterPrefixKey, view.Prefix, RenderGraphBufferUsage.Storage);
             ImportBuffer(ref graph, s_ClusterBlocksKey, view.Blocks, RenderGraphBufferUsage.Storage);
-            ImportBuffer(ref graph, s_ClusterIndicesKey, geometry.Indices, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
+            ImportBuffer(ref graph, s_ClusterIndicesKey, view.Indices, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
             var hzb = Hzb!.Value;
             ImportBuffer(ref graph, s_HzbKey, hzb.Buffer, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.CopySource);
             ImportBuffer(ref graph, s_HzbParamsKey, hzb.Parameters, RenderGraphBufferUsage.Uniform);
@@ -133,7 +142,23 @@ public sealed partial class VisibilityPbrFeature
                 DeclarePostRaster(declaration);
                 declaration.Read(s_ClusterIndicesKey, RenderGraphBufferUsage.Index);
             }, PostRaster);
+            graph.UseComputePass(new("visibility-cache-draw"), "visibility-cache-draw", declaration => {
+                declaration.ReadWrite(s_IndirectKey, RenderGraphBufferUsage.Storage);
+            }, CacheDraw);
             graph.ExportBuffer(s_HzbKey, RenderGraphBufferUsage.Storage);
+        }
+
+        private void CacheDraw(WgpuReactiveRenderGraphPassContext context)
+        {
+            if (ReuseVisibility) return;
+            var pass = BeginCompute(context);
+            try {
+                Wgpu.SetBindGroup(pass, 0, Clusters!.Value.Group.GetWgpu<WGPUBindGroup>());
+                Wgpu.SetComputePipeline(pass, Owner._fixedGeometry!.Value.Cache.GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroups(pass, 1);
+            }
+            finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+            CachedVisibility = new(Projection, Width, Height, Owner._instanceVersion);
         }
 
         public void CullClusters(WgpuReactiveRenderGraphPassContext context) => CullClusters(context, false);
@@ -141,6 +166,7 @@ public sealed partial class VisibilityPbrFeature
 
         private void CullClusters(WgpuReactiveRenderGraphPassContext context, bool post)
         {
+            if (ReuseVisibility) return;
             var geometry = Owner._fixedGeometry!.Value;
             var count = CompactionGroups(geometry.Count);
             var width = System.Math.Min(count, geometry.DispatchDimension);
@@ -164,4 +190,6 @@ public sealed partial class VisibilityPbrFeature
             finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
         }
     }
+
+    private readonly record struct VisibilityContent(float4x4 Projection, uint Width, uint Height, ulong Version);
 }
