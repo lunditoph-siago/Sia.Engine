@@ -9,6 +9,7 @@ namespace Sia.Engine.Rendering.Pbr;
 public sealed partial class VisibilityPbrFeature
 {
     private Entity _shadowRaster;
+    private static readonly RenderGraphBufferKey s_ShadowClusterIndicesKey = new("visibility-shadow-cluster-indices");
 
     internal void PrepareShadows(in RenderFeatureContext<RenderFrameContext> context, PbrViewState lighting,
         ShadowAtlasConfig config, bool noForwardCasters)
@@ -38,7 +39,7 @@ public sealed partial class VisibilityPbrFeature
                 if (main.Shadows.ContainsKey(layer)) { continue; }
                 var acquired = new List<Entity>();
                 try {
-                    var view = CreateView(acquired, enableTiming: false, lodOverride: _shadowLod, triangleCapacity: ShadowTriangleCapacity);
+                    var view = CreateView(acquired, shadow: true, lodOverride: _shadowLod, triangleCapacity: ShadowTriangleCapacity);
                     var group = _shadowIndices is { } indices ? CreateShadowIndexGroup(indices, view, acquired) : default;
                     additions.Add(new(layer, view, acquired.ToArray(), group));
                 }
@@ -55,13 +56,18 @@ public sealed partial class VisibilityPbrFeature
             var shadow = main.Shadows[layer];
             var view = shadow.View;
             var projection = shadows.LayerViewProj(layer);
-            // Fixed-scene geometry and instances are immutable. Dynamic LOD scenes
-            // and mixed forward casters must continue rendering their shadows.
+            // Residency changes outside this light's clip volume do not alter its depth.
             shadow.Cacheable = _fixedGeometry is not null && noForwardCasters && DebugMode == VisibilityDebugMode.Shaded;
             if (!shadow.Cacheable) { shadow.Rendered = null; }
-            shadow.Pending = new(lighting.ShadowAtlas.Texture, projection, config.TileResolution);
-            shadow.Reuse = shadow.Cacheable && shadow.Rendered == shadow.Pending;
-            if (shadow.Reuse) { lighting.RetainedShadowLayers.Add(layer); continue; }
+            shadow.Pending = new(lighting.ShadowAtlas.Texture, projection, config.TileResolution, _instanceVersion);
+            shadow.Reuse = shadow.Cacheable && shadow.Rendered is { } rendered
+                && rendered.Atlas == shadow.Pending.Atlas && rendered.Projection.Equals(projection)
+                && rendered.Resolution == config.TileResolution
+                && !_sceneChanges.IntersectsSince(rendered.GeometryVersion, projection);
+            _frameStatistics = _frameStatistics with {
+                ShadowsReused = _frameStatistics.ShadowsReused + (shadow.Reuse ? 1 : 0),
+                ShadowsRendered = _frameStatistics.ShadowsRendered + (shadow.Reuse ? 0 : 1) };
+            if (shadow.Reuse) { shadow.Rendered = shadow.Pending; lighting.RetainedShadowLayers.Add(layer); continue; }
             view.Width = config.TileResolution; view.Height = config.TileResolution;
             Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0,
                 [new(projection, default, new(config.TileResolution, config.TileResolution, TriangleCount, 0), default, default,
@@ -80,6 +86,8 @@ public sealed partial class VisibilityPbrFeature
     {
         var main = context.View.PersistentResources.GetRequired<ViewState>();
         main.ShadowAtlas = atlas;
+        if (_fixedGeometry is { } fixedGeometry) ImportBuffer(ref graph, s_ShadowClusterIndicesKey, fixedGeometry.Indices,
+            RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
         if (_shadowLod is { } lod) { ImportBuffer(ref graph, new("visibility-shadow-lod-params"), lod.Parameters, RenderGraphBufferUsage.Uniform); }
         if (_shadowIndices is { } indices) {
             ImportBuffer(ref graph, new("visibility-shadow-indices"), indices.Indices, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
@@ -88,7 +96,7 @@ public sealed partial class VisibilityPbrFeature
         graph.UseComputePass(new("visibility-shadows"), "visibility-shadows", main.DeclareShadows, main.RenderShadows);
     }
 
-    private readonly record struct ShadowContent(Entity Atlas, float4x4 Projection, uint Resolution);
+    private readonly record struct ShadowContent(Entity Atlas, float4x4 Projection, uint Resolution, ulong GeometryVersion);
 
     private sealed record ShadowView(int Layer, ViewState View, Entity[] Resources, Entity IndexGroup)
     {
@@ -114,7 +122,7 @@ public sealed partial class VisibilityPbrFeature
             }
             if (Owner._fixedGeometry is not null) {
                 declaration.Read(s_FixedClustersKey, RenderGraphBufferUsage.Storage)
-                    .ReadWrite(s_ClusterIndicesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
+                    .ReadWrite(s_ShadowClusterIndicesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
             }
             if (Owner._gpuLod is not null) {
                 declaration.Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform);

@@ -82,7 +82,7 @@ fn cull(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
     if (block >= (count + 255u) / 256u) { return; }
     let index = block * 256u + lane;
     var visible = vec2<u32>(0u);
-    if (index < count && !outside_frustum(clusters[index]) && !backfacing(clusters[index])) {
+    if (index < count && clusters[index].work.z != 0u && !outside_frustum(clusters[index]) && !backfacing(clusters[index])) {
         visible = vec2<u32>(1u, clusters[index].work.z);
     }
     let sum = inclusive_sum(lane, visible);
@@ -105,7 +105,7 @@ fn cull_occlusion(group: vec3<u32>, lane: u32, post: bool) {
                 && !occluded(cluster.minimum.xyz, cluster.maximum.xyz, camera.view_projection * transform)) {
                 visible = vec2<u32>(1u, cluster.work.z);
             }
-        } else if (!outside_frustum(cluster) && !backfacing(cluster)) {
+        } else if (cluster.work.z != 0u && !outside_frustum(cluster) && !backfacing(cluster)) {
             if (hierarchy.size.w != 0u && occluded(cluster.minimum.xyz, cluster.maximum.xyz, hierarchy.previous_projection * transform)) {
                 deferred = 0x40000000u;
             } else { visible = vec2<u32>(1u, cluster.work.z); }
@@ -138,7 +138,8 @@ fn scan_blocks(lane: u32, post: bool) {
         workgroupBarrier();
     }
     if (lane == 0u) {
-        draw[0] = carry.y * 3u; draw[1] = 1u; draw[2] = 0u; draw[3] = 0u; draw[4] = 0u;
+        let triangle_base = select(0u, draw[7], post);
+        draw[0] = carry.y * 3u; draw[1] = 1u; draw[2] = triangle_base * 3u; draw[3] = 0u; draw[4] = 0u;
         draw[6] = select(0u, draw[5], post);
         draw[5] = draw[6] + carry.x;
         draw[7] = select(0u, draw[7], post) + carry.y;
@@ -146,6 +147,7 @@ fn scan_blocks(lane: u32, post: bool) {
         draw[9] = min((carry.x + camera.raster.z - 1u) / camera.raster.z, camera.raster.z);
         draw[10] = 1u;
         prefix[camera.raster.y * 2u] = vec2<u32>(carry.x, draw[6]);
+        prefix[camera.raster.y * 2u + 1u] = vec2<u32>(triangle_base, 0u);
     }
 }
 
@@ -154,6 +156,10 @@ fn scan(@builtin(local_invocation_index) lane: u32) { scan_blocks(lane, false); 
 
 @compute @workgroup_size(256)
 fn scan_post(@builtin(local_invocation_index) lane: u32) { scan_blocks(lane, true); }
+
+// Called after both raster passes. Keep their union for an unchanged view.
+@compute @workgroup_size(1)
+fn cache_draw() { draw[0] = draw[7] * 3u; draw[2] = 0u; }
 
 // Preserve source order while dispatching index generation only for survivors.
 @compute @workgroup_size(256)
@@ -171,7 +177,7 @@ fn emit_cluster(ordinal: u32, lane: u32) {
     if (ordinal >= range.x) { return; }
     let entry = prefix[camera.raster.y + ordinal];
     let index = entry.x;
-    let offset = vec2<u32>(ordinal + range.y, entry.y);
+    let offset = vec2<u32>(ordinal + range.y, entry.y + prefix[camera.raster.y * 2u + 1u].x);
     let cluster = clusters[index].work;
     if (lane == 0u) { work[offset.x] = cluster.xy; }
     for (var triangle = lane; triangle < cluster.z; triangle += 64u) {

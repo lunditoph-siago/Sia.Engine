@@ -4,6 +4,7 @@ const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
 const pipeline = parameters.get('pipeline') ?? 'pbr';
 const finest = parameters.get('lod') !== 'auto';
+const streaming = (parameters.get('scene') ?? '').split('?')[0].endsWith('.siastream');
 const inspection = document.getElementById('inspection');
 const settingsToggle = document.getElementById('settings-toggle');
 const distanceControl = document.getElementById('inspection-distance');
@@ -124,7 +125,7 @@ function setInspectionStatus(distance, flags) {
   const touring = (flags & 1) !== 0, triangles = (flags & 2) !== 0, atmosphere = (flags & 4) !== 0;
   atmosphereEnabled = atmosphere;
   document.getElementById('inspection-status').textContent = pipeline === 'pbr'
-    ? (finest ? 'Geometry · Full detail' : 'Geometry · Automatic LOD') : '135 bunnies · Automatic LOD';
+    ? (streaming ? 'Geometry · Streamed detail' : finest ? 'Geometry · Full detail' : 'Geometry · Automatic LOD') : '135 bunnies · Automatic LOD';
   distanceControl.value = Math.round(distance * 1000);
   tourControl.textContent = touring ? 'Pause tour' : 'Resume tour';
   materialControl.textContent = triangles ? 'Show shaded' : 'Show triangles';
@@ -133,8 +134,9 @@ function setInspectionStatus(distance, flags) {
   atmosphereControl.setAttribute('aria-pressed', String(atmosphereEnabled));
 }
 
-function getCanvasWidth() { return Math.max(1, Math.round(window.innerWidth)); }
-function getCanvasHeight() { return Math.max(1, Math.round(window.innerHeight)); }
+// Keep benchmark work fixed even when the browser panel is resized during a run.
+function getCanvasWidth() { return parameters.has('benchmark-frames') ? 1280 : Math.max(1, Math.round(window.innerWidth)); }
+function getCanvasHeight() { return parameters.has('benchmark-frames') ? 720 : Math.max(1, Math.round(window.innerHeight)); }
 function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
@@ -175,7 +177,7 @@ if (pipeline === 'pbr') {
   atmosphereControl.hidden = false;
   document.getElementById('inspection-help').textContent = 'Touch: left stick to move, drag the right half to look, hold ↑ / ↓ to change height. Keyboard: WASD to move, Q / E down / up, arrows or right mouse drag to look, Shift to move faster, R to reset.';
   const lodControl = document.getElementById('inspection-lod');
-  lodControl.hidden = false;
+  lodControl.hidden = streaming;
   lodControl.textContent = finest ? 'Compare automatic LOD' : 'Use full detail';
   lodControl.addEventListener('click', () => {
     lodControl.disabled = true;
@@ -238,6 +240,8 @@ try {
       scene.searchParams.set('sha256', hash);
     }
     args.push('--scene', scene.href);
+    if (parameters.has('benchmark-frames')) args.push('--benchmark-frames', parameters.get('benchmark-frames'));
+    if (parameters.has('benchmark-motion')) args.push('--benchmark-motion', parameters.get('benchmark-motion'));
   }
   setLoadingState('Starting engine runtime', NaN);
   // Preload runtime/timer/HTTP workers plus the four bounded CPU decoder workers.

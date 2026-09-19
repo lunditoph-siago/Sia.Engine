@@ -37,6 +37,13 @@
     <Copy SourceFiles="$(BistroAssetPath)" DestinationFiles="$(_BistroPublishPath)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(BistroFinestAssetPath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/BistroFinest.siapbr" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(_BistroLicensePath)" DestinationFiles="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Bistro.LICENSE.txt" SkipUnchangedFiles="true" />
+    <Error Condition="'$(BistroStreamDirectory)' != '' and !Exists('$(BistroStreamDirectory)/Bistro.siastream')"
+           Text="BistroStreamDirectory must contain a cooked Bistro.siastream manifest." />
+    <ItemGroup Condition="'$(BistroStreamDirectory)' != ''">
+      <_BistroStreamFiles Include="$(BistroStreamDirectory)/*.chunk;$(BistroStreamDirectory)/Bistro.siastream" />
+    </ItemGroup>
+    <Copy Condition="'$(BistroStreamDirectory)' != ''" SourceFiles="@(_BistroStreamFiles)"
+          DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Stream" SkipUnchangedFiles="true" />
     <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
       <_BistroIndexHtml>$([System.IO.File]::ReadAllText('$(PublishDir)/wwwroot/index.html').Replace('__BISTRO_SHA256__', '$(_BistroAssetHash)').Replace('__BISTRO_FINEST_SHA256__', '$(_BistroFinestAssetHash)'))</_BistroIndexHtml>
     </PropertyGroup>

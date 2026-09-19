@@ -34,12 +34,14 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     public SceneExampleApp(ScenePipeline pipeline, Sia.Engine.Mesh.MeshPatchAsset? patchAsset = null,
         Sia.Engine.Rendering.Pbr.VisibilityDebugMode? debugMode = null, float? distance = null,
         Sia.Engine.Rendering.Pbr.PbrSceneAsset? materialScene = null, bool finest = false,
-        (Sia.Math.float3 Eye, Sia.Math.float3 Target)? camera = null)
+        (Sia.Math.float3 Eye, Sia.Math.float3 Target)? camera = null,
+        Sia.Engine.Rendering.Pbr.PbrSceneStream? streaming = null)
     {
         _pipeline = pipeline;
         _patchAsset = patchAsset;
         _materialScene = materialScene;
-        _materialInstanceCount = materialScene?.Instances.Length ?? 0;
+        _materialStream = streaming;
+        _materialInstanceCount = (materialScene?.Instances.Length ?? 0) + (streaming?.Instances.Length ?? 0);
         _finest = finest;
         _initialCamera = camera;
         _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny
@@ -330,6 +332,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private void RenderFrame()
     {
+        var benchmarkStart = Stopwatch.GetTimestamp();
         var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         if (surfaceTexture.Status is not (
             WGPUSurfaceGetCurrentTextureStatus.SuccessOptimal
@@ -356,6 +359,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 #if !BROWSER
             Wgpu.PresentSurfaceOrThrow(_surface);
 #endif
+            RecordBenchmark(benchmarkStart);
         }
         finally {
             Wgpu.Release(ref surfaceTexture);

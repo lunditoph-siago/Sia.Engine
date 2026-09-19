@@ -8,16 +8,27 @@ namespace Sia.Engine.Example;
 
 public static partial class Program
 {
+    internal static readonly Stopwatch StartupClock = Stopwatch.StartNew();
+    internal static int BenchmarkFrames { get; private set; }
+    internal static bool BenchmarkMotion { get; private set; }
     public static async Task<int> Main(string[] args)
     {
         try {
+#if !BROWSER
+            if (args.Length == 4 && args[0] == "--cook-stream" && args[2] == "--output") {
+                await CookStreamAsync(args[1], args[3]); return 0;
+            }
+#endif
 #if BROWSER
             BrowserOwner = await BrowserThread.StartAsync();
 #endif
             var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
+            using var streamHttp = new HttpClient();
+            await using var streaming = scenePath is not null && scenePath.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase)
+                ? await OpenStreamAsync(scenePath, streamHttp) : null;
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
-            var scene = pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath, finest) : null;
-            var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera);
+            var scene = streaming?.Bootstrap ?? (pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath, finest) : null);
+            var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera, streaming);
             scene = null;
 #if BROWSER
             try {
@@ -25,9 +36,9 @@ public static partial class Program
                 await Task.Delay(20);
                 await app.RunAsync();
             }
-            finally { await BrowserOwner.RunGraphicsAsync(() => { app.Dispose(); return Task.FromResult(0); }); }
+            finally { await app.StopSceneStreamingAsync(); await BrowserOwner.RunGraphicsAsync(() => { app.Dispose(); return Task.FromResult(0); }); }
 #else
-            using (app) { app.Run(); }
+            using (app) { try { app.Run(); } finally { await app.StopSceneStreamingAsync(); } }
 #endif
             return 0;
         }
@@ -96,6 +107,11 @@ public static partial class Program
             if (i + 1 == args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
             else if (args[i] == "--scene") { scenePath = args[i + 1]; }
+            else if (args[i] == "--benchmark-frames") {
+                if (!int.TryParse(args[i + 1], out var frames) || frames is < 120 or > 10000) throw new ArgumentException("Expected --benchmark-frames 120..10000.");
+                BenchmarkFrames = frames;
+            }
+            else if (args[i] == "--benchmark-motion") { BenchmarkMotion = bool.Parse(args[i + 1]); }
             else if (args[i] == "--camera") {
                 var values = args[i + 1].Split(',');
                 var numbers = new float[6];
@@ -133,6 +149,9 @@ public static partial class Program
         }
         if ((scenePath is not null || finest is not null || camera is not null) && pipeline != ScenePipeline.Pbr) {
             throw new ArgumentException("--scene, --lod and --camera require --pipeline pbr.");
+        }
+        if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
+            throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
         }
         return (pipeline, debugMode, distance, scenePath, finest ?? true, camera);
     }

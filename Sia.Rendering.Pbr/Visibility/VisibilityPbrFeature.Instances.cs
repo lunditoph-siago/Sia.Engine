@@ -13,7 +13,12 @@ public sealed partial class VisibilityPbrFeature
     private InstanceSnapshot? _extractedInstances;
     private InstanceSnapshot? _preparedInstances;
     private RenderWorld? _instanceRenderWorld;
-    private ulong _instanceVersion;
+    private readonly VisibilityChanges _sceneChanges = new();
+    private ulong _instanceVersion => _sceneChanges.Version;
+    private readonly List<Entity> _instanceQuery = [];
+    private VisibilityInstanceSlots? _instanceSlots;
+    private VisibilityInstance?[] _instanceSources = [];
+    private InstanceGpu[] _instanceConverted = [];
 
     public static VisibilityPbrFeature CreateGpuScene(in GpuFrame frame, ReadOnlySpan<MeshPatchTree> assets,
         int instanceCapacity, VisibilityAlbedo albedo, VisibilityLodSettings lod,
@@ -67,31 +72,49 @@ public sealed partial class VisibilityPbrFeature
         var feature = Create(in frame, scene.Geometry, [], albedo, outputFormat, mode, null, lod, enableGpuTiming, scene, materials);
         feature._instanceWorld = frame.MainWorld;
         feature._instanceAssets = ranges;
+        feature._instanceSlots = new(instanceCapacity);
+        feature._instanceSources = new VisibilityInstance?[instanceCapacity];
+        feature._instanceConverted = new InstanceGpu[instanceCapacity];
         return feature;
     }
 
     public void Extract(in RenderFeatureContext<RenderFrameContext> context)
     {
         ValidateFrame(in context);
+        BeginStatistics(context.RenderWorld.FrameIndex);
         if (_instanceWorld is null) { return; }
         if (_extractedInstances?.Frame == context.RenderWorld.FrameIndex) { return; }
-        var entities = new List<Entity>();
+        var entities = _instanceQuery;
+        entities.Clear();
         _instanceWorld.Query(s_InstanceMatcher, entities, static (in List<Entity> list, Entity entity) => list.Add(entity));
         if ((uint)entities.Count > InstanceCapacity) {
             throw new InvalidOperationException("The scene instance count exceeds the reserved visibility capacity.");
         }
-        entities.Sort(static (a, b) => a.Id.Value.CompareTo(b.Id.Value));
-        var instances = new InstanceGpu[entities.Count];
+        var slots = _instanceSlots!;
+        var changed = slots.Synchronize(entities);
         Aabb? shadowBounds = null;
         uint roots = 0, meshlets = 0, triangles = 0;
-        for (var i = 0; i < instances.Length; i++) {
-            var source = entities[i].Get<VisibilityInstance>();
+        for (var i = 0; i < slots.Length; i++) {
+            if (slots.Owners[i] is not { } entity) {
+                changed |= _instanceSources[i] is not null;
+                _instanceSources[i] = null; _instanceConverted[i] = default;
+                continue;
+            }
+            var source = entity.Get<VisibilityInstance>();
             if ((uint)source.AssetIndex >= (uint)_instanceAssets.Length) {
                 throw new ArgumentOutOfRangeException(nameof(source.AssetIndex), "The instance asset index is outside the scene asset table.");
             }
             var asset = _instanceAssets[source.AssetIndex];
-            instances[i] = ToGpu(source, new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex), MaterialCount,
-                (uint)source.MaterialIndex < (uint)_doubleSided.Length && _doubleSided[source.MaterialIndex]);
+            var binding = new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex);
+            if (_instanceSources[i] is not { } cached || cached != source) {
+                // Component refs may change without events. Compare the source,
+                // but invert/validate matrices only for actual mutations.
+                var converted = ToGpu(source, binding, MaterialCount,
+                    (uint)source.MaterialIndex < (uint)_doubleSided.Length && _doubleSided[source.MaterialIndex]);
+                _instanceSources[i] = source; _instanceConverted[i] = converted; changed = true;
+            } else if (!_instanceConverted[i].Roots.Equals(binding)) {
+                _instanceConverted[i] = _instanceConverted[i] with { Roots = binding }; changed = true;
+            }
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
@@ -101,7 +124,16 @@ public sealed partial class VisibilityPbrFeature
             throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
         }
         if (_lod.Shadows is { } shadow) { ValidateShadowRoots(new(roots, meshlets, triangles), shadow.Budget); }
-        _extractedInstances = new(context.RenderWorld.FrameIndex, entities.ToArray(), instances, roots, meshlets, triangles);
+        // A prior invalid extraction may have updated validated CPU entries but
+        // could not publish a snapshot. Compare against the last accepted state.
+        changed |= _extractedInstances is null || slots.Length != _extractedInstances.Instances.Length
+            || !_instanceConverted.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Instances)
+            || !slots.Owners.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Entities);
+        if (!changed && _extractedInstances is { } retained) { retained.Frame = context.RenderWorld.FrameIndex; }
+        else {
+            _extractedInstances = new(slots.Owners.AsSpan(0, slots.Length).ToArray(),
+                _instanceConverted.AsSpan(0, slots.Length).ToArray(), roots, meshlets, triangles) { Frame = context.RenderWorld.FrameIndex };
+        }
         ShadowBounds = shadowBounds;
         _instanceRenderWorld = context.RenderWorld;
     }
@@ -133,9 +165,11 @@ public sealed partial class VisibilityPbrFeature
             var end = start + 1;
             while (end < instances.Length && (previous is null || end >= previous.Instances.Length || instances[end] != previous.Instances[end])) { end++; }
             Wgpu.WriteBuffer<InstanceGpu>(queue, _geometry[3].GetWgpu<WGPUBuffer>(), (ulong)start * 192, instances.AsSpan(start, end - start));
+            _frameStatistics = _frameStatistics with { InstanceUploads = _frameStatistics.InstanceUploads + end - start };
             for (var i = start; i < end && !changed; i++) {
                 changed = previous is null || i >= previous.Instances.Length
-                    || !instances[i].Transform.Equals(previous.Instances[i].Transform) || !instances[i].Roots.Equals(previous.Instances[i].Roots);
+                    || !instances[i].Transform.Equals(previous.Instances[i].Transform) || !instances[i].Roots.Equals(previous.Instances[i].Roots)
+                    || instances[i].Material.z != previous.Instances[i].Material.z || instances[i].Material.w != previous.Instances[i].Material.w;
             }
             start = end;
         }
@@ -149,8 +183,18 @@ public sealed partial class VisibilityPbrFeature
             Wgpu.WriteBuffer<uint>(queue, _gpuLod!.Value.Parameters.GetWgpu<WGPUBuffer>(), 40,
                 [snapshot.RootMeshlets, snapshot.RootTriangles]);
         }
-        if (changed) { _instanceVersion = checked(_instanceVersion + 1); }
-        InstanceCount = (uint)instances.Length;
+        if (changed) {
+            // Both old and new bounds are required when moving or removing a caster.
+            for (var i = 0; i < instances.Length; i++) {
+                if (previous is not null && i < previous.Instances.Length && instances[i] == previous.Instances[i]) continue;
+                Aabb? bounds = null;
+                if (previous is not null && i < previous.Instances.Length && previous.Entities[i] is not null)
+                    IncludeBounds(ref bounds, _assetBounds[(int)previous.Instances[i].Roots.w], previous.Instances[i].Transform);
+                if (snapshot.Entities[i] is not null) IncludeBounds(ref bounds, _assetBounds[(int)instances[i].Roots.w], instances[i].Transform);
+                _sceneChanges.Add(bounds);
+            }
+        }
+        InstanceCount = (uint)_instanceSlots!.Count;
         _preparedInstances = snapshot;
     }
 
@@ -182,7 +226,10 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private readonly record struct AssetRoots(uint Offset, uint Count, uint Meshlets, uint Triangles);
-    private sealed record InstanceSnapshot(ulong Frame, Entity[] Entities, InstanceGpu[] Instances, uint RootCount, uint RootMeshlets, uint RootTriangles);
+    private sealed record InstanceSnapshot(Entity?[] Entities, InstanceGpu[] Instances, uint RootCount, uint RootMeshlets, uint RootTriangles)
+    {
+        public ulong Frame { get; set; }
+    }
 
     private sealed partial class ViewState
     {

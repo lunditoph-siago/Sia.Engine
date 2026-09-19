@@ -3,28 +3,38 @@ namespace Sia.Engine.Mesh;
 public sealed partial class MeshPatchTree
 {
     internal MeshPatchTree ExtractFinest()
+        => ExtractCut(false);
+
+    internal MeshPatchTree ExtractRoots()
+        => ExtractCut(true);
+
+    private MeshPatchTree ExtractCut(bool roots)
     {
-        var (geometry, meshlets) = CopyFinestGeometry();
+        var (geometry, meshlets) = CopyCutGeometry(roots);
         var count = 0;
-        foreach (var node in Nodes.Span) { if (node.ChildCount == 0) { count++; } }
+        foreach (var node in Nodes.Span) { if (roots ? node.Parent < 0 : node.ChildCount == 0) { count++; } }
         var nodes = new MeshPatchNode[count];
         int next = 0, triangle = 0, meshlet = 0;
         foreach (var node in Nodes.Span) {
-            if (node.ChildCount != 0) { continue; }
-            nodes[next++] = node with { Parent = -1, ChildOffset = nodes.Length, TriangleOffset = triangle, MeshletOffset = meshlet };
+            if (roots ? node.Parent >= 0 : node.ChildCount != 0) { continue; }
+            nodes[next++] = node with { Parent = -1, ChildOffset = nodes.Length, ChildCount = 0, EstimatedSpatialError = 0, TriangleOffset = triangle, MeshletOffset = meshlet };
             triangle += node.TriangleCount;
             meshlet += node.MeshletCount;
         }
-        return new(nodes, nodes.Length, FinestTriangleCount, geometry, meshlets);
+        return new(nodes, nodes.Length, triangle, geometry, meshlets);
     }
 
     public (MeshData Geometry, MeshletData Meshlets) CopyFinestGeometry()
+        => CopyCutGeometry(false);
+
+    private (MeshData Geometry, MeshletData Meshlets) CopyCutGeometry(bool roots)
     {
         var remap = new int[_geometry.Vertices.Length];
         Array.Fill(remap, -1);
-        int vertexCount = 0, meshletCount = 0, referenceCount = 0;
+        int vertexCount = 0, meshletCount = 0, referenceCount = 0, triangleCount = 0;
         foreach (var node in Nodes.Span) {
-            if (node.ChildCount != 0) { continue; }
+            if (roots ? node.Parent >= 0 : node.ChildCount != 0) { continue; }
+            triangleCount = checked(triangleCount + node.TriangleCount);
             meshletCount = checked(meshletCount + node.MeshletCount);
             foreach (var cluster in _meshlets.Meshlets.AsSpan(node.MeshletOffset, node.MeshletCount)) {
                 referenceCount = checked(referenceCount + cluster.VertexCount);
@@ -35,14 +45,14 @@ public sealed partial class MeshPatchTree
         }
         var vertices = new MeshVertex[vertexCount];
         for (var i = 0; i < remap.Length; i++) { if (remap[i] >= 0) { vertices[remap[i]] = _geometry.Vertices[i]; } }
-        var indices = new uint[checked(FinestTriangleCount * 3)];
+        var indices = new uint[checked(triangleCount * 3)];
         var clusters = new Meshlet[meshletCount];
         var references = new uint[referenceCount];
         var localIndices = new byte[indices.Length];
-        var sources = new uint[FinestTriangleCount];
+        var sources = new uint[triangleCount];
         int meshletOffset = 0, vertexOffset = 0, triangleOffset = 0;
         foreach (var node in Nodes.Span) {
-            if (node.ChildCount != 0) { continue; }
+            if (roots ? node.Parent >= 0 : node.ChildCount != 0) { continue; }
             foreach (var cluster in _meshlets.Meshlets.AsSpan(node.MeshletOffset, node.MeshletCount)) {
                 clusters[meshletOffset++] = cluster with { VertexOffset = vertexOffset, TriangleOffset = triangleOffset * 3 };
                 for (var v = 0; v < cluster.VertexCount; v++) {
