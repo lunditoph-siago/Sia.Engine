@@ -130,7 +130,7 @@ public sealed partial class VisibilityPbrFeature :
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo? albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
         bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default,
-        FixedClusterGpu[]? fixedClusters = null, GeometryReservation? reservation = null)
+        GeometryClusterGpu[]? fixedClusters = null, GeometryReservation? reservation = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         if (scene is not null && lod.Shadows is { } shadow) { ValidateShadowRoots(scene.RootCost, shadow.Budget); }
@@ -154,7 +154,7 @@ public sealed partial class VisibilityPbrFeature :
             gpuInstances[i] = ToGpu(instances[i], scene?.InstanceRoots[i] ?? default, sourceMaterials.Length,
                 (uint)instances[i].MaterialIndex < (uint)sourceMaterials.Length && sourceMaterials[instances[i].MaterialIndex].DoubleSided);
             transforms[i] = instances[i].Transform;
-            IncludeBounds(ref shadowBounds, assetBounds[instances[i].AssetIndex], instances[i].Transform);
+            BoundsTransform.Include(ref shadowBounds, assetBounds[instances[i].AssetIndex], instances[i].Transform);
         }
         var device = frame.Device.GetWgpu<WGPUDevice>();
         if (enableGpuTiming && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.TimestampQuery) == 0) {

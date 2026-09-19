@@ -41,7 +41,7 @@ public sealed partial class VisibilityPbrFeature
             capacity = checked(capacity + geometry[index].Triangles.Length);
             clusterCount = checked(clusterCount + clusters[index].Length);
         }
-        var work = new FixedClusterGpu[clusterCount];
+        var work = new GeometryClusterGpu[clusterCount];
         var count = 0;
         for (var instance = 0; instance < instances.Length; instance++) {
             var index = instances[instance].AssetIndex;
