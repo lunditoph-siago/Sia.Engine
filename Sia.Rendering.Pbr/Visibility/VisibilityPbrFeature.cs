@@ -130,7 +130,7 @@ public sealed partial class VisibilityPbrFeature :
         MeshletRasterData geometry, ReadOnlySpan<VisibilityInstance> instances, VisibilityAlbedo? albedo,
         WGPUTextureFormat outputFormat, VisibilityDebugMode mode, MeshPatchTree? tree, VisibilityLodSettings lod,
         bool enableGpuTiming = false, SceneLodData? scene = null, ReadOnlySpan<PbrMaterialAsset> materials = default,
-        FixedClusterGpu[]? fixedClusters = null)
+        FixedClusterGpu[]? fixedClusters = null, GeometryReservation? reservation = null)
     {
         ArgumentNullException.ThrowIfNull(geometry);
         if (scene is not null && lod.Shadows is { } shadow) { ValidateShadowRoots(scene.RootCost, shadow.Budget); }
@@ -171,9 +171,12 @@ public sealed partial class VisibilityPbrFeature :
         var acquired = new List<Entity>();
         try {
             var buffers = new[] {
-                UploadVertices(world, device, queue, geometry.Vertices.Span, limits, acquired),
-                Upload(world, device, queue, geometry.Indices.Span, WGPUBufferUsage.Storage, limits, acquired),
-                UploadTriangles(world, device, queue, geometry, limits, acquired),
+                reservation is { } r0 ? Allocate(world, device, (ulong)r0.Vertices * 48, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst, limits, acquired)
+                    : UploadVertices(world, device, queue, geometry.Vertices.Span, limits, acquired),
+                reservation is { } r1 ? Allocate(world, device, (ulong)r1.Indices * 4, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst, limits, acquired)
+                    : Upload(world, device, queue, geometry.Indices.Span, WGPUBufferUsage.Storage, limits, acquired),
+                reservation is { } r2 ? Allocate(world, device, (ulong)r2.Triangles * 8, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst, limits, acquired)
+                    : UploadTriangles(world, device, queue, geometry, limits, acquired),
                 Upload<InstanceGpu>(world, device, queue, gpuInstances, WGPUBufferUsage.Storage, limits, acquired)
             };
             var (materialGpu, textures, materialParameters) = CreateMaterials(world, device, queue, sourceMaterials, limits, acquired);
@@ -186,7 +189,8 @@ public sealed partial class VisibilityPbrFeature :
             var materialTiles = CreateMaterialTiles(world, device, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
             var gpuLod = scene is not null && fixedClusters is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
-            var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired, worldSpace);
+            var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired, worldSpace,
+                reservation is null ? null : capacity);
             return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,
                 raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry) {
                 InstanceCapacity = (uint)gpuInstances.Length,
@@ -208,13 +212,16 @@ public sealed partial class VisibilityPbrFeature :
     internal void Prepare(in RenderFeatureContext<RenderFrameContext> context, bool sceneLighting)
     {
         ValidateFrame(in context);
+        BeginStatistics(context.RenderWorld.FrameIndex);
         PrepareInstances(in context);
+        UpdateStreaming(context.Frame.Camera.Get<CameraMatrices>(), context.RenderWorld.FrameIndex);
         var view = context.View.PersistentResources.GetOrAdd(() => CreateView());
         if (!ReferenceEquals(view.Owner, this)) {
             throw new InvalidOperationException("A view cannot reuse state from another visibility feature.");
         }
-        if (view.InstanceVersion != _instanceVersion) {
+        if (_fixedGeometry is null && view.InstanceVersion != _instanceVersion) {
             view.HistoryValid = false;
+            _frameStatistics = _frameStatistics with { HistoryResets = _frameStatistics.HistoryResets + 1 };
             view.InstanceVersion = _instanceVersion;
         }
         var viewport = context.Frame.Frame.MainWorld.AcquireAddon<Viewport>().Value;
@@ -228,6 +235,13 @@ public sealed partial class VisibilityPbrFeature :
         if (!Finite(camera.ViewProj)) { throw new ArgumentException("Visibility requires a finite camera projection."); }
         if (_gpuLod is null) { UpdateWork(view, camera.ViewProj); }
         if (_gpuLod is not null || _fixedGeometry is not null) { PrepareOcclusion(view, camera.ViewProj); }
+        view.ReuseVisibility = _fixedGeometry is not null && view.CachedVisibility is { } cached
+            && cached.Projection.Equals(camera.ViewProj) && cached.Width == view.Width && cached.Height == view.Height
+            && !_sceneChanges.IntersectsSince(cached.Version, camera.ViewProj);
+        if (view.ReuseVisibility) {
+            _frameStatistics = _frameStatistics with { VisibilityCacheHits = _frameStatistics.VisibilityCacheHits + 1 };
+            view.CachedVisibility = new(camera.ViewProj, view.Width, view.Height, _instanceVersion);
+        }
         var uniform = new CameraGpu(camera.ViewProj, new float4(camera.WorldPosition, 1),
             new uint4(view.Width, view.Height, _gpuLod is null ? view.WorkCount : TriangleCapacity, (uint)_mode | (sceneLighting ? 256u : 0u)),
             new float4(math.normalize(new float3(0.4f, 0.8f, 0.6f)), 0), new float4(4, 4, 4, 0), RasterConfig, RasterOrigin(camera.ViewProj));

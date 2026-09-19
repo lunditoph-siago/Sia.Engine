@@ -238,6 +238,7 @@ public sealed partial class VisibilityPbrFeature
 
         public void BuildHzb(WgpuReactiveRenderGraphPassContext context)
         {
+            if (ReuseVisibility) return;
             var hzb = Hzb!.Value;
             var gpu = Owner.HzbPipelines;
             var depth = context.GetTextureView(Frame.DepthTarget);

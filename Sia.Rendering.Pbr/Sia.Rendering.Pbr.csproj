@@ -14,6 +14,7 @@
     <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="../Sia.Engine/Sia.Engine.csproj" />
     <ProjectReference Include="../Sia.Rendering/Sia.Rendering.csproj" />
+    <ProjectReference Include="../Sia.Asset/Sia.Asset.csproj" />
   </ItemGroup>
 
   <ItemGroup>

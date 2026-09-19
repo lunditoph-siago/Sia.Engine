@@ -10,6 +10,7 @@ namespace Sia.Engine.Example;
 internal sealed partial class SceneExampleApp
 {
     private PbrSceneAsset? _materialScene;
+    private readonly PbrSceneStream? _materialStream;
     private PbrSceneAsset? _opaqueScene;
     private PbrTransparentScene? _transparency;
     private readonly int _materialInstanceCount;
@@ -35,6 +36,7 @@ internal sealed partial class SceneExampleApp
                 }
             }
         }
+        if (_materialStream is { } stream) { _materialBounds = stream.Bounds; }
         var shadows = world.AcquireAddon<ShadowAtlasConfig>();
         shadows.TileResolution = 512; shadows.CascadeCount = 3; shadows.MaxShadowedSpotLights = 1; shadows.ShadowDistance = 30;
         world.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky { Intensity = .75f };
@@ -72,15 +74,18 @@ internal sealed partial class SceneExampleApp
                 MaxRefinementCandidates = 512, MaxRefinementNodes = 2048
             })
         };
-        _visibilityLod = _finest
+        _visibilityLod = _materialStream is { } stream ? VisibilityPbrFeature.CreateStreamScene(in frame, stream, _surfaceFormat, mode: _patchDebugMode)
+            : _finest
             ? VisibilityPbrFeature.CreateFixedScene(in frame, scene, scene.Instances.Span.ToArray().Select(instance =>
                 new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode)
             : VisibilityPbrFeature.CreateGpuScene(in frame, scene, System.Math.Max(32, scene.Instances.Length), settings, _surfaceFormat, _patchDebugMode);
         InitializeInspectionControls();
-        Console.WriteLine($"PBR: {scene.Instances.Length} static instances, {(_finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles.");
+        Console.WriteLine($"PBR: {_visibilityLod.InstanceCount} static instances, {(_materialStream is not null ? "streamed detail" : _finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles.");
         _materialScene = null;
         _opaqueScene = null;
     }
+
+    public ValueTask StopSceneStreamingAsync() => _visibilityLod?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 
     private static PbrSceneAsset OpaqueScene(PbrSceneAsset source)
     {

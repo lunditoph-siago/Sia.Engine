@@ -121,7 +121,7 @@ public sealed partial class VisibilityPbrFeature
     private sealed partial class ViewState
     {
         public void ProjectLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, LodConfiguration!.Value.Project, Owner.InstanceCount);
+            DispatchLod(context, LodConfiguration!.Value.Project, (uint?)Owner._instanceSlots?.Length ?? Owner.InstanceCount);
 
         public void SelectLod(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, LodConfiguration!.Value.Select, 1, Lod!.Value.DispatchGroup);
