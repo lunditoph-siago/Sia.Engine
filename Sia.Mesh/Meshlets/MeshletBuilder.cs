@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -7,29 +8,37 @@ namespace Sia.Engine.Mesh;
 public static partial class MeshletBuilder
 {
     private const int k_CandidateCapacity = 256;
-    private const int k_SeedCapacity = 32;
+    private const int k_SeedCapacity = 256;
     private const int k_NewSeeds = 4;
+
+    private const float k_DefaultConeWeight = 0.25f;
 
     public static MeshletData Build(
         MeshData mesh,
         int maxVertices = 64,
         int maxTriangles = 124,
+        float coneWeight = k_DefaultConeWeight,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(mesh);
         ArgumentNullException.ThrowIfNull(mesh.Vertices);
         ArgumentNullException.ThrowIfNull(mesh.Indices);
-        return Build(mesh.Vertices, mesh.Indices, maxVertices, maxTriangles, cancellationToken);
+        return Build(mesh.Vertices, mesh.Indices, maxVertices, maxTriangles, coneWeight, cancellationToken);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public static MeshletData Build(
         ReadOnlySpan<MeshVertex> vertices,
         ReadOnlySpan<uint> indices,
         int maxVertices = 64,
         int maxTriangles = 124,
+        float coneWeight = k_DefaultConeWeight,
         CancellationToken cancellationToken = default)
     {
         ValidateLimits(maxVertices, maxTriangles);
+        if (coneWeight is < 0f or > 1f) {
+            throw new ArgumentOutOfRangeException(nameof(coneWeight));
+        }
         cancellationToken.ThrowIfCancellationRequested();
         if (indices.Length % 3 != 0) {
             throw new ArgumentException("Indices must describe complete triangles.", nameof(indices));
@@ -82,6 +91,8 @@ public static partial class MeshletBuilder
             liveTriangles[i] = offsets[i + 1] - offsets[i];
         }
         var centers = new float3[triangleCount];
+        var normals = new float3[triangleCount];
+        double meshArea = 0;
         for (var triangle = 0; triangle < triangleCount; triangle++) {
             if ((triangle & 4095) == 0) {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -99,20 +110,26 @@ public static partial class MeshletBuilder
             var pa = vertices[(int)a].Position;
             var pb = vertices[(int)b].Position;
             var pc = vertices[(int)c].Position;
-            centers[triangle] = new float3(
-                (float)(((double)pa.x + pb.x + pc.x) / 3),
-                (float)(((double)pa.y + pb.y + pc.y) / 3),
-                (float)(((double)pa.z + pb.z + pc.z) / 3));
+            centers[triangle] = (pa + pb + pc) / 3f;
+            var faceNormal = math.cross(pb - pa, pc - pa);
+            var area = math.length(faceNormal);
+            meshArea += area;
+            normals[triangle] = area == 0 ? float3.zero : faceNormal / area;
         }
-        offsets.AsSpan(0, vertices.Length).CopyTo(cursors);
+        var liveEnd = offsets.AsSpan(1, vertices.Length).ToArray();
         var spatialNodes = BuildSpatialTree(centers, cancellationToken, out var spatialOrder, out var spatialLeaves, out var seedCorner);
+
+        var triangleAreaAverage = triangleCount == 0 ? 0.0 : meshArea / triangleCount * 0.5;
+        var expectedRadiusD = System.Math.Sqrt(triangleAreaAverage * maxTriangles) * 0.5;
+        var expectedRadius = expectedRadiusD > 0 ? (float)expectedRadiusD : 1f;
 
         var localVertices = new int[vertices.Length];
         Array.Fill(localVertices, -1);
         var emitted = new bool[triangleCount];
         var candidateMarks = new int[triangleCount];
-        Span<int> candidates = stackalloc int[k_CandidateCapacity];
+        var candidates = new int[k_CandidateCapacity];
         Span<int> seeds = stackalloc int[k_SeedCapacity];
+        Span<int> newSeeds = stackalloc int[k_NewSeeds];
         var candidateCount = 0;
         var seedCount = 0;
         var generation = 1;
@@ -126,7 +143,8 @@ public static partial class MeshletBuilder
         var count = 0;
         var emittedCount = 0;
         var seed = -1;
-        double centerX = 0, centerY = 0, centerZ = 0;
+        var centerSum = float3.zero;
+        var normalSum = float3.zero;
 
         while (emittedCount < triangleCount) {
             cancellationToken.ThrowIfCancellationRequested();
@@ -136,12 +154,14 @@ public static partial class MeshletBuilder
                     spatialNodes, spatialOrder, centers, emitted, seedCorner.x, seedCorner.y, seedCorner.z);
             }
             else if (count < maxTriangles) {
+                var coneAxis = math.normalizesafe(normalSum);
+                var meshletCenter = centerSum / count;
                 triangle = SelectCandidate(
-                    candidates, ref candidateCount, indices, centers, localVertices, liveTriangles, emitted,
-                    maxVertices - vertexCount, centerX / count, centerY / count, centerZ / count);
+                    candidates, ref candidateCount, indices, normals, centers, localVertices, liveTriangles, emitted,
+                    maxVertices - vertexCount, meshletCenter, coneAxis, coneWeight, expectedRadius);
                 if (triangle < 0 && maxVertices - vertexCount >= 3) {
                     triangle = FindSpatialTriangle(spatialNodes, spatialOrder, centers, emitted,
-                        centerX / count, centerY / count, centerZ / count);
+                        meshletCenter.x, meshletCenter.y, meshletCenter.z);
                 }
             }
 
@@ -153,23 +173,20 @@ public static partial class MeshletBuilder
                     }
                 }
                 seedCount = System.Math.Min(remainingSeeds, seeds.Length - k_NewSeeds);
-                var addedSeeds = 0;
-                while (candidateCount > 0 && addedSeeds < k_NewSeeds) {
-                    var next = SelectSeed(candidates.Slice(0, candidateCount), indices, centers, liveTriangles, emitted, seedCorner);
-                    if (next < 0) {
-                        break;
-                    }
-                    var slot = candidates.Slice(0, candidateCount).IndexOf(next);
-                    candidates[slot] = candidates[--candidateCount];
+                var newSeedCount = AppendSeedTriangles(
+                    newSeeds, vertexIndices.AsSpan(vertexOffset, vertexCount), indices,
+                    offsets, liveEnd, adjacency, liveTriangles, centers, seedCorner);
+                for (var i = 0; i < newSeedCount; i++) {
+                    var next = newSeeds[i];
                     if (!seeds.Slice(0, seedCount).Contains(next)) {
                         seeds[seedCount++] = next;
-                        addedSeeds++;
                     }
                 }
                 seed = SelectSeed(seeds.Slice(0, seedCount), indices, centers, liveTriangles, emitted, seedCorner);
                 if (seed < 0) {
+                    var meshletCenter = centerSum / count;
                     seed = FindSpatialTriangle(spatialNodes, spatialOrder, centers, emitted,
-                        centerX / count, centerY / count, centerZ / count);
+                        meshletCenter.x, meshletCenter.y, meshletCenter.z);
                 }
                 FinishMeshlet(vertices, vertexIndices, triangleIndices, meshlets,
                     vertexOffset, vertexCount, triangleOffset, count);
@@ -182,16 +199,27 @@ public static partial class MeshletBuilder
                 count = 0;
                 candidateCount = 0;
                 generation++;
-                centerX = centerY = centerZ = 0;
+                centerSum = float3.zero;
+                normalSum = float3.zero;
                 continue;
             }
 
             emitted[triangle] = true;
             emittedCount++;
             RemoveSpatialTriangle(spatialNodes, spatialLeaves[triangle]);
+            var cornerA = indices[triangle * 3];
+            var cornerB = indices[triangle * 3 + 1];
+            var cornerC = indices[triangle * 3 + 2];
+            RemoveFromAdjacency(triangle, (int)cornerA, offsets, liveEnd, adjacency);
+            if (cornerB != cornerA) {
+                RemoveFromAdjacency(triangle, (int)cornerB, offsets, liveEnd, adjacency);
+            }
+            if (cornerC != cornerA && cornerC != cornerB) {
+                RemoveFromAdjacency(triangle, (int)cornerC, offsets, liveEnd, adjacency);
+            }
             for (var corner = 0; corner < 3; corner++) {
                 var index = indices[triangle * 3 + corner];
-                if (corner == 0 || (index != indices[triangle * 3] && (corner == 1 || index != indices[triangle * 3 + 1]))) {
+                if (corner == 0 || (index != cornerA && (corner == 1 || index != cornerB))) {
                     liveTriangles[index]--;
                 }
                 var local = localVertices[index];
@@ -199,15 +227,14 @@ public static partial class MeshletBuilder
                     local = vertexCount++;
                     localVertices[index] = local;
                     vertexIndices[vertexOffset + local] = index;
-                    AddCandidates((int)index, offsets, cursors, adjacency, emitted, candidateMarks,
-                        generation, candidates, ref candidateCount);
+                    AddCandidates((int)index, offsets, liveEnd, adjacency, candidateMarks,
+                        generation, ref candidates, ref candidateCount);
                 }
                 triangleIndices[triangleOffset + count * 3 + corner] = (byte)local;
             }
             sourceTriangles[triangleOffset / 3 + count] = (uint)triangle;
-            centerX += centers[triangle].x;
-            centerY += centers[triangle].y;
-            centerZ += centers[triangle].z;
+            centerSum += centers[triangle];
+            normalSum += normals[triangle];
             count++;
         }
 
@@ -222,6 +249,7 @@ public static partial class MeshletBuilder
         IReadOnlyList<MeshData> meshes,
         int maxVertices = 64,
         int maxTriangles = 124,
+        float coneWeight = k_DefaultConeWeight,
         int maxDegreeOfParallelism = -1,
         CancellationToken cancellationToken = default)
     {
@@ -236,7 +264,7 @@ public static partial class MeshletBuilder
         Parallel.For(0, inputs.Length, new ParallelOptions {
             MaxDegreeOfParallelism = maxDegreeOfParallelism,
             CancellationToken = cancellationToken
-        }, i => results[i] = Build(inputs[i], maxVertices, maxTriangles, cancellationToken));
+        }, i => results[i] = Build(inputs[i], maxVertices, maxTriangles, coneWeight, cancellationToken));
         return results;
     }
 
@@ -250,35 +278,51 @@ public static partial class MeshletBuilder
         }
     }
 
-    private static void AddCandidates(
-        int vertex, int[] offsets, int[] cursors, int[] adjacency, bool[] emitted,
-        int[] marks, int generation, Span<int> candidates, ref int count)
+    private static void RemoveFromAdjacency(int triangle, int vertex, int[] offsets, int[] liveEnd, int[] adjacency)
     {
-        var end = offsets[vertex + 1];
-        var start = cursors[vertex];
-        while (start < end && emitted[adjacency[start]]) {
-            start++;
+        var start = offsets[vertex];
+        var end = liveEnd[vertex];
+        var slot = Array.IndexOf(adjacency, triangle, start, end - start);
+        if (slot >= 0) {
+            adjacency[slot] = adjacency[end - 1];
+            liveEnd[vertex] = end - 1;
         }
-        cursors[vertex] = start;
-        var limit = System.Math.Min(end, (long)start + k_CandidateCapacity);
-        for (var i = start; i < limit && count < candidates.Length; i++) {
+    }
+
+    private static void AddCandidates(
+        int vertex, int[] offsets, int[] liveEnd, int[] adjacency,
+        int[] marks, int generation, ref int[] candidates, ref int count)
+    {
+        var end = liveEnd[vertex];
+        for (var i = offsets[vertex]; i < end; i++) {
             var triangle = adjacency[i];
-            if (!emitted[triangle] && marks[triangle] != generation) {
+            if (marks[triangle] != generation) {
                 marks[triangle] = generation;
+                if (count == candidates.Length) {
+                    Array.Resize(ref candidates, candidates.Length * 2);
+                }
                 candidates[count++] = triangle;
             }
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float MeshletScore(float distance, float spread, float coneWeight, float expectedRadius)
+    {
+        var cone = 1f - spread * coneWeight;
+        var coneClamped = cone < 1e-3f ? 1e-3f : cone;
+        return (1f + distance / expectedRadius * (1f - coneWeight)) * coneClamped;
+    }
+
     private static int SelectCandidate(
-        Span<int> candidates, ref int count, ReadOnlySpan<uint> indices, float3[] centers,
+        int[] candidates, ref int count, ReadOnlySpan<uint> indices, float3[] normals, float3[] centers,
         int[] localVertices, int[] liveTriangles, bool[] emitted, int availableVertices,
-        double centerX, double centerY, double centerZ)
+        float3 meshletCenter, float3 coneAxis, float coneWeight, float expectedRadius)
     {
         var best = -1;
         var bestSlot = -1;
         var bestPriority = int.MaxValue;
-        var bestDistance = double.PositiveInfinity;
+        var bestScore = float.PositiveInfinity;
         for (var i = 0; i < count; i++) {
             var triangle = candidates[i];
             if (emitted[triangle]) {
@@ -308,21 +352,73 @@ public static partial class MeshletBuilder
             if (priority > bestPriority) {
                 continue;
             }
-            var deltaX = centers[triangle].x - centerX;
-            var deltaY = centers[triangle].y - centerY;
-            var deltaZ = centers[triangle].z - centerZ;
-            var distance = deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ;
-            if (priority < bestPriority || distance < bestDistance || (distance == bestDistance && triangle < best)) {
+            var distance = math.distance(centers[triangle], meshletCenter);
+            var spread = math.dot(normals[triangle], coneAxis);
+            var score = MeshletScore(distance, spread, coneWeight, expectedRadius);
+            if (priority < bestPriority || score < bestScore) {
                 best = triangle;
                 bestSlot = i;
                 bestPriority = priority;
-                bestDistance = distance;
+                bestScore = score;
             }
         }
-        if (bestSlot >= 0) {
-            candidates[bestSlot] = candidates[--count];
+        if (best >= 0) {
+            var slot = bestSlot < count && candidates[bestSlot] == best ? bestSlot : Array.IndexOf(candidates, best, 0, count);
+            if (slot >= 0) {
+                candidates[slot] = candidates[--count];
+            }
         }
         return best;
+    }
+
+    private static int AppendSeedTriangles(
+        Span<int> outSeeds, ReadOnlySpan<uint> meshletVertices, ReadOnlySpan<uint> indices,
+        int[] offsets, int[] liveEnd, int[] adjacency, int[] liveTriangles, float3[] centers, float3 corner)
+    {
+        Span<int> bestSeeds = stackalloc int[k_NewSeeds];
+        Span<long> bestLive = stackalloc long[k_NewSeeds];
+        Span<float> bestScore = stackalloc float[k_NewSeeds];
+        for (var i = 0; i < k_NewSeeds; i++) {
+            bestSeeds[i] = -1;
+            bestLive[i] = long.MaxValue;
+            bestScore[i] = float.PositiveInfinity;
+        }
+        foreach (var vertex in meshletVertices) {
+            var index = (int)vertex;
+            var bestNeighbor = -1;
+            var bestNeighborLive = long.MaxValue;
+            var end = liveEnd[index];
+            for (var i = offsets[index]; i < end; i++) {
+                var triangle = adjacency[i];
+                var a = indices[triangle * 3];
+                var b = indices[triangle * 3 + 1];
+                var c = indices[triangle * 3 + 2];
+                var live = (long)liveTriangles[a] + liveTriangles[b] + liveTriangles[c];
+                if (live < bestNeighborLive) {
+                    bestNeighbor = triangle;
+                    bestNeighborLive = live;
+                }
+            }
+            if (bestNeighbor < 0) {
+                continue;
+            }
+            var score = math.distance(centers[bestNeighbor], corner);
+            for (var i = 0; i < k_NewSeeds; i++) {
+                if (bestNeighborLive < bestLive[i] || (bestNeighborLive == bestLive[i] && score <= bestScore[i])) {
+                    bestSeeds[i] = bestNeighbor;
+                    bestLive[i] = bestNeighborLive;
+                    bestScore[i] = score;
+                    break;
+                }
+            }
+        }
+        var count = 0;
+        for (var i = 0; i < k_NewSeeds; i++) {
+            if (bestSeeds[i] >= 0) {
+                outSeeds[count++] = bestSeeds[i];
+            }
+        }
+        return count;
     }
 
     private static int SelectSeed(
@@ -331,7 +427,7 @@ public static partial class MeshletBuilder
     {
         var best = -1;
         var bestLive = long.MaxValue;
-        var bestDistance = double.PositiveInfinity;
+        var bestDistance = float.PositiveInfinity;
         foreach (var triangle in candidates) {
             if (emitted[triangle]) {
                 continue;
@@ -341,10 +437,7 @@ public static partial class MeshletBuilder
             var c = indices[triangle * 3 + 2];
             var live = (long)liveTriangles[a] + (b != a ? liveTriangles[b] : 0)
                 + (c != a && c != b ? liveTriangles[c] : 0);
-            var x = (double)centers[triangle].x - corner.x;
-            var y = (double)centers[triangle].y - corner.y;
-            var z = (double)centers[triangle].z - corner.z;
-            var distance = x * x + y * y + z * z;
+            var distance = math.distancesq(centers[triangle], corner);
             if (live < bestLive || (live == bestLive && (distance < bestDistance || (distance == bestDistance && triangle < best)))) {
                 best = triangle;
                 bestLive = live;

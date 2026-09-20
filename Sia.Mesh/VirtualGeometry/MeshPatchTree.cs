@@ -77,7 +77,7 @@ public sealed partial class MeshPatchTree
             cancellationToken.ThrowIfCancellationRequested();
             var patch = snapshots[i];
             var mesh = patch.Geometry;
-            var meshlets = MeshletBuilder.Build(mesh, maxVertices, maxTriangles, cancellationToken);
+            var meshlets = MeshletBuilder.Build(mesh, maxVertices, maxTriangles, cancellationToken: cancellationToken);
             var vertexIds = VertexIds(mesh.Vertices, vertexIdentities);
             boundaries[i] = Boundary(mesh.Indices, vertexIds);
             for (var v = 0; v < vertexIds.Length; v++) {
