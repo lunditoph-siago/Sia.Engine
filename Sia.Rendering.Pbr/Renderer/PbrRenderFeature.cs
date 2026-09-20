@@ -1,6 +1,4 @@
-using Sia.Engine.Camera;
 using Sia.Engine.Lighting;
-using Sia.Engine.Mesh;
 using Sia.RenderGraph;
 using Sia.WebGPU;
 
@@ -9,7 +7,6 @@ namespace Sia.Engine.Rendering.Pbr;
 public sealed class PbrRenderFeature :
     IExtractRenderFeature<RenderFrameContext>,
     IPrepareRenderFeature<RenderFrameContext>,
-    IQueueRenderFeature<RenderFrameContext>,
     IRenderGraphContributor<RenderFrameContext>
 {
     public static RenderFeatureKey FeatureKey { get; } = new("pbr");
@@ -19,19 +16,17 @@ public sealed class PbrRenderFeature :
     public PbrRenderer Renderer { get; }
 
     public PbrRenderFeatureOptions Options { get; }
-    public VisibilityPbrFeature? Visibility { get; }
+    public VisibilityPbrFeature Visibility { get; }
     public PbrTransparentScene? Transparency { get; }
 
     public PbrRenderFeature(
         PbrRenderer renderer,
+        VisibilityPbrFeature visibility,
         PbrRenderFeatureOptions? options = null,
-        VisibilityPbrFeature? visibility = null,
         PbrTransparentScene? transparency = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
-        if (visibility is null && !renderer.HasMeshPipelines) {
-            throw new ArgumentException("A renderer without mesh pipelines requires a Visibility feature.", nameof(visibility));
-        }
+        ArgumentNullException.ThrowIfNull(visibility);
         Renderer = renderer;
         Options = options ?? new PbrRenderFeatureOptions();
         Visibility = visibility;
@@ -40,7 +35,7 @@ public sealed class PbrRenderFeature :
 
     public void Extract(in RenderFeatureContext<RenderFrameContext> context)
     {
-        Visibility?.Extract(in context);
+        Visibility.Extract(in context);
         var frameContext = context.Frame;
         var frame = frameContext.Frame;
         var clusterConfig = frame.MainWorld.AcquireAddon<ClusterGridConfig>();
@@ -52,7 +47,7 @@ public sealed class PbrRenderFeature :
             frameContext.Camera,
             clusterConfig,
             shadowConfig,
-            Visibility?.ShadowBounds);
+            Visibility.ShadowBounds);
         context.View.Resources.Set(extracted);
     }
 
@@ -61,29 +56,16 @@ public sealed class PbrRenderFeature :
         var frame = context.Frame.Frame;
         var state = context.View.PersistentResources.GetRequired<PbrViewState>();
         var extracted = context.View.Resources.GetRequired<PbrExtractedView>();
-        Renderer.PrepareFrame(state, in frame, extracted);
         Renderer.PrepareLighting(state, in frame, extracted);
         Renderer.PrepareOutput(state, in frame, extracted, Options.ExposureCompensation, Options.ToneMapping);
         Transparency?.Prepare(in context, extracted);
-        state.RetainedShadowLayers.Clear();
-        if (Visibility is { } visibility) {
-            visibility.Prepare(in context, sceneLighting: true);
-            visibility.PrepareShadows(in context, state, extracted.ShadowConfig, extracted.AllItems.Length == 0);
-            Renderer.PrepareVisibility(state, in frame, extracted, visibility.DebugMode);
-            if (Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) {
-                state.ScreenLighting ??= new PbrScreenLighting(in frame, Options.ScreenSpaceReflections, Options.ScreenSpaceIndirectLighting);
-                state.ScreenLighting.Prepare(in frame, extracted);
-            }
+        Visibility.Prepare(in context, sceneLighting: true);
+        Visibility.PrepareShadows(in context, state, extracted.ShadowConfig);
+        Renderer.PrepareVisibility(state, in frame, extracted, Visibility.DebugMode);
+        if (Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) {
+            state.ScreenLighting ??= new PbrScreenLighting(in frame, Options.ScreenSpaceReflections, Options.ScreenSpaceIndirectLighting);
+            state.ScreenLighting.Prepare(in frame, extracted);
         }
-    }
-
-    public void Queue(in RenderFeatureContext<RenderFrameContext> context)
-    {
-        var phase = context.View.Phases.GetOrAdd(
-            PbrRenderPhases.Opaque,
-            PbrDrawItemComparer.Instance);
-        var extracted = context.View.Resources.GetRequired<PbrExtractedView>();
-        Renderer.QueueOpaque(extracted, phase);
     }
 
     public void BuildRenderGraph(
@@ -95,7 +77,6 @@ public sealed class PbrRenderFeature :
         var extracted = context.View.Resources.GetRequired<PbrExtractedView>();
         var clusterConfig = extracted.ClusterConfig;
         var shadowConfig = extracted.ShadowConfig;
-        var phase = context.View.Phases.GetRequired<PbrDrawItem>(PbrRenderPhases.Opaque);
 
         if (Options.HdrTarget == frameContext.ColorTarget) {
             throw new InvalidOperationException("The HDR intermediate and output target must be distinct.");
@@ -110,38 +91,31 @@ public sealed class PbrRenderFeature :
             state,
             clusterConfig,
             Options.ClusterCullingPass);
-        PbrRenderGraphHooks.UseShadowPasses(
-            ref graph, Renderer, state, shadowConfig, extracted.AllItems);
+        PbrRenderGraphHooks.UseShadowAtlas(ref graph, state, shadowConfig);
         PbrRenderGraphHooks.UseIblPrecomputePasses(
             ref graph, Renderer, state);
         PbrRenderGraphHooks.UseSkyboxPass(
             ref graph, Renderer, state, Options.SkyboxPass, Options.HdrTarget);
-        if (Visibility is { } visibility) {
-            if (Options.HdrTarget == visibility.HdrTarget || Options.HdrTarget == visibility.VisibilityTarget
-                || Options.HdrTarget == visibility.BaseColorRoughnessTarget || Options.HdrTarget == visibility.NormalMetallicTarget
-                || Options.HdrTarget == visibility.EmissiveOcclusionTarget || frameContext.ColorTarget == visibility.HdrTarget) {
-                throw new InvalidOperationException("Visibility surfaces and scene output require distinct HDR targets.");
-            }
-            visibility.BuildRenderGraph(ref graph, in context, includeOutput: false);
-            PbrRenderGraphHooks.UseVisibilityShadowPasses(ref graph, visibility, in context);
-            PbrRenderGraphHooks.UseVisibilityLightingPass(ref graph, Renderer, state, visibility, Options.HdrTarget, in frameContext);
-        } else {
-            PbrRenderGraphHooks.UseDepthPrepass(
-                ref graph, Renderer, state, phase, Options.DepthPrepass, frameContext.DepthTarget);
-            PbrRenderGraphHooks.UseForwardPbrPass(
-                ref graph, Renderer, state, phase, Options.ForwardPass, Options.HdrTarget, frameContext.DepthTarget, WGPULoadOp.Load);
+        var visibility = Visibility;
+        if (Options.HdrTarget == visibility.HdrTarget || Options.HdrTarget == visibility.VisibilityTarget
+            || Options.HdrTarget == visibility.BaseColorRoughnessTarget || Options.HdrTarget == visibility.NormalMetallicTarget
+            || Options.HdrTarget == visibility.EmissiveOcclusionTarget || frameContext.ColorTarget == visibility.HdrTarget) {
+            throw new InvalidOperationException("Visibility surfaces and scene output require distinct HDR targets.");
         }
+        visibility.BuildRenderGraph(ref graph, in context, includeOutput: false);
+        PbrRenderGraphHooks.UseVisibilityShadowPasses(ref graph, visibility, in context);
+        PbrRenderGraphHooks.UseVisibilityLightingPass(ref graph, Renderer, state, visibility, Options.HdrTarget, in frameContext);
         var hdr = Options.HdrTarget;
-        if ((Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) && Visibility is { } reflectiveVisibility) {
+        if (Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) {
             hdr = state.ScreenLighting!.BuildGraph(ref graph, hdr, frameContext.DepthTarget,
-                reflectiveVisibility, state, extracted);
+                visibility, state, extracted);
         }
         if (hdr == frameContext.ColorTarget) {
             throw new InvalidOperationException("Screen lighting and final output require distinct targets.");
         }
         if (Transparency is { } transparency) {
             PbrRenderGraphHooks.UseTransparencyPass(ref graph, transparency.Import(ref graph, in context), state,
-                hdr, frameContext.DepthTarget, Visibility is null || Visibility.DebugMode == VisibilityDebugMode.Shaded);
+                hdr, frameContext.DepthTarget, Visibility.DebugMode == VisibilityDebugMode.Shaded);
         }
         var output = PbrRenderGraphHooks.UseAtmosphereComposite(
             ref graph, state, extracted, Options, hdr, in frameContext);

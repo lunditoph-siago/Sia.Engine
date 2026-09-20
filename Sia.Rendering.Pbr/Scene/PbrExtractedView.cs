@@ -9,9 +9,6 @@ public sealed record PbrExtractedView(
     ViewportSize Viewport,
     ClusterGridConfig ClusterConfig,
     ShadowAtlasConfig ShadowConfig,
-    ReadOnlyMemory<PbrRenderInstance> Instances,
-    PbrDrawItem[] AllItems,
-    PbrDrawItem[] VisibleItems,
     ProceduralSky Sky,
     float4[]? IrradianceCoefficients,
     SkyAtmosphere? Atmosphere = null);

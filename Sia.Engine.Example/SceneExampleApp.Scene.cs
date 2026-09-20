@@ -38,7 +38,6 @@ internal sealed unsafe partial class SceneExampleApp
 
         var meshRegistry = _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
-        _sceneWorld.AcquireAddon<PbrRenderCache>();
         _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(_initialWidth, _initialHeight);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
@@ -78,7 +77,7 @@ internal sealed unsafe partial class SceneExampleApp
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
         InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer, PbrRenderFeatureOptions.FromProfile(_renderProfile), visibility: _visibilityLod, transparency: _transparency))
+            .Add(new PbrRenderFeature(_sceneRenderer, _visibilityLod!, PbrRenderFeatureOptions.FromProfile(_renderProfile), transparency: _transparency))
             .Build();
     }
 

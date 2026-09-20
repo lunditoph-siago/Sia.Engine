@@ -56,8 +56,13 @@ public sealed partial class PbrRenderer
             var descriptor = WGPUBindGroupLayoutDescriptor.Default;
             descriptor.EntryCount = 6; descriptor.Entries = entries;
             var layout = Own(Wgpu.CreateBindGroupLayout(device, descriptor));
-            var pipelineLayout = Own(PbrObjectBindGroupLayout.CreatePipelineLayout(device, layout.GetWgpu<WGPUBindGroupLayout>(),
-                _lightingLayout.GetWgpu<WGPUBindGroupLayout>(), _iblLayout.GetWgpu<WGPUBindGroupLayout>()));
+            var layouts = stackalloc WGPUBindGroupLayout*[3];
+            layouts[0] = (WGPUBindGroupLayout*)layout.GetWgpu<WGPUBindGroupLayout>().DangerousGetHandle();
+            layouts[1] = (WGPUBindGroupLayout*)_lightingLayout.GetWgpu<WGPUBindGroupLayout>().DangerousGetHandle();
+            layouts[2] = (WGPUBindGroupLayout*)_iblLayout.GetWgpu<WGPUBindGroupLayout>().DangerousGetHandle();
+            var pipelineDescriptor = WGPUPipelineLayoutDescriptor.Default;
+            pipelineDescriptor.BindGroupLayoutCount = 3; pipelineDescriptor.BindGroupLayouts = layouts;
+            var pipelineLayout = Own(Wgpu.CreatePipelineLayout(device, in pipelineDescriptor));
             var shader = Own(Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityLighting(), "visibility-scene-lighting"));
             var pipeline = Own(PbrIblPrecomputePipelines.CreateFullscreenPipeline(device, shader.GetWgpu<WGPUShaderModule>(),
                 pipelineLayout.GetWgpu<WGPUPipelineLayout>(), PbrOutputPipelines.HdrFormat));
@@ -92,7 +97,7 @@ public sealed partial class PbrRenderer
         }
         Wgpu.SetRenderPipeline(pass, _visibilityPipeline.GetWgpu<WGPURenderPipeline>());
         Wgpu.SetBindGroup(pass, 0, state.VisibilityBindGroup.GetWgpu<WGPUBindGroup>());
-        Wgpu.SetBindGroup(pass, 1, state.ForwardLightingBindGroup.GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(pass, 1, state.LightingBindGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 2, state.IblBindGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.Draw(pass, 3);
     }

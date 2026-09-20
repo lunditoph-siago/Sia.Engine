@@ -155,7 +155,7 @@ internal sealed unsafe class PbrScreenLighting
             : c.GetOrBeginRenderPass([new(Gather, WGPULoadOp.Clear), new(GatherSurface, WGPULoadOp.Clear)]);
         Wgpu.SetRenderPipeline(pass, _pipelines[stage].GetWgpu<WGPURenderPipeline>());
         Wgpu.SetBindGroup(pass, 0, _groups[stage].GetWgpu<WGPUBindGroup>());
-        Wgpu.SetBindGroup(pass, 1, _lighting.ForwardLightingBindGroup.GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(pass, 1, _lighting.LightingBindGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 2, _lighting.IblBindGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.Draw(pass, 3);
     }
