@@ -36,8 +36,4 @@ public sealed record PbrRenderFeatureOptions
     public PbrToneMapping ToneMapping { get; init; } = PbrToneMapping.Aces;
 
     public RenderGraphPassKey ClusterCullingPass { get; init; } = new("pbr-cluster-culling");
-
-    public RenderGraphPassKey DepthPrepass { get; init; } = new("pbr-depth-prepass");
-
-    public RenderGraphPassKey ForwardPass { get; init; } = new("pbr-forward");
 }

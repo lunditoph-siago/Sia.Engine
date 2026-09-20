@@ -15,14 +15,13 @@ internal sealed unsafe class PbrScreenLighting
     private readonly WgpuHandle<WGPUTextureView>[][] _sources = [[], []];
     private readonly WgpuHandle<WGPUTextureView>[] _scratch = new WgpuHandle<WGPUTextureView>[7];
     private readonly bool _indirect;
-    private static readonly RenderGraphTextureKey Snapshot = new("pbr-screen-source");
+    private static readonly RenderGraphTextureKey Output = new("pbr-screen-output");
     private static readonly RenderGraphTextureKey Gather = new("pbr-screen-gather");
     private static readonly RenderGraphTextureKey GatherSurface = new("pbr-screen-surface");
     private static readonly RenderGraphBufferKey Camera = new("pbr-screen-camera");
     private RenderGraphTextureKey _color, _depth;
     private VisibilityPbrFeature _visibility = null!;
     private PbrViewState _lighting = null!;
-    private uint _width, _height;
 
     public PbrScreenLighting(in GpuFrame frame, bool reflections, bool indirect)
     {
@@ -88,54 +87,51 @@ internal sealed unsafe class PbrScreenLighting
             [new(camera.ViewProj, new(camera.WorldPosition, 1), math.inverse(camera.ViewProj))]);
     }
 
-    public void BuildGraph(ref RenderGraphBuildContext graph, RenderGraphTextureKey color, RenderGraphTextureKey depth,
+    public RenderGraphTextureKey BuildGraph(ref RenderGraphBuildContext graph, RenderGraphTextureKey color, RenderGraphTextureKey depth,
         VisibilityPbrFeature visibility, PbrViewState lighting, PbrExtractedView view)
     {
+        if (Output == color || Output == depth || Output == visibility.HdrTarget || Output == visibility.VisibilityTarget
+            || Output == visibility.BaseColorRoughnessTarget
+            || Output == visibility.NormalMetallicTarget || Output == visibility.EmissiveOcclusionTarget) {
+            throw new InvalidOperationException("Screen lighting requires a distinct output target.");
+        }
         _color = color; _depth = depth; _visibility = visibility; _lighting = lighting;
-        _width = (uint)view.Viewport.Width; _height = (uint)view.Viewport.Height;
-        graph.UseTexture(Snapshot, new RenderGraphTextureDescriptor("pbr-screen-source", RenderGraphTextureFormat.RGBA16Float, _width, _height));
+        var width = (uint)view.Viewport.Width;
+        var height = (uint)view.Viewport.Height;
+        graph.UseTexture(Output, new RenderGraphTextureDescriptor("pbr-screen-output", RenderGraphTextureFormat.RGBA16Float, width, height));
         graph.UseImportedBuffer(Camera, new RenderGraphBufferDescriptor("pbr-screen-camera", 144, RenderGraphBufferUsage.Uniform));
         graph.BindImportedBuffer(Camera, _camera.GetWgpu<WGPUBuffer>());
-        // A non-render pass ends the lighting attachment before the encoder copy.
-        graph.UseComputePass(new("pbr-screen-snapshot"), "pbr-screen-snapshot",
-            d => d.Read(_color, RenderGraphTextureUsage.CopySource).Write(Snapshot, RenderGraphTextureUsage.CopyDestination), Copy);
         if (_indirect) {
             graph.UseTexture(Gather, new RenderGraphTextureDescriptor("pbr-screen-gather", RenderGraphTextureFormat.RGBA16Float,
-                (_width + 7) / 8, (_height + 7) / 8));
+                (width + 7) / 8, (height + 7) / 8));
             graph.UseTexture(GatherSurface, new RenderGraphTextureDescriptor("pbr-screen-surface", RenderGraphTextureFormat.RGBA32Float,
-                (_width + 7) / 8, (_height + 7) / 8));
+                (width + 7) / 8, (height + 7) / 8));
             graph.UsePass(new("pbr-screen-gather"), "pbr-screen-gather", d => Declare(d, true), c => Render(c, 1));
         }
         graph.UsePass(new("pbr-screen-lighting"), "pbr-screen-lighting", d => Declare(d, false), c => Render(c, 0));
+        // Keep hook order stable when the debug view changes, but bypass its output.
+        return visibility.DebugMode == VisibilityDebugMode.Shaded ? Output : color;
     }
 
     private void Declare(RenderGraphPassDeclarationBuilder d, bool gather)
     {
+        if (_visibility.DebugMode != VisibilityDebugMode.Shaded) { return; }
         d.Read(Camera, RenderGraphBufferUsage.Uniform)
-        .Read(Snapshot, RenderGraphTextureUsage.TextureBinding).Read(_depth, RenderGraphTextureUsage.TextureBinding)
+        .Read(_color, RenderGraphTextureUsage.TextureBinding).Read(_depth, RenderGraphTextureUsage.TextureBinding)
         .Read(_visibility.BaseColorRoughnessTarget, RenderGraphTextureUsage.TextureBinding)
         .Read(_visibility.NormalMetallicTarget, RenderGraphTextureUsage.TextureBinding)
         .Read(_visibility.EmissiveOcclusionTarget, RenderGraphTextureUsage.TextureBinding)
         .Read(new RenderGraphTextureKey("pbr-ibl-prefiltered"), RenderGraphTextureUsage.TextureBinding)
         .Read(new RenderGraphTextureKey("pbr-ibl-brdf-lut"), RenderGraphTextureUsage.TextureBinding)
-        .Write(gather ? Gather : _color, RenderGraphTextureUsage.RenderAttachment);
+        .Write(gather ? Gather : Output, RenderGraphTextureUsage.RenderAttachment);
         if (gather) { d.Write(GatherSurface, RenderGraphTextureUsage.RenderAttachment); }
         if (_indirect && !gather) { d.Read(Gather, RenderGraphTextureUsage.TextureBinding).Read(GatherSurface, RenderGraphTextureUsage.TextureBinding); }
-    }
-
-    private void Copy(WgpuReactiveRenderGraphPassContext c)
-    {
-        if (_visibility.DebugMode != VisibilityDebugMode.Shaded) { return; }
-        var from = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)c.GetTexture(_color).DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
-        var to = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)c.GetTexture(Snapshot).DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
-        var size = new WGPUExtent3D { Width = _width, Height = _height, DepthOrArrayLayers = 1 };
-        WgpuUnsafe.wgpuCommandEncoderCopyTextureToTexture((WGPUCommandEncoder*)c.CommandEncoder.DangerousGetHandle(), &from, &to, &size);
     }
 
     private void Render(WgpuReactiveRenderGraphPassContext c, int stage)
     {
         if (_visibility.DebugMode != VisibilityDebugMode.Shaded) { return; }
-        _scratch[0] = c.GetTextureView(Snapshot); _scratch[1] = c.GetTextureView(_depth);
+        _scratch[0] = c.GetTextureView(_color); _scratch[1] = c.GetTextureView(_depth);
         _scratch[2] = c.GetTextureView(_visibility.BaseColorRoughnessTarget);
         _scratch[3] = c.GetTextureView(_visibility.NormalMetallicTarget);
         _scratch[4] = c.GetTextureView(_visibility.EmissiveOcclusionTarget);
@@ -155,11 +151,11 @@ internal sealed unsafe class PbrScreenLighting
             _groups[stage] = next; _sources[stage] = sources.ToArray();
         }
         var pass = stage == 0
-            ? c.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(_color, WGPULoadOp.Clear))
+            ? c.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(Output, WGPULoadOp.Clear))
             : c.GetOrBeginRenderPass([new(Gather, WGPULoadOp.Clear), new(GatherSurface, WGPULoadOp.Clear)]);
         Wgpu.SetRenderPipeline(pass, _pipelines[stage].GetWgpu<WGPURenderPipeline>());
         Wgpu.SetBindGroup(pass, 0, _groups[stage].GetWgpu<WGPUBindGroup>());
-        Wgpu.SetBindGroup(pass, 1, _lighting.ForwardLightingBindGroup.GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(pass, 1, _lighting.LightingBindGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 2, _lighting.IblBindGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.Draw(pass, 3);
     }

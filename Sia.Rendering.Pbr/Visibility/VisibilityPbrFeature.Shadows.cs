@@ -12,7 +12,7 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_ShadowClusterIndicesKey = new("visibility-shadow-cluster-indices");
 
     internal void PrepareShadows(in RenderFeatureContext<RenderFrameContext> context, PbrViewState lighting,
-        ShadowAtlasConfig config, bool noForwardCasters)
+        ShadowAtlasConfig config)
     {
         var shadows = lighting.Shadows;
         var main = context.View.PersistentResources.GetRequired<ViewState>();
@@ -57,7 +57,7 @@ public sealed partial class VisibilityPbrFeature
             var view = shadow.View;
             var projection = shadows.LayerViewProj(layer);
             // Residency changes outside this light's clip volume do not alter its depth.
-            shadow.Cacheable = _fixedGeometry is not null && noForwardCasters && DebugMode == VisibilityDebugMode.Shaded;
+            shadow.Cacheable = _fixedGeometry is not null && DebugMode == VisibilityDebugMode.Shaded;
             if (!shadow.Cacheable) { shadow.Rendered = null; }
             shadow.Pending = new(lighting.ShadowAtlas.Texture, projection, config.TileResolution, _instanceVersion);
             shadow.Reuse = shadow.Cacheable && shadow.Rendered is { } rendered
@@ -67,7 +67,7 @@ public sealed partial class VisibilityPbrFeature
             _frameStatistics = _frameStatistics with {
                 ShadowsReused = _frameStatistics.ShadowsReused + (shadow.Reuse ? 1 : 0),
                 ShadowsRendered = _frameStatistics.ShadowsRendered + (shadow.Reuse ? 0 : 1) };
-            if (shadow.Reuse) { shadow.Rendered = shadow.Pending; lighting.RetainedShadowLayers.Add(layer); continue; }
+            if (shadow.Reuse) { shadow.Rendered = shadow.Pending; continue; }
             view.Width = config.TileResolution; view.Height = config.TileResolution;
             Wgpu.WriteBuffer<CameraGpu>(_queue.GetWgpu<WGPUQueue>(), view.Uniform.GetWgpu<WGPUBuffer>(), 0,
                 [new(projection, default, new(config.TileResolution, config.TileResolution, TriangleCount, 0), default, default,
@@ -143,7 +143,7 @@ public sealed partial class VisibilityPbrFeature
                 var attachment = WGPURenderPassDepthStencilAttachment.Default;
                 attachment.View = (WGPUTextureView*)context.GetTextureView(ShadowAtlas,
                     new RenderGraphTextureSubresourceRange(0, 1, (uint)shadow.Layer, 1), cacheable: false).DangerousGetHandle();
-                attachment.DepthLoadOp = WGPULoadOp.Load;
+                attachment.DepthLoadOp = WGPULoadOp.Clear;
                 attachment.DepthStoreOp = WGPUStoreOp.Store;
                 attachment.DepthClearValue = 1;
                 var descriptor = WGPURenderPassDescriptor.Default;

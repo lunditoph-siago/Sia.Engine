@@ -1,6 +1,5 @@
 using Sia.Engine.Camera;
 using Sia.Engine.Lighting;
-using Sia.Engine.Mesh;
 using Sia;
 using Sia.Engine;
 using Sia.Math;
@@ -13,26 +12,8 @@ public sealed partial class PbrRenderer(
     PbrIblPrecomputePipelines iblPipelines,
     PbrOutputPipelines outputPipelines)
 {
-    private readonly PbrDepthPrepassPipeline? _depthPipeline;
-    private readonly ForwardPbrPipeline? _forwardPipeline;
-    private readonly PbrShadowDepthPipeline? _shadowDepthPipeline;
     private Entity _lightingLayout;
     private Entity _iblLayout;
-
-    internal bool HasMeshPipelines => _forwardPipeline is not null;
-
-    public PbrRenderer(PbrDepthPrepassPipeline depthPipeline, ForwardPbrPipeline forwardPipeline,
-        ClusterLightCullingPipeline cullingPipeline, PbrShadowDepthPipeline shadowDepthPipeline,
-        PbrIblPrecomputePipelines iblPipelines, PbrOutputPipelines outputPipelines)
-        : this(cullingPipeline, iblPipelines, outputPipelines)
-    {
-        ArgumentNullException.ThrowIfNull(depthPipeline);
-        ArgumentNullException.ThrowIfNull(forwardPipeline);
-        ArgumentNullException.ThrowIfNull(shadowDepthPipeline);
-        _depthPipeline = depthPipeline; _forwardPipeline = forwardPipeline; _shadowDepthPipeline = shadowDepthPipeline;
-        _lightingLayout = forwardPipeline.LightingBindGroupLayout;
-        _iblLayout = forwardPipeline.IblBindGroupLayout;
-    }
 
     public PbrExtractedView ExtractFrame(
         PbrViewState state,
@@ -42,18 +23,8 @@ public sealed partial class PbrRenderer(
         ShadowAtlasConfig shadowConfig,
         Aabb? shadowBounds = null)
     {
-        var cache = frame.MainWorld.AcquireAddon<PbrRenderCache>();
-        cache.Refresh();
-        if (!HasMeshPipelines && cache.MeshHandles.Count != 0) {
-            throw new InvalidOperationException("This renderer requires VisibilityInstance geometry. MeshRenderer geometry requires mesh pipelines.");
-        }
-
         var matrices = cameraEntity.Get<CameraMatrices>();
-        var visible = cache.Cull(matrices.Frustum);
         var extractedShadowConfig = Copy(shadowConfig);
-        if (cache.ShadowBounds is { } meshBounds) {
-            shadowBounds = shadowBounds is { } visibilityBounds ? Aabb.Union(visibilityBounds, meshBounds) : meshBounds;
-        }
         state.Shadows.Refresh(frame.MainWorld, extractedShadowConfig, cameraEntity, shadowBounds);
         state.Lights.Refresh(frame.MainWorld, state.Shadows);
 
@@ -64,50 +35,15 @@ public sealed partial class PbrRenderer(
         ArgumentNullException.ThrowIfNull(sky);
         sky.Validate();
         var coefficients = atmosphere is not null || state.PreparedSky == sky ? null : IrradianceSh.Project(sky.Evaluate);
-        var allItems = cache.MeshHandles
-            .Select(static (mesh, index) => new PbrDrawItem(mesh, index))
-            .ToArray();
-        var visibleItems = visible
-            .Select(index => new PbrDrawItem(cache.MeshHandles[index], index))
-            .ToArray();
         return new PbrExtractedView(
             matrices,
             cameraEntity.Get<global::Sia.Engine.Camera.Camera>(),
             frame.MainWorld.AcquireAddon<Viewport>().Value,
             Copy(clusterConfig),
             extractedShadowConfig,
-            cache.Data,
-            allItems,
-            visibleItems,
             sky,
             coefficients,
             atmosphere);
-    }
-
-    public void PrepareFrame(PbrViewState state, in GpuFrame frame, PbrExtractedView extracted)
-    {
-        if (!HasMeshPipelines) { return; }
-        var meshStore = frame.ResourceWorld.AcquireAddon<MeshGpuStore>();
-        var meshRegistry = frame.ResourceWorld.AcquireAddon<MeshRegistry>();
-        state.Meshes.Clear();
-        foreach (var item in extracted.AllItems) {
-            state.Meshes.TryAdd(item.Mesh, meshStore.GetOrUpload(in frame, meshRegistry, item.Mesh));
-        }
-
-        var matrices = extracted.CameraMatrices;
-        state.CameraUniforms.Update(in frame, in matrices);
-
-        var resized = state.Instances.Upload(in frame, extracted.Instances.Span);
-        if (resized || !state.DepthBindGroup.IsValid) {
-            EnsureBindGroups(state, in frame);
-        }
-    }
-
-    public void QueueOpaque(PbrExtractedView extracted, RenderPhase<PbrDrawItem> phase)
-    {
-        ArgumentNullException.ThrowIfNull(phase);
-        phase.AddRange(extracted.VisibleItems);
-        phase.Sort();
     }
 
     public void PrepareLighting(
@@ -120,21 +56,6 @@ public sealed partial class PbrRenderer(
         var shadowConfig = extracted.ShadowConfig;
         var atlasResized = state.ShadowAtlas.EnsureCapacity(in frame, shadowConfig);
         var shadowLayersResized = state.Shadows.Upload(in frame, shadowConfig);
-        var layerCount = shadowConfig.LayerCount;
-        if (_shadowDepthPipeline is not null) {
-            EnsureShadowCameraBuffers(state, in frame, layerCount);
-            if (atlasResized || state.ShadowDrawBindGroups.Length != layerCount) {
-                EnsureShadowDrawBindGroups(state, in frame, layerCount);
-            }
-            for (var layer = 0; layer < layerCount; layer++) {
-                Wgpu.WriteBuffer(
-                    frame.Queue.GetWgpu<WGPUQueue>(),
-                    state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
-                    0,
-                    [new CameraUniformData(state.Shadows.LayerViewProj(layer), float4.zero)]);
-            }
-        }
-
         var lightsResized = state.Lights.Upload(in frame);
         var buffersResized = state.ClusterBuffers.EnsureCapacity(in frame, clusterConfig);
 
@@ -147,8 +68,8 @@ public sealed partial class PbrRenderer(
         if (lightsResized || buffersResized || !state.CullingBindGroup.IsValid) {
             EnsureCullingBindGroup(state, in frame);
         }
-        if (lightsResized || buffersResized || atlasResized || shadowLayersResized || !state.ForwardLightingBindGroup.IsValid) {
-            EnsureForwardLightingBindGroup(state, in frame);
+        if (lightsResized || buffersResized || atlasResized || shadowLayersResized || !state.LightingBindGroup.IsValid) {
+            EnsureLightingBindGroup(state, in frame);
         }
 
         PrepareIbl(state, in frame, extracted);
@@ -281,70 +202,6 @@ public sealed partial class PbrRenderer(
         Wgpu.DispatchWorkgroups(computePass, workgroups);
     }
 
-    public void EncodeShadowLayer(
-        PbrViewState state,
-        IReadOnlyList<PbrDrawItem> items,
-        int layer,
-        WgpuHandle<WGPURenderPassEncoder> renderPass)
-    {
-        if (items.Count == 0) {
-            return;
-        }
-
-        Wgpu.SetRenderPipeline(renderPass, (_shadowDepthPipeline ?? throw new InvalidOperationException("Mesh shadow pipelines are not configured.")).RenderPipeline.GetWgpu<WGPURenderPipeline>());
-        Wgpu.SetBindGroup(renderPass, 0, state.ShadowDrawBindGroups[layer].GetWgpu<WGPUBindGroup>());
-        foreach (var item in items) {
-            var mesh = state.Meshes[item.Mesh];
-            Wgpu.SetVertexBuffer(renderPass, 0, mesh.VertexBuffer.GetWgpu<WGPUBuffer>());
-            Wgpu.SetIndexBuffer(renderPass, mesh.IndexBuffer.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-            Wgpu.DrawIndexed(renderPass, mesh.IndexCount, instanceCount: 1, firstInstance: (uint)item.InstanceIndex);
-        }
-    }
-
-    private void EnsureShadowCameraBuffers(PbrViewState state, in GpuFrame frame, int layerCount)
-    {
-        if (state.ShadowCameraBuffers.Length == layerCount) {
-            return;
-        }
-        foreach (var existing in state.ShadowCameraBuffers) {
-            if (existing.IsValid) {
-                existing.Destroy();
-            }
-        }
-        var buffers = new Entity[layerCount];
-        for (var layer = 0; layer < layerCount; layer++) {
-            buffers[layer] = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {
-                NextInChain = null,
-                Label = default,
-                Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst,
-                Size = CameraUniformData.Stride,
-                MappedAtCreation = 0
-            });
-        }
-        state.ShadowCameraBuffers = buffers;
-    }
-
-    private void EnsureShadowDrawBindGroups(PbrViewState state, in GpuFrame frame, int layerCount)
-    {
-        foreach (var existing in state.ShadowDrawBindGroups) {
-            if (existing.IsValid) {
-                existing.Destroy();
-            }
-        }
-
-        var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        var bindGroups = new Entity[layerCount];
-        for (var layer = 0; layer < layerCount; layer++) {
-            bindGroups[layer] = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
-                deviceHandle,
-                _shadowDepthPipeline!.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-                state.ShadowCameraBuffers[layer].GetWgpu<WGPUBuffer>(),
-                state.Instances.IsValid ? state.Instances.Buffer.GetWgpu<WGPUBuffer>() : default,
-                state.Instances.Capacity));
-        }
-        state.ShadowDrawBindGroups = bindGroups;
-    }
-
     private void EnsureCullingBindGroup(PbrViewState state, in GpuFrame frame)
     {
         if (state.CullingBindGroup.IsValid) {
@@ -354,14 +211,14 @@ public sealed partial class PbrRenderer(
         state.CullingBindGroup = cullingPipeline.CreateBindGroup(in frame, state.ClusterBuffers, state.Lights);
     }
 
-    private void EnsureForwardLightingBindGroup(PbrViewState state, in GpuFrame frame)
+    private void EnsureLightingBindGroup(PbrViewState state, in GpuFrame frame)
     {
-        if (state.ForwardLightingBindGroup.IsValid) {
-            state.ForwardLightingBindGroup.Destroy();
+        if (state.LightingBindGroup.IsValid) {
+            state.LightingBindGroup.Destroy();
         }
 
         var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        state.ForwardLightingBindGroup = frame.ResourceWorld.OwnWgpu(PbrLightingBindGroupLayout.CreateBindGroup(
+        state.LightingBindGroup = frame.ResourceWorld.OwnWgpu(PbrLightingBindGroupLayout.CreateBindGroup(
             deviceHandle,
             _lightingLayout.GetWgpu<WGPUBindGroupLayout>(),
             state.ClusterBuffers.ConfigBuffer.GetWgpu<WGPUBuffer>(),
@@ -373,75 +230,5 @@ public sealed partial class PbrRenderer(
             state.ShadowAtlas.Sampler.GetWgpu<WGPUSampler>(),
             state.Shadows.LayerBuffer.GetWgpu<WGPUBuffer>(), state.Shadows.LayerBufferCapacity,
             state.Shadows.ConfigBuffer.GetWgpu<WGPUBuffer>()));
-    }
-
-    public void EncodeDepthPrepass(
-        PbrViewState state,
-        IReadOnlyList<PbrDrawItem> items,
-        WgpuHandle<WGPURenderPassEncoder> renderPass) =>
-        Encode(
-            state, items, renderPass, (_depthPipeline ?? throw new InvalidOperationException("Mesh depth pipelines are not configured.")).RenderPipeline,
-            state.DepthBindGroup, default, default);
-
-    public void EncodeForwardPbr(
-        PbrViewState state,
-        IReadOnlyList<PbrDrawItem> items,
-        WgpuHandle<WGPURenderPassEncoder> renderPass) =>
-        Encode(
-            state, items, renderPass, (_forwardPipeline ?? throw new InvalidOperationException("Forward mesh pipelines are not configured.")).RenderPipeline,
-            state.ForwardBindGroup, state.ForwardLightingBindGroup, state.IblBindGroup);
-
-    private static void Encode(
-        PbrViewState state,
-        IReadOnlyList<PbrDrawItem> items,
-        WgpuHandle<WGPURenderPassEncoder> renderPass,
-        Entity pipeline, Entity bindGroup, Entity lightingBindGroup, Entity iblBindGroup)
-    {
-        if (items.Count == 0) {
-            return;
-        }
-
-        Wgpu.SetRenderPipeline(renderPass, pipeline.GetWgpu<WGPURenderPipeline>());
-        Wgpu.SetBindGroup(renderPass, 0, bindGroup.GetWgpu<WGPUBindGroup>());
-        if (lightingBindGroup.IsValid) {
-            Wgpu.SetBindGroup(renderPass, 1, lightingBindGroup.GetWgpu<WGPUBindGroup>());
-        }
-        if (iblBindGroup.IsValid) {
-            Wgpu.SetBindGroup(renderPass, 2, iblBindGroup.GetWgpu<WGPUBindGroup>());
-        }
-
-        foreach (var item in items) {
-            var mesh = state.Meshes[item.Mesh];
-            Wgpu.SetVertexBuffer(renderPass, 0, mesh.VertexBuffer.GetWgpu<WGPUBuffer>());
-            Wgpu.SetIndexBuffer(renderPass, mesh.IndexBuffer.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-            Wgpu.DrawIndexed(renderPass, mesh.IndexCount, instanceCount: 1, firstInstance: (uint)item.InstanceIndex);
-        }
-    }
-
-    private void EnsureBindGroups(PbrViewState state, in GpuFrame frame)
-    {
-        if (state.DepthBindGroup.IsValid) {
-            state.DepthBindGroup.Destroy();
-        }
-        if (state.ForwardBindGroup.IsValid) {
-            state.ForwardBindGroup.Destroy();
-        }
-
-        var deviceHandle = frame.Device.GetWgpu<WGPUDevice>();
-        var cameraBuffer = state.CameraUniforms.Buffer.GetWgpu<WGPUBuffer>();
-        var instanceBuffer = state.Instances.Buffer.GetWgpu<WGPUBuffer>();
-
-        state.DepthBindGroup = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
-            deviceHandle,
-            _depthPipeline!.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            cameraBuffer, instanceBuffer, state.Instances.Capacity));
-        state.ForwardBindGroup = frame.ResourceWorld.OwnWgpu(PbrObjectBindGroupLayout.CreateBindGroup(
-            deviceHandle,
-            _forwardPipeline!.BindGroupLayout.GetWgpu<WGPUBindGroupLayout>(),
-            cameraBuffer, instanceBuffer, state.Instances.Capacity));
-
-        if (state.ShadowDrawBindGroups.Length > 0) {
-            EnsureShadowDrawBindGroups(state, in frame, state.ShadowDrawBindGroups.Length);
-        }
     }
 }

@@ -210,7 +210,7 @@ public sealed unsafe class PbrTransparentScene
         }
         public void Render(WgpuHandle<WGPURenderPassEncoder> pass, PbrViewState lighting)
         {
-            var bindings = (Group, lighting.ForwardLightingBindGroup, lighting.IblBindGroup);
+            var bindings = (Group, lighting.LightingBindGroup, lighting.IblBindGroup);
             var bundleCount = (_drawList.Count + DrawsPerBundle - 1) / DrawsPerBundle;
             var bindingsChanged = _bindings != bindings;
             // Inactive bundles may return after bindings changed while they were culled.
@@ -249,7 +249,7 @@ public sealed unsafe class PbrTransparentScene
             try {
                 WgpuUnsafe.wgpuRenderBundleEncoderSetPipeline(encoder, (WGPURenderPipeline*)Owner._pipeline.GetWgpu<WGPURenderPipeline>().DangerousGetHandle());
                 WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 0, (WGPUBindGroup*)Group.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
-                WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 1, (WGPUBindGroup*)lighting.ForwardLightingBindGroup.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
+                WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 1, (WGPUBindGroup*)lighting.LightingBindGroup.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
                 WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 2, (WGPUBindGroup*)lighting.IblBindGroup.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
                 foreach (var index in order) {
                     var draw = Owner._draws[index];

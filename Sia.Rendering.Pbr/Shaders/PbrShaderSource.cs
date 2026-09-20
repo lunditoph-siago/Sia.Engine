@@ -11,7 +11,6 @@ public static class PbrShaderSource
     private const string k_ResourcePrefix = "Sia.Rendering.Pbr.Shaders.";
 
     private static readonly string[] s_ModuleResourceNames = [
-        k_ResourcePrefix + "scene_common.wgsl",
         k_ResourcePrefix + "pbr_lighting.wgsl",
         k_ResourcePrefix + "shadows.wgsl",
         k_ResourcePrefix + "ibl.wgsl",
@@ -23,9 +22,6 @@ public static class PbrShaderSource
         k_ResourcePrefix + "screen_trace.wgsl",
     ];
 
-    public static string LoadDepthPrepass() => Load(k_ResourcePrefix + "depth_prepass.wgsl");
-
-    public static string LoadForwardPbr() => Load(k_ResourcePrefix + "forward_pbr.wgsl");
     internal static string LoadTransparentPbr(bool transmission = false) => Load(k_ResourcePrefix + "transparent_pbr.wgsl",
         transmission ? new Dictionary<string, string> { ["OPTICAL_TRANSMISSION"] = "true" } : null);
     internal static string LoadScreenLighting(bool gather, bool reflections, bool indirect)
@@ -37,8 +33,6 @@ public static class PbrShaderSource
         return Load(k_ResourcePrefix + "screen_lighting.wgsl", definitions);
     }
 
-
-    public static string LoadShadowDepth() => Load(k_ResourcePrefix + "shadow_depth.wgsl");
 
     public static string LoadIblPrefilterSpecular() => Load(k_ResourcePrefix + "ibl_prefilter_specular.wgsl");
 
