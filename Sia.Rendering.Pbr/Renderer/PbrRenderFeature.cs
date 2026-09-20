@@ -131,16 +131,20 @@ public sealed class PbrRenderFeature :
             PbrRenderGraphHooks.UseForwardPbrPass(
                 ref graph, Renderer, state, phase, Options.ForwardPass, Options.HdrTarget, frameContext.DepthTarget, WGPULoadOp.Load);
         }
+        var hdr = Options.HdrTarget;
         if ((Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) && Visibility is { } reflectiveVisibility) {
-            state.ScreenLighting!.BuildGraph(ref graph, Options.HdrTarget, frameContext.DepthTarget,
+            hdr = state.ScreenLighting!.BuildGraph(ref graph, hdr, frameContext.DepthTarget,
                 reflectiveVisibility, state, extracted);
+        }
+        if (hdr == frameContext.ColorTarget) {
+            throw new InvalidOperationException("Screen lighting and final output require distinct targets.");
         }
         if (Transparency is { } transparency) {
             PbrRenderGraphHooks.UseTransparencyPass(ref graph, transparency.Import(ref graph, in context), state,
-                Options.HdrTarget, frameContext.DepthTarget, Visibility is null || Visibility.DebugMode == VisibilityDebugMode.Shaded);
+                hdr, frameContext.DepthTarget, Visibility is null || Visibility.DebugMode == VisibilityDebugMode.Shaded);
         }
         var output = PbrRenderGraphHooks.UseAtmosphereComposite(
-            ref graph, state, extracted, Options, in frameContext);
+            ref graph, state, extracted, Options, hdr, in frameContext);
         PbrRenderGraphHooks.UseToneMappingPass(
             ref graph, Renderer, state, Options.ToneMappingPass, output, in frameContext);
     }

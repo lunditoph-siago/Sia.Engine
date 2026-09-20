@@ -69,14 +69,9 @@ public static partial class PbrRenderGraphHooks
         graph.BindImportedTexture(
             _iblBrdfLutKey, viewState.Ibl.BrdfLutTexture.GetWgpu<WGPUTexture>());
 
-        for (var face = 0; face < 6; face++) {
-            for (var mip = 0; mip < IblEnvironmentGpuStore.PrefilteredMipCount; mip++) {
-                var pass = new RenderGraphPassKey($"pbr-ibl-prefilter-{face}-{mip}");
-                var state = graph.UseState(() => new IblPrefilterState(face, mip));
-                state.Update(renderer, viewState);
-                graph.UsePass(pass, state.Name, state.Declare, state.Render);
-            }
-        }
+        var prefilterState = graph.UseState(static () => new IblPrefilterState());
+        prefilterState.Update(renderer, viewState);
+        graph.UsePass(new("pbr-ibl-prefilter"), "pbr-ibl-prefilter", prefilterState.Declare, prefilterState.Render);
 
         var lutPass = new RenderGraphPassKey("pbr-ibl-brdf-lut");
         var lutState = graph.UseState(() => new IblBrdfLutState());
@@ -305,30 +300,29 @@ public static partial class PbrRenderGraphHooks
         }
     }
 
-    private sealed class IblPrefilterState(int face, int mip)
+    private sealed class IblPrefilterState
     {
         private PbrRenderer? _renderer;
         private PbrViewState? _viewState;
         private ulong _renderedRevision;
-
-        public string Name { get; } = $"pbr-ibl-prefilter-{face}-{mip}";
+        private Entity _texture;
 
         public void Update(
             PbrRenderer renderer,
             PbrViewState viewState)
         {
-            if (!ReferenceEquals(_viewState, viewState)) {
+            if (!ReferenceEquals(_renderer, renderer) || !ReferenceEquals(_viewState, viewState)
+                || _texture != viewState.Ibl.PrefilteredTexture) {
                 _renderedRevision = 0;
             }
             _renderer = renderer;
             _viewState = viewState;
+            _texture = viewState.Ibl.PrefilteredTexture;
         }
 
         public void Declare(RenderGraphPassDeclarationBuilder declaration)
         {
-            declaration.Write(
-                _iblPrefilteredKey, RenderGraphTextureUsage.RenderAttachment,
-                new RenderGraphTextureSubresourceRange((uint)mip, 1, (uint)face, 1));
+            declaration.Write(_iblPrefilteredKey, RenderGraphTextureUsage.RenderAttachment);
             if (_viewState!.ActiveAtmosphere is not null) {
                 AtmosphereGpuState.DeclareSkyRead(declaration);
             }
@@ -339,16 +333,17 @@ public static partial class PbrRenderGraphHooks
             if (_renderedRevision == _viewState!.EnvironmentRevision) {
                 return;
             }
-            var renderPass = context.GetOrBeginRenderPass(
-                new WgpuReactiveRenderGraphColorAttachment(
-                    _iblPrefilteredKey, WGPULoadOp.Clear,
-                    Subresources: new RenderGraphTextureSubresourceRange((uint)mip, 1, (uint)face, 1),
-                    Cacheable: false));
-            _renderer!.EncodeIblPrefilter(
-                _viewState!,
-                face,
-                mip,
-                renderPass);
+            // One graph dependency and cache check; all faces/mips still update together.
+            for (var face = 0; face < 6; face++) {
+                for (var mip = 0; mip < IblEnvironmentGpuStore.PrefilteredMipCount; mip++) {
+                    var renderPass = context.GetOrBeginRenderPass(
+                        new WgpuReactiveRenderGraphColorAttachment(
+                            _iblPrefilteredKey, WGPULoadOp.Clear,
+                            Subresources: new RenderGraphTextureSubresourceRange((uint)mip, 1, (uint)face, 1),
+                            Cacheable: false));
+                    _renderer!.EncodeIblPrefilter(_viewState, face, mip, renderPass);
+                }
+            }
             _renderedRevision = _viewState.EnvironmentRevision;
         }
     }
