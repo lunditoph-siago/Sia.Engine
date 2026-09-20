@@ -15,7 +15,7 @@ public static partial class MeshPatchBuilder
             throw new ArgumentOutOfRangeException(nameof(settings));
         }
         var source = Prepare(mesh, cancellationToken, out var removed);
-        var meshlets = MeshletBuilder.Build(source, 64, options.MaxLeafTriangles, cancellationToken);
+        var meshlets = MeshletBuilder.Build(source, 64, options.MaxLeafTriangles, cancellationToken: cancellationToken);
         var frontier = new List<MeshPatch>();
         var triangleOffset = 0;
         foreach (var meshlet in meshlets.Meshlets) {
