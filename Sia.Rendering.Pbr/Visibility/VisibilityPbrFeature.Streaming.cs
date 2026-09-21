@@ -51,7 +51,7 @@ public sealed partial class VisibilityPbrFeature
     /// <summary>Creates resident coarse geometry and a bounded detail arena. Call StopStreamingAsync before disposing its resource world.</summary>
     public static VisibilityPbrFeature CreateStreamScene(in GpuFrame frame, PbrSceneStream source,
         WGPUTextureFormat outputFormat, long detailByteBudget = 64 * 1024 * 1024,
-        int uploadBytesPerFrame = 1024 * 1024, VisibilityDebugMode mode = VisibilityDebugMode.Shaded)
+        int uploadBytesPerFrame = 1024 * 1024, VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (detailByteBudget is < 1024 * 1024 or > 256 * 1024 * 1024 || uploadBytesPerFrame < 65536)
@@ -90,7 +90,7 @@ public sealed partial class VisibilityPbrFeature
         var empty = MeshletRasterData.Combine([]);
         var scene = new SceneLodData(empty, [], instances.Select(i => new uint4(0, 0, 0, (uint)i.AssetIndex)).ToArray(), default, 1,
             triangleCapacity, localBounds.Select(b => (Aabb?)b).ToArray());
-        var feature = Create(in frame, empty, instances, null, outputFormat, mode, null, default,
+        var feature = Create(in frame, empty, instances, null, outputFormat, mode, null, default, enableGpuTiming,
             scene: scene, materials: materialIds.Select(i => bootstrap.Materials.Span[i]).ToArray(), fixedClusters: new GeometryClusterGpu[clusterCount], reservation: reservation);
         var streaming = new GeometryStreaming { Source = source, Reservation = reservation, Assets = assets,
             Vertices = new(rootV, fineV), Indices = new(rootI, fineI), Triangles = new(rootT, fineT), UploadBudget = uploadBytesPerFrame, Uploader = new(in frame, feature._geometry[0], feature._geometry[1], feature._geometry[2], reservation.Vertices) };
