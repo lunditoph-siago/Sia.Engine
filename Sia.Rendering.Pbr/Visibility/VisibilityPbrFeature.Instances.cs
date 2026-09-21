@@ -20,6 +20,7 @@ public sealed partial class VisibilityPbrFeature
     private VisibilityInstance?[] _instanceSources = [];
     private InstanceGpu[] _instanceConverted = [];
     private SceneBoundsTree? _instanceBounds;
+    private bool _extractionDesynced;
 
     public static VisibilityPbrFeature CreateGpuScene(in GpuFrame frame, ReadOnlySpan<MeshPatchTree> assets,
         int instanceCapacity, VisibilityAlbedo albedo, VisibilityLodSettings lod,
@@ -86,6 +87,8 @@ public sealed partial class VisibilityPbrFeature
         BeginStatistics(context.RenderWorld.FrameIndex);
         if (_instanceWorld is null) { return; }
         if (_extractedInstances?.Frame == context.RenderWorld.FrameIndex) { return; }
+        var recoverFromDesync = _extractionDesynced;
+        _extractionDesynced = true;
         var entities = _instanceQuery;
         entities.Clear();
         _instanceWorld.Query(s_InstanceMatcher, entities, static (in List<Entity> list, Entity entity) => list.Add(entity));
@@ -108,8 +111,6 @@ public sealed partial class VisibilityPbrFeature
             var asset = _instanceAssets[source.AssetIndex];
             var binding = new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex);
             if (_instanceSources[i] is not { } cached || cached != source) {
-                // Component refs may change without events. Compare the source,
-                // but invert/validate matrices only for actual mutations.
                 var converted = ToGpu(source, binding, MaterialCount,
                     (uint)source.MaterialIndex < (uint)_doubleSided.Length && _doubleSided[source.MaterialIndex]);
                 Aabb? bounds = null;
@@ -127,11 +128,9 @@ public sealed partial class VisibilityPbrFeature
             throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
         }
         if (_lod.Shadows is { } shadow) { ValidateShadowRoots(new(roots, meshlets, triangles), shadow.Budget); }
-        // A prior invalid extraction may have updated validated CPU entries but
-        // could not publish a snapshot. Compare against the last accepted state.
         changed |= _extractedInstances is null || slots.Length != _extractedInstances.Instances.Length
-            || !_instanceConverted.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Instances)
-            || !slots.Owners[..slots.Length].SequenceEqual(_extractedInstances.Entities);
+            || !slots.Owners[..slots.Length].SequenceEqual(_extractedInstances.Entities)
+            || (recoverFromDesync && !_instanceConverted.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Instances));
         if (!changed && _extractedInstances is { } retained) { retained.Frame = context.RenderWorld.FrameIndex; }
         else {
             _extractedInstances = new(slots.Owners[..slots.Length].ToArray(),
@@ -139,6 +138,7 @@ public sealed partial class VisibilityPbrFeature
         }
         ShadowBounds = _instanceBounds!.Bounds;
         _instanceRenderWorld = context.RenderWorld;
+        _extractionDesynced = false;
     }
 
     private void ValidateFrame(in RenderFeatureContext<RenderFrameContext> context)
@@ -187,7 +187,6 @@ public sealed partial class VisibilityPbrFeature
                 [snapshot.RootMeshlets, snapshot.RootTriangles]);
         }
         if (changed) {
-            // Both old and new bounds are required when moving or removing a caster.
             for (var i = 0; i < instances.Length; i++) {
                 if (previous is not null && i < previous.Instances.Length && instances[i] == previous.Instances[i]) continue;
                 Aabb? bounds = null;
