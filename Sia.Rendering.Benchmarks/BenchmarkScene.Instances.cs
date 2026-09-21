@@ -45,6 +45,28 @@ internal sealed partial class BenchmarkScene
         if (reused.Counters.SelectedTriangles != initial.Counters.SelectedTriangles || scene._feature.InstanceCount != 1)
             throw new InvalidOperationException("Reused slot did not restore geometry.");
         await Frame(0);
-        Console.WriteLine("GPU Scene verification passed: static zero uploads, direct ref material/transform writes, removal, slot reuse, and GPU indirect readback.");
+        // Extraction caches per-slot CPU state before validating/publishing it, and
+        // only falls back to a full converted-instance comparison against the last
+        // published snapshot when a prior attempt failed before publishing (see
+        // VisibilityPbrFeature.Instances.cs's _extractionDesynced). Prove a failed
+        // extraction attempt does not corrupt or wedge extraction: it must throw,
+        // and the very next valid attempt must still publish correctly afterward.
+        var priorEntities = new List<Entity>();
+        scene._main.Query(Matchers.Of<VisibilityInstance>(), priorEntities, static (in List<Entity> list, Entity item) => list.Add(item));
+        foreach (var prior in priorEntities) prior.Destroy();
+        await Frame(priorEntities.Count);
+        var recoveryEntity = scene._main.Create(HList.From(source));
+        await Frame(1);
+        recoveryEntity.Get<VisibilityInstance>() = source with { AssetIndex = 1 };
+        try {
+            await Frame(0);
+            throw new InvalidOperationException("An out-of-range asset index did not throw during extraction.");
+        } catch (ArgumentOutOfRangeException) { /* Expected: the invalid extraction attempt must fail without publishing. */ }
+        recoveryEntity.Get<VisibilityInstance>() = source with { Transform = float4x4.Translate(new(10, 0, 0)) };
+        var recovered = await Frame(1);
+        if (recovered.Counters.MainTriangles + recovered.Counters.PostTriangles != 0)
+            throw new InvalidOperationException("Extraction did not resume publishing the corrected instance after a prior failed attempt.");
+        await Frame(0);
+        Console.WriteLine("GPU Scene verification passed: static zero uploads, direct ref material/transform writes, removal, slot reuse, GPU indirect readback, and continued publishing after a failed extraction attempt.");
     }
 }
