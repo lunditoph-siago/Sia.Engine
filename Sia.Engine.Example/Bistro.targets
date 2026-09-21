@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
-    <_BistroAssetHash>68F437857411452EB93E48BBA163CC4E62C9D40EAEB4F4846CA96A8A90F8A4D8</_BistroAssetHash>
-    <_BistroFinestAssetHash>D49157D2F9DD4CFCB8CA3E7A984CCC94F2F6770230168EB5E9C9651C2F2375AB</_BistroFinestAssetHash>
+    <_BistroAssetHash>02BE180E6977CD82E497667BE030337268C5721B2C3B12F397A99A5AF2A5F4D5</_BistroAssetHash>
+    <_BistroFinestAssetHash>99813FBA111A0BC9F5A8D65993A7C59E181418F595100BDB3C976CE4CE94517D</_BistroFinestAssetHash>
     <_BistroLicenseHash>9A9EF3C33320EEBE6126B0C7DC327885806BDE242283BBE6E4AE77641AD703E4</_BistroLicenseHash>
     <_BistroReleaseUrl>https://github.com/lunditoph-siago/Sia.Engine/releases/download/Bistro</_BistroReleaseUrl>
     <BistroAssetPath Condition="'$(BistroAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroAssetHash)/Bistro.siapbr', '$(MSBuildProjectDirectory)'))</BistroAssetPath>
