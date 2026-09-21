@@ -5,7 +5,6 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-/// <summary>Owns checksum-verified reads and startup data for one streaming renderer.</summary>
 public sealed partial class PbrSceneStream : IAsyncDisposable
 {
     [JsonSourceGenerationOptions(UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
@@ -113,16 +112,10 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
         => _cache.AcquireAsync(_manifest.GetChunk(Details[geometry]!.Id), cancellationToken: cancellationToken);
     public ValueTask DisposeAsync() => _cache.DisposeAsync();
 
-    /// <summary>Cooks immutable chunks. Publish the returned metadata only after every chunk is durable.</summary>
     public static async Task<byte[]> CookAsync(PbrSceneAsset source,
         Func<AssetChunk, ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(write);
-        // A geometry with no patch-tree nodes carries no triangles (for example a collapsed
-        // duplicate left behind by an asset-level dedup pass). GeometryPage's cooked root format
-        // has no representation for an empty page, and drawing nothing is already the correct
-        // rendered result, so opaque instances pointing at it are dropped before cooking instead
-        // of reaching GeometryPage.Cook, which would otherwise throw on the resulting zero counts.
         var opaque = source.Instances.ToArray()
             .Where(i => !source.Materials.Span[i.Material].AlphaBlend && source.Geometry.Span[i.Geometry].Build.Tree.Nodes.Length > 0)
             .ToArray();
