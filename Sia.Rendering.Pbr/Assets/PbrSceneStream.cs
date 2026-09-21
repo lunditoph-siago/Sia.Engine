@@ -99,8 +99,10 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
                 var bytes = new byte[length]; var offset = 0;
                 foreach (var id in ids) {
                     using var lease = await cache.AcquireAsync(manifest.GetChunk(id), cancellationToken: cancellationToken);
-                    var decoded = await Task.Run(() => SceneStreamBlock.Decode(lease.Memory.Span, System.Math.Min(4 * 1024 * 1024, length - offset)), cancellationToken);
-                    decoded.CopyTo(bytes, offset); offset += decoded.Length;
+                    var memory = lease.Memory; var start = offset;
+                    // Decode straight into this part's slice of the combined buffer instead of an
+                    // intermediate array plus a CopyTo -- the destination is already the final home.
+                    offset += await Task.Run(() => SceneStreamBlock.Decode(memory, bytes.AsSpan(start, System.Math.Min(4 * 1024 * 1024, length - start))), cancellationToken);
                 }
                 if (offset != length) throw new InvalidDataException("Startup decoded lengths do not match metadata.");
                 return bytes;
