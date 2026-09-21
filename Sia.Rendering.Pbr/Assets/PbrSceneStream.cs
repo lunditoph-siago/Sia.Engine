@@ -118,7 +118,14 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
         Func<AssetChunk, ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(write);
-        var opaque = source.Instances.ToArray().Where(i => !source.Materials.Span[i.Material].AlphaBlend).ToArray();
+        // A geometry with no patch-tree nodes carries no triangles (for example a collapsed
+        // duplicate left behind by an asset-level dedup pass). GeometryPage's cooked root format
+        // has no representation for an empty page, and drawing nothing is already the correct
+        // rendered result, so opaque instances pointing at it are dropped before cooking instead
+        // of reaching GeometryPage.Cook, which would otherwise throw on the resulting zero counts.
+        var opaque = source.Instances.ToArray()
+            .Where(i => !source.Materials.Span[i.Material].AlphaBlend && source.Geometry.Span[i.Geometry].Build.Tree.Nodes.Length > 0)
+            .ToArray();
         var transparent = source.Instances.ToArray().Where(i => source.Materials.Span[i.Material].AlphaBlend).ToArray();
         var opaqueGeometry = opaque.Select(i => i.Geometry).Distinct().Order().ToArray();
         if (opaqueGeometry.Length is 0 or > 4096 || opaque.Length > 1000000)
