@@ -45,12 +45,6 @@ internal sealed partial class BenchmarkScene
         if (reused.Counters.SelectedTriangles != initial.Counters.SelectedTriangles || scene._feature.InstanceCount != 1)
             throw new InvalidOperationException("Reused slot did not restore geometry.");
         await Frame(0);
-        // Extraction caches per-slot CPU state before validating/publishing it, and
-        // only falls back to a full converted-instance comparison against the last
-        // published snapshot when a prior attempt failed before publishing (see
-        // VisibilityPbrFeature.Instances.cs's _extractionDesynced). Prove a failed
-        // extraction attempt does not corrupt or wedge extraction: it must throw,
-        // and the very next valid attempt must still publish correctly afterward.
         var priorEntities = new List<Entity>();
         scene._main.Query(Matchers.Of<VisibilityInstance>(), priorEntities, static (in List<Entity> list, Entity item) => list.Add(item));
         foreach (var prior in priorEntities) prior.Destroy();

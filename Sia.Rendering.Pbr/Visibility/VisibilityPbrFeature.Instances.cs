@@ -87,8 +87,6 @@ public sealed partial class VisibilityPbrFeature
         BeginStatistics(context.RenderWorld.FrameIndex);
         if (_instanceWorld is null) { return; }
         if (_extractedInstances?.Frame == context.RenderWorld.FrameIndex) { return; }
-        // Assume desync until a full pass below completes without throwing; a
-        // throw here leaves CPU working arrays ahead of the published snapshot.
         var recoverFromDesync = _extractionDesynced;
         _extractionDesynced = true;
         var entities = _instanceQuery;
@@ -113,8 +111,6 @@ public sealed partial class VisibilityPbrFeature
             var asset = _instanceAssets[source.AssetIndex];
             var binding = new uint4(asset.Offset, asset.Count, roots, (uint)source.AssetIndex);
             if (_instanceSources[i] is not { } cached || cached != source) {
-                // Component refs may change without events. Compare the source,
-                // but invert/validate matrices only for actual mutations.
                 var converted = ToGpu(source, binding, MaterialCount,
                     (uint)source.MaterialIndex < (uint)_doubleSided.Length && _doubleSided[source.MaterialIndex]);
                 Aabb? bounds = null;
@@ -132,11 +128,6 @@ public sealed partial class VisibilityPbrFeature
             throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
         }
         if (_lod.Shadows is { } shadow) { ValidateShadowRoots(new(roots, meshlets, triangles), shadow.Budget); }
-        // A prior invalid extraction may have updated validated CPU entries but
-        // could not publish a snapshot. The cheap owner-sequence check always runs;
-        // the full converted-instance comparison only reruns after such a prior
-        // failure (recoverFromDesync) -- otherwise the per-slot tracking above is
-        // already authoritative and re-diffing the whole array is redundant.
         changed |= _extractedInstances is null || slots.Length != _extractedInstances.Instances.Length
             || !slots.Owners[..slots.Length].SequenceEqual(_extractedInstances.Entities)
             || (recoverFromDesync && !_instanceConverted.AsSpan(0, slots.Length).SequenceEqual(_extractedInstances.Instances));
@@ -196,7 +187,6 @@ public sealed partial class VisibilityPbrFeature
                 [snapshot.RootMeshlets, snapshot.RootTriangles]);
         }
         if (changed) {
-            // Both old and new bounds are required when moving or removing a caster.
             for (var i = 0; i < instances.Length; i++) {
                 if (previous is not null && i < previous.Instances.Length && instances[i] == previous.Instances[i]) continue;
                 Aabb? bounds = null;
