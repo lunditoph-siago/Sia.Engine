@@ -16,8 +16,8 @@
     "Cook patch hierarchy and meshlets with builder 2 default settings; share identical vertex attributes across LODs, byte-shuffle section fields and losslessly compress with GZip SmallestSize."
   ],
   "asset": "bunny.siapatch",
-  "assetSha256": "6682f1423e2b9ae7dfbb8c6ded9953b6db99d3cd048b40f6cfcca07c3ed8d1d8",
-  "assetBytes": 1856765,
-  "decodedBytes": 4363112,
+  "assetSha256": "af2cea20309e9d5194a5b624f92bdee0de9d3d85ee8f1096ff84f9cd55cc51c0",
+  "assetBytes": 1860790,
+  "decodedBytes": 4917434,
   "usage": "Research and free redistribution with source acknowledgment. Commercial use requires Stanford permission; see the repository terms."
 }
