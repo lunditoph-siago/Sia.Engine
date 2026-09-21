@@ -5,7 +5,6 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-/// <summary>Owns checksum-verified reads and startup data for one streaming renderer.</summary>
 public sealed partial class PbrSceneStream : IAsyncDisposable
 {
     [JsonSourceGenerationOptions(UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
@@ -113,12 +112,13 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
         => _cache.AcquireAsync(_manifest.GetChunk(Details[geometry]!.Id), cancellationToken: cancellationToken);
     public ValueTask DisposeAsync() => _cache.DisposeAsync();
 
-    /// <summary>Cooks immutable chunks. Publish the returned metadata only after every chunk is durable.</summary>
     public static async Task<byte[]> CookAsync(PbrSceneAsset source,
         Func<AssetChunk, ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(write);
-        var opaque = source.Instances.ToArray().Where(i => !source.Materials.Span[i.Material].AlphaBlend).ToArray();
+        var opaque = source.Instances.ToArray()
+            .Where(i => !source.Materials.Span[i.Material].AlphaBlend && source.Geometry.Span[i.Geometry].Build.Tree.Nodes.Length > 0)
+            .ToArray();
         var transparent = source.Instances.ToArray().Where(i => source.Materials.Span[i.Material].AlphaBlend).ToArray();
         var opaqueGeometry = opaque.Select(i => i.Geometry).Distinct().Order().ToArray();
         if (opaqueGeometry.Length is 0 or > 4096 || opaque.Length > 1000000)
