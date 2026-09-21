@@ -19,11 +19,15 @@ public sealed partial class VisibilityPbrFeature
         public bool Failed;
         public Aabb ChangedBounds = Bounds;
     }
+    // A cell's bounds are the exact union of its members' bounds, so a cell the frustum culler
+    // rejects guarantees every member is rejected too (AABB support is monotonic under containment).
+    private readonly record struct AssetCell(int[] Members, Aabb Bounds);
     private sealed class GeometryStreaming
     {
         public required PbrSceneStream Source;
         public required GeometryReservation Reservation;
         public required StreamAsset[] Assets;
+        public required AssetCell[] Cells;
         public required GeometryRangeAllocator Vertices, Indices, Triangles;
         public required int UploadBudget;
         public required GeometryPageUploader Uploader;
@@ -92,7 +96,7 @@ public sealed partial class VisibilityPbrFeature
             triangleCapacity, localBounds.Select(b => (Aabb?)b).ToArray());
         var feature = Create(in frame, empty, instances, null, outputFormat, mode, null, default,
             scene: scene, materials: materialIds.Select(i => bootstrap.Materials.Span[i]).ToArray(), fixedClusters: new GeometryClusterGpu[clusterCount], reservation: reservation);
-        var streaming = new GeometryStreaming { Source = source, Reservation = reservation, Assets = assets,
+        var streaming = new GeometryStreaming { Source = source, Reservation = reservation, Assets = assets, Cells = BuildCells(assets),
             Vertices = new(rootV, fineV), Indices = new(rootI, fineI), Triangles = new(rootT, fineT), UploadBudget = uploadBytesPerFrame, Uploader = new(in frame, feature._geometry[0], feature._geometry[1], feature._geometry[2], reservation.Vertices) };
         feature._streaming = streaming;
         int v = 0, indexOffset = 0, t = 0;
@@ -124,18 +128,55 @@ public sealed partial class VisibilityPbrFeature
         }
     }
 
+    // Buckets assets into a uniform grid over their combined bounds so distant/off-screen groups
+    // can be rejected by one frustum test instead of one per asset. Built once per streamed scene;
+    // this path has no dynamic instance add/remove yet, so the membership never goes stale.
+    private static AssetCell[] BuildCells(StreamAsset[] assets)
+    {
+        if (assets.Length == 0) return [];
+        var scene = assets[0].Bounds;
+        for (var i = 1; i < assets.Length; i++) scene = Aabb.Union(scene, assets[i].Bounds);
+        const int gridSize = 8;
+        var extent = scene.Max - scene.Min;
+        var cellSize = new float3(MathF.Max(extent.x, 1e-3f), MathF.Max(extent.y, 1e-3f), MathF.Max(extent.z, 1e-3f)) / gridSize;
+        var buckets = new Dictionary<(int X, int Y, int Z), List<int>>();
+        for (var i = 0; i < assets.Length; i++) {
+            var center = (assets[i].Bounds.Min + assets[i].Bounds.Max) * .5f - scene.Min;
+            var key = ((int)(center.x / cellSize.x), (int)(center.y / cellSize.y), (int)(center.z / cellSize.z));
+            if (!buckets.TryGetValue(key, out var members)) buckets[key] = members = [];
+            members.Add(i);
+        }
+        var cells = new AssetCell[buckets.Count];
+        var index = 0;
+        foreach (var members in buckets.Values) {
+            var bounds = assets[members[0]].Bounds;
+            for (var j = 1; j < members.Count; j++) bounds = Aabb.Union(bounds, assets[members[j]].Bounds);
+            cells[index++] = new(members.ToArray(), bounds);
+        }
+        return cells;
+    }
+
     private void UpdateStreamingCore(CameraMatrices camera, GeometryStreaming s)
     {
         if (s.Frames++ % 12 == 0 && !s.LastProjection.Equals(camera.ViewProj)) {
-            s.LastProjection = camera.ViewProj; s.AdmissionLimit = float.PositiveInfinity; s.DemandExhausted = false; foreach (var asset in s.Assets) {
-            var center = (asset.Bounds.Min + asset.Bounds.Max) * .5f;
-            var radius = math.length(asset.Bounds.Max - asset.Bounds.Min) * .5f;
-            var projected = math.mul(camera.ViewProj, new float4(center, 1));
-            var distance = MathF.Max(.1f, math.length(center - camera.WorldPosition) - radius);
-            // Coarse geometry remains for shadows and out-of-view content; prioritize near visible detail.
-            var visible = projected.w > 0 && MathF.Abs(projected.x) <= projected.w + radius * 2 && MathF.Abs(projected.y) <= projected.w + radius * 2;
-            asset.Priority = visible ? distance : float.PositiveInfinity;
-        }}
+            s.LastProjection = camera.ViewProj; s.AdmissionLimit = float.PositiveInfinity; s.DemandExhausted = false;
+            var culler = new FrustumCuller(camera.Frustum);
+            foreach (var cell in s.Cells) {
+                // The whole cell is outside the frustum: every member is too, skip their per-object test entirely.
+                if (!culler.Intersects(cell.Bounds)) {
+                    foreach (var member in cell.Members) s.Assets[member].Priority = float.PositiveInfinity;
+                    continue;
+                }
+                foreach (var member in cell.Members) {
+                    var asset = s.Assets[member];
+                    // Coarse geometry remains for shadows and out-of-view content; prioritize near visible detail.
+                    if (!culler.Intersects(asset.Bounds)) { asset.Priority = float.PositiveInfinity; continue; }
+                    var center = (asset.Bounds.Min + asset.Bounds.Max) * .5f;
+                    var radius = math.length(asset.Bounds.Max - asset.Bounds.Min) * .5f;
+                    asset.Priority = MathF.Max(.1f, math.length(center - camera.WorldPosition) - radius);
+                }
+            }
+        }
         if (s.Pending is { IsCompleted: true } pending) {
             s.Pending = null;
             try { s.Ready = pending.GetAwaiter().GetResult(); }
