@@ -49,6 +49,10 @@ if (args.Length == 2 && args[0] == "--cook-performance-fixture") {
     Console.WriteLine($"Generated {scene.Instances.Length} sphere instances in {args[1]}.");
     return;
 }
+if (args.SequenceEqual(new[] { "--verify-stream-block" })) {
+    StreamBlockVerification.Run();
+    return;
+}
 
 var suite = "smoke";
 var output = "visibility-benchmark.json";
@@ -93,6 +97,7 @@ if (args.Contains("--help")) {
         Cached visibility pixel regression: --verify-visibility-cache
         PBR frame and shadow regression: --verify-pbr-frame
         Dynamic resolution controller regression: --verify-resolution-budget
+        Scene stream block codec regression: --verify-stream-block
           --repeats N (rerun each case N times in a fresh scene; reports cross-run RepeatSpread
           alongside the usual per-frame distribution, to separate device-clock noise from a real change)
         """);
