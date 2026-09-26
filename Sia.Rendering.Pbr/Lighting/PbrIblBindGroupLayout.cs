@@ -19,13 +19,13 @@ internal static unsafe class PbrIblBindGroupLayout
         Span<WGPUBindGroupLayoutEntry> entries = stackalloc WGPUBindGroupLayoutEntry[EntryCount];
         entries[0] = WGPUBindGroupLayoutEntry.Default;
         entries[0].Binding = ShBinding;
-        entries[0].Visibility = WGPUShaderStage.Fragment;
+        entries[0].Visibility = WGPUShaderStage.Fragment | WGPUShaderStage.Compute;
         entries[0].Buffer = WGPUBufferBindingLayout.Default;
         entries[0].Buffer.Type = WGPUBufferBindingType.Uniform;
 
         entries[1] = WGPUBindGroupLayoutEntry.Default;
         entries[1].Binding = PrefilteredBinding;
-        entries[1].Visibility = WGPUShaderStage.Fragment;
+        entries[1].Visibility = WGPUShaderStage.Fragment | WGPUShaderStage.Compute;
         entries[1].Texture = WGPUTextureBindingLayout.Default;
         entries[1].Texture.SampleType = WGPUTextureSampleType.Float;
         entries[1].Texture.ViewDimension = WGPUTextureViewDimension.Cube;
@@ -33,13 +33,13 @@ internal static unsafe class PbrIblBindGroupLayout
 
         entries[2] = WGPUBindGroupLayoutEntry.Default;
         entries[2].Binding = PrefilteredSamplerBinding;
-        entries[2].Visibility = WGPUShaderStage.Fragment;
+        entries[2].Visibility = WGPUShaderStage.Fragment | WGPUShaderStage.Compute;
         entries[2].Sampler = WGPUSamplerBindingLayout.Default;
         entries[2].Sampler.Type = WGPUSamplerBindingType.Filtering;
 
         entries[3] = WGPUBindGroupLayoutEntry.Default;
         entries[3].Binding = BrdfLutBinding;
-        entries[3].Visibility = WGPUShaderStage.Fragment;
+        entries[3].Visibility = WGPUShaderStage.Fragment | WGPUShaderStage.Compute;
         entries[3].Texture = WGPUTextureBindingLayout.Default;
         entries[3].Texture.SampleType = WGPUTextureSampleType.Float;
         entries[3].Texture.ViewDimension = WGPUTextureViewDimension._2D;
@@ -47,7 +47,7 @@ internal static unsafe class PbrIblBindGroupLayout
 
         entries[4] = WGPUBindGroupLayoutEntry.Default;
         entries[4].Binding = BrdfLutSamplerBinding;
-        entries[4].Visibility = WGPUShaderStage.Fragment;
+        entries[4].Visibility = WGPUShaderStage.Fragment | WGPUShaderStage.Compute;
         entries[4].Sampler = WGPUSamplerBindingLayout.Default;
         entries[4].Sampler.Type = WGPUSamplerBindingType.Filtering;
 

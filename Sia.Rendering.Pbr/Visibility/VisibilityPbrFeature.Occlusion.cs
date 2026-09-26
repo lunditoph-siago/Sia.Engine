@@ -188,7 +188,7 @@ public sealed partial class VisibilityPbrFeature
             _postDepthReadGroup ??= Owner.OwnTextureBindGroup(gpu.ReduceLayout,
                 [TextureEntry(0, depth), BufferEntry(1, hzb.PostDepthRead!.Value),
                     BufferEntry(2, hzb.ReduceParameters) with { Size = 32 }], depth);
-            var pass = context.GetOrBeginComputePass();
+            var pass = BeginCompute(context);
             try {
                 Wgpu.SetComputePipeline(pass, gpu.ReadAfterPost!.Value.GetWgpu<WGPUComputePipeline>());
                 Wgpu.SetBindGroup(pass, 0, _postDepthReadGroup.Value.GetWgpu<WGPUBindGroup>());

@@ -7,6 +7,10 @@ namespace Sia.Engine.Rendering;
 
 public sealed class ShadowAtlasConfig : IAddon
 {
+    /// <summary>Fit a single directional map to scene bounds, independent of the camera.</summary>
+    public bool SceneBoundsDirectional { get; set; }
+    /// <summary>Use twelve conservative triangles per instance for depth-only shadows.</summary>
+    public bool ConservativeCasterBounds { get; set; }
     public uint TileResolution { get; set; } = 1024;
     public int CascadeCount { get; set; } = 3;
     public float CascadeSplitLambda { get; set; } = 0.5f;

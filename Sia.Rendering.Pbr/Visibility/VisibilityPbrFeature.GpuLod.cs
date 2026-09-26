@@ -18,7 +18,7 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_LodDispatchKey = new("visibility-lod-dispatch");
 
     private static LodGpu CreateLodGpu(World world, WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue,
-        SceneLodData scene, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired, bool enableTiming)
+        SceneLodData scene, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired)
     {
         var instances = (uint)scene.InstanceRoots.Length;
         if (System.Math.Max(scene.StateCapacity, (uint)scene.InstanceCapacity) > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
@@ -26,7 +26,7 @@ public sealed partial class VisibilityPbrFeature
         }
         var patches = Upload<PatchGpu>(world, device, queue, scene.Patches, WGPUBufferUsage.Storage, limits, acquired);
         var parameterData = new LodParamsGpu(
-            new uint4((uint)scene.Patches.Length, scene.RootCost.x, instances, limits.MaxComputeWorkgroupsPerDimension),
+            new uint4(settings.RootCutStride, scene.RootCost.x, instances, limits.MaxComputeWorkgroupsPerDimension),
             new uint4((uint)settings.Budget.MaxPatches, (uint)settings.Budget.MaxMeshlets, (uint)settings.Budget.MaxTriangles,
                 BitConverter.SingleToUInt32Bits(settings.TargetPixelError == 0 ? 0 : settings.TargetPixelError)),
             new uint4((uint)settings.Budget.MaxRefinementCandidates, (uint)settings.Budget.MaxRefinementNodes, scene.RootCost.y, scene.RootCost.z));
@@ -48,11 +48,13 @@ public sealed partial class VisibilityPbrFeature
         var selectLayout = PipelineLayout(world, device, [layout, dispatchLayout], acquired);
         var occlusion = CreateOcclusionGpu(world, device, layout, pipelineLayout, shader, acquired);
         return new(patches, parameters, layout, dispatchLayout,
-            ComputePipeline(world, device, shader, pipelineLayout, "project", acquired),
+            ComputePipeline(world, device, shader, selectLayout, "project", acquired),
             ComputePipeline(world, device, shader, selectLayout, "select_cut", acquired),
+            ComputePipeline(world, device, shader, selectLayout, "select_root_cut", acquired),
+            ComputePipeline(world, device, shader, selectLayout, "finish_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
             scene.StateCapacity, limits.MaxComputeWorkgroupsPerDimension, occlusion,
-            CreateCompactionGpu(world, device, acquired), enableTiming) { ParameterData = parameterData };
+            CreateCompactionGpu(world, device, acquired)) { ParameterData = parameterData };
     }
 
     private static unsafe Entity ComputePipeline(World world, WgpuHandle<WGPUDevice> device, Entity shader,
@@ -82,8 +84,8 @@ public sealed partial class VisibilityPbrFeature
     {
         var state = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 20ul,
             WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc, limits, acquired);
-        var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 4ul, WGPUBufferUsage.Storage, limits, acquired);
-        var dispatch = Allocate(_world, _device.GetWgpu<WGPUDevice>(), 72,
+        var heap = Allocate(_world, _device.GetWgpu<WGPUDevice>(), lod.Capacity * 36ul, WGPUBufferUsage.Storage, limits, acquired);
+        var dispatch = Allocate(_world, _device.GetWgpu<WGPUDevice>(), 80,
             WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc, limits, acquired);
         var group = Own(_world, BindGroup(lod.Layout, [BufferEntry(0, camera), BufferEntry(1, lod.Parameters),
             BufferEntry(2, lod.Patches), BufferEntry(3, _geometry[3]), BufferEntry(4, state), BufferEntry(5, heap),
@@ -100,31 +102,49 @@ public sealed partial class VisibilityPbrFeature
         ImportBuffer(ref graph, s_LodStateKey, state.State, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.CopySource);
         ImportBuffer(ref graph, s_LodHeapKey, state.Heap, RenderGraphBufferUsage.Storage);
         ImportBuffer(ref graph, s_LodDispatchKey, state.Dispatch, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource);
+        var rootCut = view.Owner.RootCutOnly;
         graph.UseComputePass(new("visibility-lod-project"), "visibility-lod-project", declaration => declaration
             .Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform)
             .Read(s_PatchKey, RenderGraphBufferUsage.Storage).Read(s_GeometryKeys[3], RenderGraphBufferUsage.Storage)
-            .Write(s_LodStateKey, RenderGraphBufferUsage.Storage), view.ProjectLod);
-        graph.UseComputePass(new("visibility-lod-select"), "visibility-lod-select", declaration => declaration
-            .Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_GeometryKeys[3], RenderGraphBufferUsage.Storage)
-            .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
-            .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage).Write(s_LodHeapKey, RenderGraphBufferUsage.Storage)
-            .Write(s_LodDispatchKey, RenderGraphBufferUsage.Storage)
-            .Write(s_IndirectKey, RenderGraphBufferUsage.Storage), view.SelectLod);
-        BuildMainOcclusionGraph(ref graph, view);
-        graph.UseComputePass(new("visibility-lod-emit"), "visibility-lod-emit", declaration => declaration
-            .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
-            .Read(s_LodStateKey, RenderGraphBufferUsage.Storage).Read(s_IndirectKey, RenderGraphBufferUsage.Storage)
-            .Read(s_LodDispatchKey, RenderGraphBufferUsage.Indirect)
-            .Write(s_WorkKey, RenderGraphBufferUsage.Storage), view.EmitLod);
+            .Write(s_LodStateKey, RenderGraphBufferUsage.Storage).Write(s_LodDispatchKey, RenderGraphBufferUsage.Storage), view.ProjectLod);
+        graph.UseComputePass(new("visibility-lod-select"), "visibility-lod-select", declaration => {
+            declaration.Read(s_CameraKey, RenderGraphBufferUsage.Uniform).Read(s_GeometryKeys[3], RenderGraphBufferUsage.Storage)
+                .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
+                .ReadWrite(s_LodStateKey, RenderGraphBufferUsage.Storage).Write(s_LodHeapKey, RenderGraphBufferUsage.Storage)
+                .Write(s_LodDispatchKey, RenderGraphBufferUsage.Storage)
+                .Write(s_IndirectKey, RenderGraphBufferUsage.Storage);
+            if (rootCut) declaration.Write(s_WorkKey, RenderGraphBufferUsage.Storage);
+        }, view.SelectLod);
+        if (!rootCut) {
+            BuildMainOcclusionGraph(ref graph, view);
+            graph.UseComputePass(new("visibility-lod-emit"), "visibility-lod-emit", declaration => declaration
+                .Read(s_LodParamsKey, RenderGraphBufferUsage.Uniform).Read(s_PatchKey, RenderGraphBufferUsage.Storage)
+                .Read(s_LodStateKey, RenderGraphBufferUsage.Storage).Read(s_IndirectKey, RenderGraphBufferUsage.Storage)
+                .Read(s_LodDispatchKey, RenderGraphBufferUsage.Indirect)
+                .Write(s_WorkKey, RenderGraphBufferUsage.Storage), view.EmitLod);
+        }
     }
 
     private sealed partial class ViewState
     {
         public void ProjectLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, LodConfiguration!.Value.Project, (uint?)Owner._instanceSlots?.Length ?? Owner.InstanceCount);
+            DispatchLod(context, LodConfiguration!.Value.Project, (uint?)Owner._instanceSlots?.Length ?? Owner.InstanceCount,
+                Lod!.Value.DispatchGroup);
 
-        public void SelectLod(WgpuReactiveRenderGraphPassContext context) =>
-            DispatchLod(context, LodConfiguration!.Value.Select, 1, Lod!.Value.DispatchGroup);
+        public void SelectLod(WgpuReactiveRenderGraphPassContext context)
+        {
+            var lod = LodConfiguration!.Value;
+            var count = System.Math.Max(1u, Owner._preparedInstances?.RootCount ?? lod.ParameterData.Counts.y);
+            var pass = BeginCompute(context);
+            try {
+                Wgpu.SetBindGroup(pass, 0, Lod!.Value.Group.GetWgpu<WGPUBindGroup>());
+                Wgpu.SetBindGroup(pass, 1, Lod.Value.DispatchGroup.GetWgpu<WGPUBindGroup>());
+                Wgpu.SetComputePipeline(pass, (Owner.RootCutOnly ? lod.SelectRootCut : lod.Select).GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroups(pass, System.Math.Min(count, lod.DispatchDimension), (count + lod.DispatchDimension - 1) / lod.DispatchDimension);
+                Wgpu.SetComputePipeline(pass, lod.Finish.GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroups(pass, 1);
+            } finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        }
 
         public void EmitLod(WgpuReactiveRenderGraphPassContext context) =>
             DispatchLod(context, LodConfiguration!.Value.Emit, 0, indirectOffset: 12);
@@ -151,8 +171,8 @@ public sealed partial class VisibilityPbrFeature
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget, uint4 Traversal);
 
-    private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity DispatchLayout, Entity Project, Entity Select,
-        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming)
+    private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity DispatchLayout, Entity Project, Entity Select, Entity SelectRootCut, Entity Finish,
+        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction)
     {
         public LodParamsGpu ParameterData { get; init; }
     }

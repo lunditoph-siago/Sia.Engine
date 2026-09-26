@@ -1,4 +1,5 @@
 using Sia;
+using System.Diagnostics;
 using Sia.Engine.Rendering;
 using Sia.Graphics.Reactive;
 using Sia.Reactive;
@@ -39,7 +40,7 @@ internal sealed unsafe partial class SceneExampleApp
             _camera,
             _surfaceKey,
             _depthKey,
-            ColorCacheable: false);
+            ColorCacheable: Program.Offscreen);
         var renderWorld = _renderWorld!;
         var view = renderWorld.GetOrCreateView(_mainViewKey);
         renderWorld.BeginFrame();
@@ -47,19 +48,27 @@ internal sealed unsafe partial class SceneExampleApp
             renderWorld,
             view,
             frameContext);
+        var stageStart = Stopwatch.GetTimestamp();
         _renderPipeline!.Extract(in featureContext);
+        _extractMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
+        stageStart = Stopwatch.GetTimestamp();
         _renderPipeline.Prepare(in featureContext);
         _renderPipeline.Queue(in featureContext);
+        _prepareMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
+        stageStart = Stopwatch.GetTimestamp();
         var props = new RenderGraphProps(
             _renderGraph!, _renderPipeline, featureContext,
-            _framebufferWidth, _framebufferHeight, _surfaceFormat, surfaceTexture);
+            OutputWidth, OutputHeight, RenderWidth, RenderHeight, _surfaceFormat, surfaceTexture,
+            Program.Offscreen ? _offscreenBuffers[_offscreenSlot] : default, PrepareGpuTiming(), _visibilityLod);
 
         if (_renderGraphMount is not { } mount) {
             _renderGraphMount = _renderGraphWorld!.Mount(RenderGraph, props);
             Console.WriteLine($"{_pipeline}: {_renderGraph!.PreparePlan().Graph.Passes.Count} render graph pass(es).");
+            _graphMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
             return;
         }
         mount.Update(props);
+        _graphMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
     }
 
     private void ExecuteRenderGraph() => _renderGraphWorld!.ExecuteWgpuRenderGraph();
@@ -72,18 +81,43 @@ internal sealed unsafe partial class SceneExampleApp
             "surface", (RenderGraphTextureFormat)(int)props.SurfaceFormat,
             (uint)props.FramebufferWidth, (uint)props.FramebufferHeight,
             usage: RenderGraphTextureUsage.RenderAttachment);
-        graph.UseImportedTexture(_surfaceKey, surfaceDescriptor);
-        graph.BindImportedTexture(_surfaceKey, props.SurfaceTexture);
+        if (Program.Offscreen) { graph.UseTexture(_surfaceKey, surfaceDescriptor); }
+        else {
+            graph.UseImportedTexture(_surfaceKey, surfaceDescriptor);
+            graph.BindImportedTexture(_surfaceKey, props.SurfaceTexture);
+        }
 
         graph.UseTexture(
             _depthKey,
             new RenderGraphTextureDescriptor(
                 "depth", RenderGraphTextureFormat.Depth32Float,
-                (uint)props.FramebufferWidth, (uint)props.FramebufferHeight,
+                (uint)props.RenderWidth, (uint)props.RenderHeight,
                 usage: RenderGraphTextureUsage.RenderAttachment));
 
         var context = props.Context;
         props.Pipeline.BuildRenderGraph(ref graph, in context);
+        if (props.TimingReadback.IsValid) {
+            var visibility = props.Visibility!;
+            var timings = visibility.GpuTimingsTarget;
+            graph.UseImportedBuffer(_gpuReadbackKey, new("example-gpu-timing", TimingBytes,
+                RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
+            graph.BindImportedBuffer(_gpuReadbackKey, props.TimingReadback.GetWgpu<WGPUBuffer>());
+            graph.ExportBuffer(_gpuReadbackKey, RenderGraphBufferUsage.MapRead);
+            graph.UseComputePass(new("example-gpu-timing"), "example-gpu-timing", declaration => declaration
+                .Read(timings, RenderGraphBufferUsage.CopySource)
+                .Write(_gpuReadbackKey, RenderGraphBufferUsage.CopyDestination),
+                pass => { if (visibility.SampleGpuTiming) Wgpu.CopyBufferToBuffer(pass.CommandEncoder, pass.GetBuffer(timings), 0,
+                    pass.GetBuffer(_gpuReadbackKey), 0, TimingBytes); });
+        }
+        if (Program.Offscreen) {
+            graph.UseImportedBuffer(_offscreenReadbackKey, new("offscreen-completion", 256,
+                RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
+            graph.BindImportedBuffer(_offscreenReadbackKey, props.Readback.GetWgpu<WGPUBuffer>());
+            graph.ExportBuffer(_offscreenReadbackKey, RenderGraphBufferUsage.MapRead);
+            graph.UseComputePass(new("offscreen-completion"), "offscreen-completion", declaration => declaration
+                .Read(_surfaceKey, RenderGraphTextureUsage.CopySource).Write(_offscreenReadbackKey, RenderGraphBufferUsage.CopyDestination),
+                pass => Wgpu.CopyTextureToBuffer(pass.CommandEncoder, pass.GetTexture(_surfaceKey), pass.GetBuffer(_offscreenReadbackKey), 1, 1, 256));
+        }
 
         return SiaReactive.None;
     }
@@ -105,6 +139,9 @@ internal sealed unsafe partial class SceneExampleApp
         RenderFeatureContext<RenderFrameContext> Context,
         int FramebufferWidth,
         int FramebufferHeight,
+        int RenderWidth,
+        int RenderHeight,
         WGPUTextureFormat SurfaceFormat,
-        WgpuHandle<WGPUTexture> SurfaceTexture);
+        WgpuHandle<WGPUTexture> SurfaceTexture,
+        Entity Readback, Entity TimingReadback, Sia.Engine.Rendering.Pbr.VisibilityPbrFeature? Visibility);
 }

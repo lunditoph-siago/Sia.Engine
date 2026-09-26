@@ -1,6 +1,9 @@
 #import pbr::visibility
 #import pbr::materials
 #import pbr::pbr::{direct_lighting}
+#ifdef FUSED_LIGHTING
+#import pbr::scene_lighting::{scene_lighting}
+#endif
 
 @group(1) @binding(0) var visibility: texture_2d<u32>;
 @group(1) @binding(1) var hdr: texture_storage_2d<rgba16float, write>;
@@ -15,16 +18,24 @@
 @group(1) @binding(10) var emissive_map: texture_2d_array<f32>;
 @group(1) @binding(11) var emissive_sampler: sampler;
 @group(1) @binding(12) var<uniform> material_batch: vec4<u32>;
+#ifndef FUSED_LIGHTING
 @group(1) @binding(13) var base_roughness: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(14) var normal_metallic: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(15) var emissive_occlusion: texture_storage_2d<rgba16float, write>;
+#endif
 @group(1) @binding(16) var<storage, read> material_tiles: array<u32>;
+#ifdef FUSED_LIGHTING
+@group(1) @binding(17) var<uniform> material_table: array<VisibilityMaterial, 256>;
+#else
 @group(1) @binding(17) var<storage, read> material_table: array<VisibilityMaterial>;
+#endif
 
 fn clear_surface(pixel: vec2<i32>) {
+#ifndef FUSED_LIGHTING
     textureStore(base_roughness, pixel, vec4<f32>(0.0));
     textureStore(normal_metallic, pixel, vec4<f32>(0.0));
     textureStore(emissive_occlusion, pixel, vec4<f32>(0.0));
+#endif
 }
 
 fn safe_normalize(value: vec3<f32>) -> vec3<f32> {
@@ -40,7 +51,7 @@ fn structure_color(index: u32) -> vec3<f32> {
         f32((hash >> 16u) & 255u)) * (0.8 / 255.0);
 }
 
-fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: bool) {
+fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, lit_surface: bool) {
     let size = visibility_camera.size_counts.xy;
     let dimensions = (size + 7u) / 8u;
     let base = material_batch.x * (dimensions.x * dimensions.y + 1u);
@@ -55,13 +66,13 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
     if (id == 0u || triangle_count == 0u) {
         if (material_batch.x != 0u) { return; }
         clear_surface(pixel);
-        if (mode != 0u || !scene_lighting) { textureStore(hdr, pixel, vec4<f32>(0.015, 0.02, 0.03, 1.0)); }
+        if (mode != 0u || !lit_surface) { textureStore(hdr, pixel, vec4<f32>(0.015, 0.02, 0.03, 1.0)); }
         return;
     }
     if (id > triangle_count) {
         if (material_batch.x != 0u) { return; }
         clear_surface(pixel);
-        if (mode != 0u || !scene_lighting) { textureStore(hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); }
+        if (mode != 0u || !lit_surface) { textureStore(hdr, pixel, vec4<f32>(1.0, 0.0, 1.0, 1.0)); }
         return;
     }
     let work = visibility_triangle_work(id - 1u);
@@ -95,7 +106,7 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
     let denominator = dot(weights, vec3<f32>(1.0));
     if (abs(denominator) < 1e-20) {
         clear_surface(pixel);
-        if (mode != 0u || !scene_lighting) { textureStore(hdr, pixel, vec4<f32>(0.0, 0.0, 0.0, 1.0)); }
+        if (mode != 0u || !lit_surface) { textureStore(hdr, pixel, vec4<f32>(0.0, 0.0, 0.0, 1.0)); }
         return;
     }
     let bary = weights / denominator;
@@ -162,13 +173,23 @@ fn resolve_pixel(group: vec3<u32>, local: vec3<u32>, mode: u32, scene_lighting: 
         emissive = textureSampleGrad(emissive_map, emissive_sampler, uv, i32(material_parameters.indices.x), uv_dx, uv_dy).rgb
             * material_parameters.emissive_roughness.rgb * instance.emissive.rgb;
     }
+#ifdef FUSED_LIGHTING
+    if (mode == 0u) {
+        let position = world_a.xyz * bary.x + world_b.xyz * bary.y + world_c.xyz * bary.z;
+        let color = scene_lighting(position, normal, safe_normalize(visibility_camera.eye.xyz - position),
+            base_color, metallic, roughness, emissive, occlusion, vec2<f32>(thread.xy) + 0.5);
+        textureStore(hdr, pixel, vec4<f32>(color, 1.0));
+        return;
+    }
+#else
     textureStore(base_roughness, pixel, vec4<f32>(base_color, roughness));
     textureStore(normal_metallic, pixel, vec4<f32>(normal, metallic));
     textureStore(emissive_occlusion, pixel, vec4<f32>(emissive, occlusion));
-    if (mode == 0u && scene_lighting) { return; }
+    if (mode == 0u && lit_surface) { return; }
+#endif
     let position = world_a.xyz * bary.x + world_b.xyz * bary.y + world_c.xyz * bary.z;
     var color = base_color;
-    if (mode == 0u && !scene_lighting) {
+    if (mode == 0u && !lit_surface) {
         color = direct_lighting(normal, safe_normalize(visibility_camera.eye.xyz - position),
             visibility_camera.light_direction.xyz, visibility_camera.light_radiance.xyz,
             base_color, metallic, roughness) + emissive;

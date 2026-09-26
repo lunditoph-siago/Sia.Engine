@@ -28,6 +28,8 @@ internal sealed partial class BenchmarkScene
         var initial = await Frame(2);
         if (initial.Counters.SelectedTriangles == 0) throw new InvalidOperationException("Fixture has no visible triangles.");
         await Frame(0);
+        entity.Set(source with { Material = source.Material with { BaseColor = new(.8f, .2f, .1f) } });
+        await Frame(1);
         entities[0].Destroy();
         initial = await Frame(2);
         if (initial.Counters.MainTriangles + initial.Counters.PostTriangles == 0)
@@ -61,6 +63,43 @@ internal sealed partial class BenchmarkScene
         if (recovered.Counters.MainTriangles + recovered.Counters.PostTriangles != 0)
             throw new InvalidOperationException("Extraction did not resume publishing the corrected instance after a prior failed attempt.");
         await Frame(0);
-        Console.WriteLine("GPU Scene verification passed: static zero uploads, direct ref material/transform writes, removal, slot reuse, GPU indirect readback, and continued publishing after a failed extraction attempt.");
+
+        var sparseMesh = Assets.Grid(8);
+        var sparseRoots = Enumerable.Range(0, 16).Select(_ => new MeshPatch(sparseMesh, 0, [])).ToArray();
+        var sparseTree = MeshPatchTree.Create(sparseRoots);
+        uint rootMeshlets = 0, completeRootTriangles = 0, sampledRootTriangles = 0, sampledStride16Triangles = 0;
+        for (var root = 0; root < sparseTree.RootCount; root++) {
+            var patch = sparseTree.Nodes.Span[root];
+            rootMeshlets = checked(rootMeshlets + (uint)patch.MeshletCount);
+            completeRootTriangles = checked(completeRootTriangles + (uint)patch.TriangleCount);
+            if ((root & 1) == 0) sampledRootTriangles = checked(sampledRootTriangles + (uint)patch.TriangleCount);
+            if (root == 0) sampledStride16Triangles = (uint)patch.TriangleCount;
+        }
+        if (sampledRootTriangles == 0 || sampledRootTriangles >= completeRootTriangles)
+            throw new InvalidOperationException("The root-stride fixture does not reduce its geometry.");
+        using var sparse = new BenchmarkScene(gpu, sparseTree, [source], 128, 128,
+            new MeshPatchBudget(sparseTree.RootCount, (int)rootMeshlets, (int)sampledRootTriangles) {
+                MaxRefinementCandidates = 0, MaxRefinementNodes = 0
+            }, retainedInstances: true, rootCutStride: 2);
+        if (sparse._feature.TriangleCapacity != sampledRootTriangles)
+            throw new InvalidOperationException("Sparse root selection did not reserve only its sampled triangle worklist.");
+        FrameSample? sparseSample = null;
+        await foreach (var sample in sparse.RenderAsync([float4x4.identity])) sparseSample = sample;
+        var selected = sparseSample!.Counters.SelectedTriangles;
+        if (selected == 0 || selected > sampledRootTriangles || selected >= completeRootTriangles)
+            throw new InvalidOperationException("GPU root-stride selection did not remain inside its reduced worklist budget.");
+
+        using var staticSparse = new BenchmarkScene(gpu, sparseTree, [source], 128, 128,
+            new MeshPatchBudget(sparseTree.RootCount, (int)rootMeshlets, (int)sampledStride16Triangles) {
+                MaxRefinementCandidates = 0, MaxRefinementNodes = 0
+            }, retainedInstances: true, rootCutStride: 16);
+        if (staticSparse._feature.TriangleCapacity != sampledStride16Triangles)
+            throw new InvalidOperationException("The static root cut did not reserve its sampled triangle count.");
+        FrameSample? staticSparseSample = null;
+        await foreach (var sample in staticSparse.RenderAsync([float4x4.identity])) staticSparseSample = sample;
+        var staticSelected = staticSparseSample!.Counters.MainTriangles;
+        if (staticSelected == 0 || staticSelected > sampledStride16Triangles || staticSelected >= completeRootTriangles)
+            throw new InvalidOperationException("The static root-cut indirect draw exceeded its sampled geometry budget.");
+        Console.WriteLine("GPU Scene verification passed: Set and direct-ref ECS updates, removal/reuse/recovery, GPU half-root selection, and static stride-16 indirect output within exact triangle capacities.");
     }
 }

@@ -18,7 +18,7 @@ internal static unsafe class PbrLightingBindGroupLayout
     public const uint ShadowConfigBinding = 8;
     private const int EntryCount = 9;
 
-    public static WgpuHandle<WGPUBindGroupLayout> Create(WgpuHandle<WGPUDevice> device)
+    public static WgpuHandle<WGPUBindGroupLayout> Create(WgpuHandle<WGPUDevice> device, bool unclustered = false)
     {
         Span<WGPUBindGroupLayoutEntry> entries = stackalloc WGPUBindGroupLayoutEntry[EntryCount];
         entries[0] = WGPUBindGroupLayoutEntry.Default;
@@ -77,9 +77,14 @@ internal static unsafe class PbrLightingBindGroupLayout
         entries[8].Buffer = WGPUBufferBindingLayout.Default;
         entries[8].Buffer.Type = WGPUBufferBindingType.Uniform;
 
+        if (unclustered) {
+            foreach (ref var entry in entries) entry.Visibility = WGPUShaderStage.Compute;
+            entries[4..].CopyTo(entries[2..]);
+            entries = entries[..7];
+        }
         fixed (WGPUBindGroupLayoutEntry* entriesPtr = entries) {
             var descriptor = WGPUBindGroupLayoutDescriptor.Default;
-            descriptor.EntryCount = EntryCount;
+            descriptor.EntryCount = (nuint)entries.Length;
             descriptor.Entries = entriesPtr;
             return Wgpu.CreateBindGroupLayout(device, in descriptor);
         }
@@ -100,7 +105,7 @@ internal static unsafe class PbrLightingBindGroupLayout
         WgpuHandle<WGPUSampler> shadowSampler,
         WgpuHandle<WGPUBuffer> shadowLayers,
         ulong shadowLayersSize,
-        WgpuHandle<WGPUBuffer> shadowConfig)
+        WgpuHandle<WGPUBuffer> shadowConfig, bool unclustered = false)
     {
         Span<WGPUBindGroupEntry> entries = stackalloc WGPUBindGroupEntry[EntryCount];
         entries[0] = WGPUBindGroupEntry.Default with {
@@ -147,10 +152,11 @@ internal static unsafe class PbrLightingBindGroupLayout
             Size = ShadowConfigGpu.Stride
         };
 
+        if (unclustered) { entries[4..].CopyTo(entries[2..]); entries = entries[..7]; }
         fixed (WGPUBindGroupEntry* entriesPtr = entries) {
             var descriptor = WGPUBindGroupDescriptor.Default;
             descriptor.Layout = (WGPUBindGroupLayout*)layout.DangerousGetHandle();
-            descriptor.EntryCount = EntryCount;
+            descriptor.EntryCount = (nuint)entries.Length;
             descriptor.Entries = entriesPtr;
             return Wgpu.CreateBindGroup(device, in descriptor);
         }

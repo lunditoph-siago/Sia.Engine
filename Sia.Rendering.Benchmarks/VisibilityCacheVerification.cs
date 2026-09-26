@@ -1,5 +1,6 @@
 using Sia;
 using Sia.Engine.Camera;
+using Sia.Engine.Lighting;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Graphics.Reactive;
@@ -10,7 +11,7 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Benchmarks;
 
-internal sealed class VisibilityCacheVerification : IDisposable
+internal sealed partial class VisibilityCacheVerification : IDisposable
 {
     private static readonly RenderGraphTextureKey s_Color = new("cache-check-color"), s_Depth = new("cache-check-depth");
     private static readonly RenderGraphBufferKey s_Readback = new("cache-check-pixels");
@@ -21,37 +22,74 @@ internal sealed class VisibilityCacheVerification : IDisposable
     private readonly GpuFrame _frame;
     private readonly Entity _camera, _pixels;
     private readonly VisibilityPbrFeature _feature;
+    private uint _renderSize;
+    private PbrRenderFeature? _pbr;
+    private Entity _sun, _caster;
     private readonly WgpuRenderGraphRegistry _registry;
     private RenderFeatureContext<RenderFrameContext> _context;
     private readonly record struct GraphProps(VisibilityCacheVerification Scene);
     private ReactiveMount<GraphProps>? _mount;
 
-    private VisibilityCacheVerification(GpuDevice gpu, PbrSceneAsset asset, bool timing = false)
+    private VisibilityCacheVerification(GpuDevice gpu, PbrSceneAsset asset, bool flat = false, uint renderSize = 128, bool lod = false,
+        bool timing = true, bool pbr = false, bool reference = false, bool shadowsEnabled = true)
     {
         _gpu = gpu;
         _timingEnabled = timing && gpu.TimingEnabled;
+        _renderSize = renderSize;
         try {
             _frame = new(_main, _render.Entities,
                 _render.Entities.OwnWgpu(gpu.Device, static (ref WgpuHandle<WGPUDevice> _) => { }),
                 _render.Entities.OwnWgpu(gpu.Queue, static (ref WgpuHandle<WGPUQueue> _) => { }));
-            _camera = _main.Create(HList.From(CameraMatrices.Identity));
-            _main.AcquireAddon<Viewport>().Value = new(128, 128);
+            _camera = _main.Create(HList.From(CameraMatrices.Identity, global::Sia.Engine.Camera.Camera.Default,
+                new GlobalTransform(new AffineTransform(new float3(0,0,3), quaternion.identity))));
+            _main.AcquireAddon<Viewport>().Value = new((int)renderSize, (int)renderSize);
             _registry = _graphWorld.ConfigureWgpuRenderGraph(gpu.Device, gpu.Queue);
-            _feature = VisibilityPbrFeature.CreateFixedScene(in _frame, asset,
+            _feature = lod ? VisibilityPbrFeature.CreateGpuScene(in _frame, asset, 32,
+                new VisibilityLodSettings(0, new(10000, 10000, 100000)), WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: _timingEnabled)
+                : VisibilityPbrFeature.CreateFixedScene(in _frame, asset,
                 asset.Instances.ToArray().Select(i => new VisibilityInstance(i.Transform, i.Material) { AssetIndex = i.Geometry }).ToArray(),
                 WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: _timingEnabled);
+            _feature.FlatShading = flat;
+            if (lod) {
+                foreach (var i in asset.Instances.Span) _caster = _main.Create(HList.From(new VisibilityInstance(i.Transform, i.Material) { AssetIndex = i.Geometry }));
+            }
+            if (pbr) {
+                var shadows = _main.AcquireAddon<ShadowAtlasConfig>();
+                shadows.CascadeCount = 1; shadows.TileResolution = 64; shadows.MaxShadowedSpotLights = 0;
+                shadows.SceneBoundsDirectional = true; shadows.ConservativeCasterBounds = true;
+                _sun = shadowsEnabled
+                    ? _main.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1,1,1), 2), new GlobalTransform(AffineTransform.Identity)))
+                    : _main.Create(HList.From(new DirectionalLight(), new LightColor(new(1,1,1), 2), new GlobalTransform(AffineTransform.Identity)));
+                _main.Create(HList.From(new PointLight(8), new LightColor(new(.6f,.8f,1), 12),
+                    new GlobalTransform(new AffineTransform(new float3(0,0,2), quaternion.identity))));
+                var renderer = new PbrRenderer(ClusterLightCullingPipeline.Create(_render.Entities, _frame.Device),
+                    PbrIblPrecomputePipelines.Create(_render.Entities, _frame.Device),
+                    PbrOutputPipelines.Create(_render.Entities, _frame.Device, WGPUTextureFormat.RGBA8Unorm));
+                _pbr = new(renderer, _feature, new() { ScreenSpaceReflections = reference, ScreenSpaceIndirectLighting = false });
+            }
             _pixels = _render.Entities.CreateWgpuBuffer(_frame.Device, new WGPUBufferDescriptor {
                 Size = 128 * 128 * 4 + (ulong)VisibilityPbrFeature.GpuTimingStages.Length * 16, Usage = WGPUBufferUsage.MapRead | WGPUBufferUsage.CopyDst });
         }
         catch { Dispose(); throw; }
     }
 
-    private async Task<byte[]> FrameAsync(float4x4 projection)
+    private async Task<byte[]> FrameAsync(float4x4 projection, uint? renderSize = null)
     {
+        if (renderSize is { } size) {
+            _renderSize = size;
+            _main.AcquireAddon<Viewport>().Value = new((int)size, (int)size);
+        }
         _camera.Get<CameraMatrices>() = CameraMatrices.Identity with { ViewProj = projection, WorldPosition = new(0, 0, 3) };
+        if (_pbr is not null) {
+            var view = float4x4.Translate(new(0, 0, -3));
+            var proj = math.mul(projection, float4x4.PerspectiveFov(MathF.PI / 3, 1, .1f, 1000));
+            var vp = math.mul(proj, view);
+            _camera.Get<CameraMatrices>() = new(view, proj, vp, math.inverse(vp), new(0,0,3), default);
+        }
         _render.BeginFrame();
         _context = new(_render, _render.GetOrCreateView(new("cache-check")), new(_frame, _camera, s_Color, s_Depth));
-        _feature.Extract(in _context); _feature.Prepare(in _context);
+        if (_pbr is not null) { _pbr.Extract(in _context); _pbr.Prepare(in _context); }
+        else { _feature.Extract(in _context); _feature.Prepare(in _context); }
         if (_mount is { } mount) mount.Update(new(this));
         else _mount = _graphWorld.Mount(BuildGraph, new GraphProps(this));
         _graphWorld.FlushReactive(); _registry.Execute();
@@ -65,12 +103,11 @@ internal sealed class VisibilityCacheVerification : IDisposable
                 var times = Wgpu.GetMappedRangeReadOnly<ulong>(buffer, 128 * 128 * 4, VisibilityPbrFeature.GpuTimingStages.Length * 2);
                 for (var i = 0; i < times.Length; i += 2)
                     if (times[i + 1] < times[i]) throw new InvalidOperationException("Invalid timing pair.");
-                if (times[0] != 0 || times[1] != 0)
-                    throw new InvalidOperationException("Fixed rendering resolved unused LOD queries.");
                 if (_feature.FrameStatistics.VisibilityCacheHits != 0 && (times[2] != 0 || times[3] != 0))
-                    throw new InvalidOperationException("Cached rendering retained stale HZB queries.");
-                if (times[4] == 0 || times[5] == 0)
-                    throw new InvalidOperationException("Fixed rendering did not write raster timestamps.");
+                    throw new InvalidOperationException("Cached frame reused stale HZB timestamps.");
+                if (_feature.SampleGpuTiming && _pbr is null && _feature.FrameStatistics.VisibilityCacheHits == 0
+                    && (times[4] == 0 || times[5] == 0))
+                    throw new InvalidOperationException("Rendering did not write raster timestamps.");
             }
             return Wgpu.GetMappedRangeReadOnly<byte>(buffer, 0, 128 * 128 * 4).ToArray();
         }
@@ -82,18 +119,19 @@ internal sealed class VisibilityCacheVerification : IDisposable
         var owner = props.Scene;
         var graph = new RenderGraphBuildContext(ref hooks, owner._registry);
         graph.UseTexture(s_Color, new("cache-check-color", RenderGraphTextureFormat.RGBA8Unorm, 128, 128));
-        graph.UseTexture(s_Depth, new("cache-check-depth", RenderGraphTextureFormat.Depth32Float, 128, 128));
-        owner._feature.BuildRenderGraph(ref graph, in owner._context);
+        graph.UseTexture(s_Depth, new("cache-check-depth", RenderGraphTextureFormat.Depth32Float, owner._renderSize, owner._renderSize));
+        if (owner._pbr is not null) owner._pbr.BuildRenderGraph(ref graph, in owner._context);
+        else owner._feature.BuildRenderGraph(ref graph, in owner._context);
         graph.UseImportedBuffer(s_Readback, new("cache-check-pixels", Wgpu.GetBufferSize(owner._pixels.GetWgpu<WGPUBuffer>()),
             RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
         graph.BindImportedBuffer(s_Readback, owner._pixels.GetWgpu<WGPUBuffer>());
         graph.ExportBuffer(s_Readback, RenderGraphBufferUsage.MapRead);
         graph.UseComputePass(new("cache-check-copy"), "cache-check-copy", declaration => {
             declaration.Read(s_Color, RenderGraphTextureUsage.CopySource).Write(s_Readback, RenderGraphBufferUsage.CopyDestination);
-            if (owner._timingEnabled) declaration.Read(owner._feature.GpuTimingsTarget, RenderGraphBufferUsage.CopySource);
+            if (owner._timingEnabled && owner._feature.SampleGpuTiming) declaration.Read(owner._feature.GpuTimingsTarget, RenderGraphBufferUsage.CopySource);
         }, context => {
             Wgpu.CopyTextureToBuffer(context.CommandEncoder, context.GetTexture(s_Color), context.GetBuffer(s_Readback), 128, 128, 512);
-            if (owner._timingEnabled) Wgpu.CopyBufferToBuffer(context.CommandEncoder, context.GetBuffer(owner._feature.GpuTimingsTarget), 0,
+            if (owner._timingEnabled && owner._feature.SampleGpuTiming) Wgpu.CopyBufferToBuffer(context.CommandEncoder, context.GetBuffer(owner._feature.GpuTimingsTarget), 0,
                 context.GetBuffer(s_Readback), 128 * 128 * 4, (ulong)VisibilityPbrFeature.GpuTimingStages.Length * 16);
         });
         return Sia.Reactive.Reactive.None;
@@ -102,24 +140,26 @@ internal sealed class VisibilityCacheVerification : IDisposable
     public static async Task RunAsync()
     {
         using var gpu = await GpuDevice.CreateAsync(true);
+        Console.WriteLine($"Visibility verification adapter: {gpu.Description}; timestamps={gpu.TimingEnabled}.");
         var mesh = MeshPatchAsset.Cook(Assets.Grid(16));
         var transformed = PbrSceneAsset.Create([mesh], [new(PbrMaterial.Default, DoubleSided: true)],
             [new(0, 0, float4x4.Scale(new float3(.6f, .6f, 1))), new(0, 0, float4x4.Translate(new(.3f, 0, .2f)))]);
         var worldSpace = PbrSceneAsset.Create([mesh], [new(PbrMaterial.Default, DoubleSided: true)], [new(0, 0, float4x4.identity)]);
-        Console.WriteLine($"Fixed timing adapter: {gpu.Description}; timestamps={gpu.TimingEnabled}.");
-        if (!gpu.TimingEnabled) throw new NotSupportedException("The timing regression requires timestamp-query support.");
+        foreach (var flat in new[] { false, true })
+        foreach (var lod in new[] { false, true })
         foreach (var asset in new[] { transformed, worldSpace }) {
-            using var timed = new VisibilityCacheVerification(gpu, asset, timing: true);
-            using var untimed = new VisibilityCacheVerification(gpu, asset);
+            using var untimed = new VisibilityCacheVerification(gpu, asset, flat: flat, lod: lod, timing: false);
+            using var timed = new VisibilityCacheVerification(gpu, asset, flat: flat, lod: lod);
             foreach (var shear in new[] { 0f, .8f, .8f, -.8f, 0f }) {
                 var projection = float4x4.identity; projection.c2.x = shear;
                 var expected = await untimed.FrameAsync(projection);
                 var actual = await timed.FrameAsync(projection);
-                if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("Fixed GPU timing changed raster output.");
+                if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("GPU timing changed raster output.");
             }
         }
+        foreach (var flat in new[] { false, true })
         foreach (var asset in new[] { transformed, worldSpace }) {
-            using var cached = new VisibilityCacheVerification(gpu, asset);
+            using var cached = new VisibilityCacheVerification(gpu, asset, flat);
             var projection = float4x4.identity;
             var first = await cached.FrameAsync(projection);
             if (first.Where((_, i) => i % 4 != 3).All(value => value == 0)) throw new InvalidOperationException("Pixel fixture is empty.");
@@ -128,7 +168,7 @@ internal sealed class VisibilityCacheVerification : IDisposable
                 throw new InvalidOperationException("Static cache hit differs from its fully rendered frame.");
             foreach (var shear in new[] { .8f, -.8f, 0f }) {
                 projection.c2.x = shear;
-                using var fresh = new VisibilityCacheVerification(gpu, asset);
+                using var fresh = new VisibilityCacheVerification(gpu, asset, flat);
                 var expected = await fresh.FrameAsync(projection);
                 if (shear != 0 && first.AsSpan().SequenceEqual(expected))
                     throw new InvalidOperationException("The camera change did not exercise different pixels.");
@@ -140,7 +180,42 @@ internal sealed class VisibilityCacheVerification : IDisposable
                     throw new InvalidOperationException("Combined main/post index cache differs from a fresh frame.");
             }
         }
-        Console.WriteLine("Visibility cache verification passed: transformed and world-space RGBA pixels equal fresh rendering on static hits, camera changes, history recovery, and subsequent combined-list hits.");
+        foreach (var lod in new[] { false, true }) {
+            using var scaled = new VisibilityCacheVerification(gpu, worldSpace, flat: true, renderSize: 64, lod: lod);
+            var pixels = await scaled.FrameAsync(float4x4.identity);
+            // Independent expected output: default material 0.8, Reinhard, then sRGB.
+            var linear = .8 / 1.8;
+            var expected = (int)System.Math.Round((1.055 * System.Math.Pow(linear, 1 / 2.4) - .055) * 255);
+            var center = (64 * 128 + 64) * 4;
+            if (System.Math.Abs(pixels[center] - expected) > 1 || pixels[center + 3] != 255)
+                throw new InvalidOperationException("Flat material color/transfer is incorrect or geometry was not drawn.");
+            for (var y = 0; y < 128; y += 2) for (var x = 0; x < 128; x += 2) {
+                var p = (y * 128 + x) * 4;
+                if (!pixels.AsSpan(p, 4).SequenceEqual(pixels.AsSpan(p + 4, 4))
+                    || !pixels.AsSpan(p, 8).SequenceEqual(pixels.AsSpan(p + 512, 8)))
+                    throw new InvalidOperationException("Half-resolution output must upscale each source pixel to a 2x2 block.");
+            }
+            var graph = scaled._registry.PreparePlan().Graph;
+            if (graph.Passes.Any(p => p.Name is "visibility-material-tiles" or "visibility-resolve")
+                || graph.Textures.Any(t => t.Descriptor.Name is "visibility-hdr" or "visibility-base-roughness" or "visibility-normal-metallic" or "visibility-emissive-occlusion"))
+                throw new InvalidOperationException("Flat shading retained PBR surface work.");
+            var rejected = false;
+            try { scaled._feature.FlatShading = false; }
+            catch (InvalidOperationException) { rejected = true; }
+            if (!rejected) throw new InvalidOperationException("Graph structure changes must be rejected before mutating a mounted feature.");
+            var restored = await scaled.FrameAsync(float4x4.identity);
+            if (!pixels.AsSpan().SequenceEqual(restored)) throw new InvalidOperationException("Rejected shading switch changed flat output.");
+        }
+        foreach (var lod in new[] { false, true }) {
+            using var resizing = new VisibilityCacheVerification(gpu, transformed, flat: true, lod: lod);
+            foreach (var size in new uint[] { 128, 64, 64, 96, 128 }) {
+                using var fresh = new VisibilityCacheVerification(gpu, transformed, flat: true, renderSize: size, lod: lod);
+                var expected = await fresh.FrameAsync(float4x4.identity);
+                var actual = await resizing.FrameAsync(float4x4.identity, size);
+                if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("Live resolution change differs from fresh rendering.");
+            }
+        }
+        Console.WriteLine("Visibility verification passed: timed/untimed raster, fused output without HDR intermediate, cached/fresh frames, camera changes, fixed/GPU LOD live resizing, timestamps and rejected live graph changes.");
     }
 
     public void Dispose() => GpuDevice.DisposeAll(() => _mount?.Unmount(), _graphWorld.Dispose, _render.Dispose, _main.Dispose);

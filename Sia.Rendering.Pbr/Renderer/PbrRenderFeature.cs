@@ -59,9 +59,10 @@ public sealed class PbrRenderFeature :
         Renderer.PrepareLighting(state, in frame, extracted);
         Renderer.PrepareOutput(state, in frame, extracted, Options.ExposureCompensation, Options.ToneMapping);
         Transparency?.Prepare(in context, extracted);
+        if (!Options.ScreenSpaceReflections && !Options.ScreenSpaceIndirectLighting) Visibility.PrepareFusedLighting();
         Visibility.Prepare(in context, sceneLighting: true);
         Visibility.PrepareShadows(in context, state, extracted.ShadowConfig);
-        Renderer.PrepareVisibility(state, in frame, extracted, Visibility.DebugMode);
+        if (!Visibility.FusedLighting) Renderer.PrepareVisibility(state, in frame, extracted, Visibility.DebugMode);
         if (Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) {
             state.ScreenLighting ??= new PbrScreenLighting(in frame, Options.ScreenSpaceReflections, Options.ScreenSpaceIndirectLighting);
             state.ScreenLighting.Prepare(in frame, extracted);
@@ -85,6 +86,7 @@ public sealed class PbrRenderFeature :
             "pbr-hdr", RenderGraphTextureFormat.RGBA16Float,
             (uint)extracted.Viewport.Width, (uint)extracted.Viewport.Height));
 
+        Visibility.BuildFrameTiming(ref graph, in context, begin: true);
         PbrRenderGraphHooks.UseClusterLightCullingPass(
             ref graph,
             Renderer,
@@ -104,7 +106,8 @@ public sealed class PbrRenderFeature :
         }
         visibility.BuildRenderGraph(ref graph, in context, includeOutput: false);
         PbrRenderGraphHooks.UseVisibilityShadowPasses(ref graph, visibility, in context);
-        PbrRenderGraphHooks.UseVisibilityLightingPass(ref graph, Renderer, state, visibility, Options.HdrTarget, in frameContext);
+        if (visibility.FusedLighting) visibility.BuildFusedLighting(ref graph, in context, state, Options.HdrTarget);
+        else PbrRenderGraphHooks.UseVisibilityLightingPass(ref graph, Renderer, state, visibility, Options.HdrTarget, in frameContext);
         var hdr = Options.HdrTarget;
         if (Options.ScreenSpaceReflections || Options.ScreenSpaceIndirectLighting) {
             hdr = state.ScreenLighting!.BuildGraph(ref graph, hdr, frameContext.DepthTarget,
@@ -121,5 +124,6 @@ public sealed class PbrRenderFeature :
             ref graph, state, extracted, Options, hdr, in frameContext);
         PbrRenderGraphHooks.UseToneMappingPass(
             ref graph, Renderer, state, Options.ToneMappingPass, output, in frameContext);
+        Visibility.BuildFrameTiming(ref graph, in context, begin: false);
     }
 }

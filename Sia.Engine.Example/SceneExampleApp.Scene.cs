@@ -71,11 +71,16 @@ internal sealed unsafe partial class SceneExampleApp
             return;
         }
 
+        InitializeMaterialRendering();
+        if (Program.FlatShading) {
+            _visibilityLod!.FlatShading = true;
+            _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
+            return;
+        }
         _sceneRenderer = new PbrRenderer(
             ClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
             PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice),
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
-        InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
             .Add(new PbrRenderFeature(_sceneRenderer, _visibilityLod!, PbrRenderFeatureOptions.FromProfile(_renderProfile), transparency: _transparency))
             .Build();
@@ -157,16 +162,21 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
+        var nextScale = _resolutionController?.Scale ?? Program.RenderScale;
+        if (_renderScale != nextScale) {
+            _renderScale = nextScale;
+            OnFramebufferResized();
+        }
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
             UpdatePatchInspection(deltaTime);
             target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
-            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
+            var aspect = (float)OutputWidth / System.Math.Max(1, OutputHeight);
             eye = PatchEye(aspect, target);
         } else if (_pipeline == ScenePipeline.Pbr) {
             UpdatePatchInspection(deltaTime);
-            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
+            var aspect = (float)OutputWidth / System.Math.Max(1, OutputHeight);
             var size = _materialBounds.Max - _materialBounds.Min;
             target = new float3(-15.1f, 3.9f, 1.6f);
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
@@ -193,7 +203,7 @@ internal sealed unsafe partial class SceneExampleApp
         if (_sceneWorld is not { } world) {
             return;
         }
-        world.AcquireAddon<Viewport>().Value = new ViewportSize(_framebufferWidth, _framebufferHeight);
+        world.AcquireAddon<Viewport>().Value = new ViewportSize(RenderWidth, RenderHeight);
     }
 
     private void DisposeScene()

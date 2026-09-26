@@ -12,7 +12,15 @@ public static partial class Program
     internal static readonly Stopwatch StartupClock = Stopwatch.StartNew();
     internal static int BenchmarkFrames { get; private set; }
     internal static bool BenchmarkMotion { get; private set; }
-    internal static RenderQuality Quality { get; private set; } = RenderQuality.Medium;
+    internal static RenderQuality Quality { get; private set; } = RenderQuality.Low;
+    internal static bool FlatShading { get; private set; }
+    internal static float RenderScale { get; private set; } = 1;
+    internal static int Width { get; private set; } = 1280;
+    internal static int Height { get; private set; } = 720;
+    internal static bool ImmediatePresent { get; private set; }
+    internal static bool Offscreen { get; private set; }
+    internal static bool GpuTiming { get; private set; }
+    internal static int TargetFps { get; private set; }
     public static async Task<int> Main(string[] args)
     {
         try {
@@ -109,6 +117,27 @@ public static partial class Program
             if (i + 1 == args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
             else if (args[i] == "--scene") { scenePath = args[i + 1]; }
+            else if (args[i] == "--offscreen") { Offscreen = bool.Parse(args[i + 1]); }
+            else if (args[i] == "--shading") { FlatShading = args[i + 1] switch {
+                "pbr" => false, "flat" => true, _ => throw new ArgumentException("Expected --shading pbr|flat.")
+            }; }
+            else if (args[i] == "--gpu-timing") { GpuTiming = bool.Parse(args[i + 1]); }
+            else if (args[i] == "--target-fps") {
+                if (!int.TryParse(args[i + 1], out var fps) || fps is < 1 or > 1000) throw new ArgumentException("Expected --target-fps 1..1000.");
+                TargetFps = fps; GpuTiming = true;
+            }
+            else if (args[i] == "--present") { ImmediatePresent = args[i + 1] switch {
+                "fifo" => false, "immediate" => true, _ => throw new ArgumentException("Expected --present fifo|immediate.")
+            }; }
+            else if (args[i] == "--render-scale") {
+                if (!float.TryParse(args[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out var scale)
+                    || !float.IsFinite(scale) || scale is < .0625f or > 1) throw new ArgumentException("Expected --render-scale 0.0625..1.");
+                RenderScale = scale;
+            }
+            else if (args[i] is "--width" or "--height") {
+                if (!int.TryParse(args[i + 1], out var size) || size is < 64 or > 8192) throw new ArgumentException("Expected --width/--height 64..8192.");
+                if (args[i] == "--width") Width = size; else Height = size;
+            }
             else if (args[i] == "--quality") { Quality = args[i + 1] switch {
                 "low" => RenderQuality.Low, "medium" => RenderQuality.Medium, "high" => RenderQuality.High,
                 _ => throw new ArgumentException("Expected --quality low|medium|high.")
@@ -153,13 +182,33 @@ public static partial class Program
         if ((debugMode is not null || distance is not null) && pipeline == ScenePipeline.Unlit) {
             throw new ArgumentException("--debug and --distance require --pipeline bunny|pbr.");
         }
+        if ((FlatShading || RenderScale != 1) && pipeline != ScenePipeline.Pbr) {
+            throw new ArgumentException("--shading flat and --render-scale require --pipeline pbr.");
+        }
+        if (TargetFps != 0) {
+            GpuTiming = true;
+            if (scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true)
+                throw new ArgumentException("Dynamic resolution requires a monolithic PBR scene.");
+        }
+        var streamed = scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true;
+        if (GpuTiming && (pipeline != ScenePipeline.Pbr || streamed))
+            throw new ArgumentException("--gpu-timing currently requires a monolithic PBR scene.");
+        if (FlatShading && debugMode is not (null or VisibilityDebugMode.Shaded)) {
+            throw new ArgumentException("Flat shading cannot be combined with a diagnostic --debug mode.");
+        }
+        if (Offscreen && (pipeline != ScenePipeline.Pbr || BenchmarkFrames == 0)) {
+            throw new ArgumentException("--offscreen true requires a PBR benchmark with a finite --benchmark-frames count.");
+        }
+#if BROWSER
+        if (Offscreen || ImmediatePresent) throw new ArgumentException("Offscreen and immediate present benchmarks are native-only.");
+#endif
         if ((scenePath is not null || finest is not null || camera is not null) && pipeline != ScenePipeline.Pbr) {
             throw new ArgumentException("--scene, --lod and --camera require --pipeline pbr.");
         }
         if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
             throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
         }
-        return (pipeline, debugMode, distance, scenePath, finest ?? true, camera);
+        return (pipeline, debugMode, distance, scenePath, finest ?? false, camera);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {

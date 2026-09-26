@@ -3,7 +3,7 @@ import { createBrowserInput } from './browser-input.js';
 const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
 const pipeline = parameters.get('pipeline') ?? 'pbr';
-const finest = parameters.get('lod') !== 'auto';
+const finest = parameters.get('lod') === 'finest';
 const streaming = (parameters.get('scene') ?? '').split('?')[0].endsWith('.siastream');
 const inspection = document.getElementById('inspection');
 const settingsToggle = document.getElementById('settings-toggle');
@@ -135,8 +135,14 @@ function setInspectionStatus(distance, flags) {
 }
 
 // Keep benchmark work fixed even when the browser panel is resized during a run.
-function getCanvasWidth() { return parameters.has('benchmark-frames') ? 1280 : Math.max(1, Math.round(window.innerWidth)); }
-function getCanvasHeight() { return parameters.has('benchmark-frames') ? 720 : Math.max(1, Math.round(window.innerHeight)); }
+function outputSize(name, fallback) {
+  if (!parameters.has(name)) return fallback;
+  const value = Number(parameters.get(name));
+  if (!Number.isInteger(value) || value < 64 || value > 8192) throw new Error(`Expected ${name}=64..8192.`);
+  return value;
+}
+function getCanvasWidth() { return outputSize('width', parameters.has('benchmark-frames') ? 1280 : Math.max(1, Math.round(window.innerWidth))); }
+function getCanvasHeight() { return outputSize('height', parameters.has('benchmark-frames') ? 720 : Math.max(1, Math.round(window.innerHeight))); }
 function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
@@ -230,6 +236,9 @@ try {
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   if (parameters.has('quality')) args.push('--quality', parameters.get('quality'));
+  for (const name of ['shading', 'render-scale', 'width', 'height', 'gpu-timing', 'target-fps']) {
+    if (parameters.has(name)) args.push('--' + name, parameters.get(name));
+  }
   if (parameters.has('benchmark-frames')) args.push('--benchmark-frames', parameters.get('benchmark-frames'));
   if (parameters.has('benchmark-motion')) args.push('--benchmark-motion', parameters.get('benchmark-motion'));
   if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));

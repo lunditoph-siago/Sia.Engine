@@ -9,12 +9,32 @@ public sealed partial class VisibilityPbrFeature
 {
     private static readonly string[] s_TimingStages = [
         "visibility-lod-select", "visibility-hzb-main", "visibility-raster",
-        "visibility-material-tiles", "visibility-resolve", "visibility-output"
+        "visibility-material-tiles", "visibility-resolve", "visibility-output",
+        "visibility-cluster-culling", "visibility-cluster-post", "visibility-raster-post",
+        "visibility-cache-draw", "visibility-post-depth-read", "visibility-cull-main",
+        "visibility-compact-main", "visibility-cull-post", "visibility-compact-post", "visibility-emit-post",
+        "visibility-lod-project", "visibility-lod-emit", "pbr-frame-begin", "pbr-frame-end"
     ];
 
     public static ReadOnlySpan<string> GpuTimingStages => s_TimingStages;
     public RenderGraphBufferKey GpuStatisticsTarget => s_IndirectKey;
     public RenderGraphBufferKey GpuTimingsTarget { get; } = new("visibility-timings");
+
+    /// <summary>Skip timestamp writes and readback on unsampled frames without rebuilding pipelines.</summary>
+    public bool SampleGpuTiming { get; set; } = true;
+
+    internal void BuildFrameTiming(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context, bool begin)
+    {
+        var view = context.View.PersistentResources.GetRequired<ViewState>();
+        if (view.Timing is not { } timing) return;
+        if (begin) ImportBuffer(ref graph, GpuTimingsTarget, timing.Results,
+            RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource | RenderGraphBufferUsage.CopyDestination);
+        var name = begin ? "pbr-frame-begin" : "pbr-frame-end";
+        graph.UseComputePass(new(name), name, declaration => {
+            declaration.ReadWrite(GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
+            if (!begin) declaration.Read(view.Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
+        }, view.FrameTimestamp);
+    }
 
     private TimingGpu CreateTiming(WgpuHandle<WGPUDevice> device, WGPULimits limits, List<Entity> acquired) => new(
         Own(_world, Wgpu.CreateQuerySet(device, WGPUQueryType.Timestamp, (uint)s_TimingStages.Length * 2, "visibility-timings"), acquired),
@@ -26,11 +46,19 @@ public sealed partial class VisibilityPbrFeature
     private sealed partial class ViewState
     {
         public TimingGpu? Timing { get; init; }
+        private bool TimingActive => Timing is not null && Owner.SampleGpuTiming;
+        public void FrameTimestamp(WgpuReactiveRenderGraphPassContext context)
+        {
+            if (!TimingActive) return;
+            var pass = BeginCompute(context);
+            Wgpu.EndComputePass(pass); Wgpu.Release(ref pass);
+            if (context.Pass.Name == "pbr-frame-end") ResolveTiming(context);
+        }
         public uint TimingWritten { get; set; }
 
         private unsafe void ResolveTiming(WgpuReactiveRenderGraphPassContext context)
         {
-            if (Timing is not { } timing) return;
+            if (!Owner.SampleGpuTiming || Timing is not { } timing) return;
             var target = context.GetBuffer(Owner.GpuTimingsTarget);
             // Resolve only queries actually written this frame. Each sparse resolve
             // has the required 256-byte alignment; pack the public results by copy.
@@ -46,7 +74,7 @@ public sealed partial class VisibilityPbrFeature
         }
 
         public void DeclareSurfaceTiming(RenderGraphPassDeclarationBuilder declaration) => declaration
-            .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
+            .Read(Owner._fusedLighting is null ? Owner.HdrTarget : FusedTarget, RenderGraphTextureUsage.TextureBinding)
             .Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
 
         public void ResolveSurfaceTiming(WgpuReactiveRenderGraphPassContext context) => ResolveTiming(context);
@@ -63,7 +91,7 @@ public sealed partial class VisibilityPbrFeature
 
         private unsafe WgpuHandle<WGPUComputePassEncoder> BeginCompute(WgpuReactiveRenderGraphPassContext context)
         {
-            if (Timing is not { } timing || !IsCheckpoint(context)) { return context.GetOrBeginComputePass(); }
+            if (!Owner.SampleGpuTiming || Timing is not { } timing || !IsCheckpoint(context)) { return context.GetOrBeginComputePass(); }
             var index = TimingIndex(context);
             var timestamps = new WGPUPassTimestampWrites {
                 QuerySet = (WGPUQuerySet*)timing.Queries.GetWgpu<WGPUQuerySet>().DangerousGetHandle(),

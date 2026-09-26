@@ -20,11 +20,13 @@ struct Status { draw: vec4<u32>, selection: vec4<u32>, post_draw: vec4<u32>, cul
 @group(0) @binding(5) var<storage, read_write> heap: array<u32>;
 @group(0) @binding(6) var<storage, read_write> status: Status;
 @group(0) @binding(7) var<storage, read_write> work: array<vec2<u32>>;
-@group(1) @binding(2) var<storage, read_write> dispatch: array<u32>;
+@group(1) @binding(2) var<storage, read_write> dispatch: array<atomic<u32>>;
 var<private> heap_size: u32;
+var<private> heap_base: u32;
 var<private> heap_peak: u32;
 var<workgroup> frontier: vec4<u32>;
 var<workgroup> heap_cache: array<vec4<u32>, 256>;
+var<workgroup> root_cut_work: vec4<u32>;
 
 fn finite(value: vec4<f32>) -> bool {
     return all((bitcast<vec4<u32>>(value) & vec4<u32>(0x7f800000u)) != vec4<u32>(0x7f800000u));
@@ -76,11 +78,17 @@ fn projected_error(node: Patch, source_matrix: mat4x4<f32>) -> u32 {
 
 @compute @workgroup_size(64)
 fn project(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    if (group.x == 0u && group.y == 0u && lane == 0u) { atomicStore(&dispatch[18], 0u); }
     let instance = group.y * parameters.counts.w + group.x;
     if (instance >= parameters.counts.z) { return; }
     let roots = instances[instance].roots;
     for (var root = lane; root < roots.y; root += 64u) {
-        states[roots.z + root] = project_node(roots.x + root, instance);
+        let node = roots.x + root;
+        if (parameters.traversal.x == 0u && parameters.traversal.y == 0u) {
+            states[roots.z + root] = project_root(node, instance);
+        } else {
+            states[roots.z + root] = project_node(node, instance);
+        }
     }
 }
 
@@ -91,6 +99,14 @@ fn project_node(node_id: u32, instance: u32) -> PatchState {
     return PatchState(projected_error(node, matrix), node_id + 1u, 0u, 0u, instance);
 }
 
+// Low quality can render the conservative root cut directly. It still needs
+// frustum classification, but not projected-error work for a cut it cannot refine.
+fn project_root(node_id: u32, instance: u32) -> PatchState {
+    let node = patches[node_id];
+    let matrix = camera.view_projection * instances[instance].transform;
+    return PatchState(0u, node_id + 1u, 0u, select(0u, 1u, outside_frustum(node, matrix)), instance);
+}
+
 fn heap_item(index: u32) -> vec4<u32> {
     let state = states[index];
     return vec4<u32>(index, state.error, state.instance, state.node_id);
@@ -98,12 +114,12 @@ fn heap_item(index: u32) -> vec4<u32> {
 
 fn read_heap(position: u32) -> vec4<u32> {
     if (position < 256u) { return heap_cache[position]; }
-    return heap_item(heap[position]);
+    return heap_item(heap[heap_base + position]);
 }
 
 fn write_heap(position: u32, item: vec4<u32>) {
     if (position < 256u) { heap_cache[position] = item; }
-    else { heap[position] = item.x; }
+    else { heap[heap_base + position] = item.x; }
 }
 
 fn precedes(a: vec4<u32>, b: vec4<u32>) -> bool {
@@ -149,49 +165,60 @@ fn pop() -> u32 {
     return result;
 }
 
+// Independent root workgroups receive deterministic portions of the spare budget.
+// A failed refinement retains its parent; no atomic race can steal another root's coverage.
+fn portion(total: u32, index: u32) -> u32 {
+    let roots = max(1u, parameters.counts.y);
+    return total / roots + u32(index < total % roots);
+}
+fn node_reservation() -> u32 {
+    return min(min(parameters.traversal.y, arrayLength(&states) - parameters.counts.y), parameters.counts.y * 256u);
+}
+fn node_base(root: u32) -> u32 {
+    let count = node_reservation();
+    let roots = max(1u, parameters.counts.y);
+    return parameters.counts.y + root * (count / roots) + min(root, count % roots);
+}
+
 @compute @workgroup_size(64)
-fn select_cut(@builtin(local_invocation_index) lane: u32) {
+fn select_cut(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let root = group.y * parameters.counts.w + group.x;
+    if (root >= parameters.counts.y) { return; }
+    let base = node_base(root);
+    let node_limit = portion(node_reservation(), root);
+    let candidate_limit = min(128u, portion(parameters.traversal.x, root));
+    for (var i = lane; i < node_limit; i += 64u) { states[base + i] = PatchState(0u,0u,0u,0u,0u); }
     var candidates = 0u;
     var refinements = 0u;
     var refined_nodes = 0u;
-    var totals = vec3<u32>(0u);
-    var unreachable = false;
-    var limited = false;
+    let node = patches[states[root].node_id - 1u];
+    var totals = vec3<u32>(1u, node.geometry.x, node.geometry.z);
+    let root_cost = vec3<u32>(parameters.counts.y, parameters.traversal.zw);
+    let unreachable = any(root_cost > parameters.budget.xyz);
+    let spare = parameters.budget.xyz - min(parameters.budget.xyz, root_cost);
+    let limit = totals + vec3<u32>(portion(spare.x, root), portion(spare.y, root), portion(spare.z, root));
+    var limited = unreachable;
     if (lane == 0u) {
-        heap_size = 0u;
-        heap_peak = 0u;
-        for (var instance = 0u; instance < parameters.counts.z; instance++) {
-            let roots = instances[instance].roots;
-            for (var root = 0u; root < roots.y; root++) {
-                let index = roots.z + root;
-                let node = patches[roots.x + root];
-                totals += vec3<u32>(1u, node.geometry.x, node.geometry.z);
-                push(index);
-            }
-        }
-        unreachable = any(totals > parameters.budget.xyz);
-        limited = unreachable;
+        heap_size = 0u; heap_peak = 0u;
+        heap_base = parameters.counts.y * 8u + base;
+        push(root);
     }
     loop {
         if (lane == 0u) {
             frontier = vec4<u32>(0u);
             while (!unreachable && heap_size > 0u) {
-                if (candidates == parameters.traversal.x) { limited = true; break; }
-                let index = pop();
-                candidates++;
+                if (candidates == candidate_limit) { limited = true; break; }
+                let index = pop(); candidates++;
                 let source = states[index].node_id - 1u;
-                let node = patches[source];
-                let next = totals - vec3<u32>(1u, node.geometry.x, node.geometry.z)
-                    + vec3<u32>(node.children.y, node.children.z, node.children.w);
-                if (any(next > parameters.budget.xyz) || node.children.y > parameters.traversal.y - refined_nodes) {
-                    limited = true;
-                    continue;
+                let parent = patches[source];
+                let next = totals - vec3<u32>(1u, parent.geometry.x, parent.geometry.z)
+                    + vec3<u32>(parent.children.y, parent.children.z, parent.children.w);
+                if (any(next > limit) || parent.children.y > node_limit - refined_nodes) {
+                    limited = true; continue;
                 }
-                totals = next;
-                refinements++;
-                frontier = vec4<u32>(index, node.children.x,
-                    node.children.y, parameters.counts.y + refined_nodes);
-                refined_nodes += node.children.y;
+                totals = next; refinements++;
+                frontier = vec4<u32>(index, parent.children.x, parent.children.y, base + refined_nodes);
+                refined_nodes += parent.children.y;
                 break;
             }
         }
@@ -207,11 +234,85 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
         }
     }
     if (lane == 0u) {
-        status.draw = vec4<u32>(totals.z * 3u, 1u, 0u, 0u);
+        let index = root * 8u;
+        heap[index] = totals.x; heap[index+1u] = totals.y; heap[index+2u] = totals.z;
+        heap[index+3u] = u32(limited) | (u32(unreachable) << 1u);
+        heap[index+4u] = candidates; heap[index+5u] = refinements;
+        heap[index+6u] = refined_nodes; heap[index+7u] = heap_peak;
+    }
+}
+
+// The root-only profile has no refinement budget. Select the root and emit its
+// triangle work in one workgroup so the frame does not scan the selected cut a
+// second time in a separate emit dispatch.
+@compute @workgroup_size(64)
+fn select_root_cut(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let root = group.y * parameters.counts.w + group.x;
+    if (root >= parameters.counts.y) { return; }
+    let item = root * 8u;
+    if (lane == 0u) {
+        let state = states[root];
+        var patch_count = 0u;
+        var meshlet_count = 0u;
+        var triangle_count = 0u;
+        var triangle_offset = 0u;
+        var source_triangle = 0u;
+        if (state.node_id != 0u && state.visibility == 0u) {
+            let instance = instances[state.instance];
+            let root_local = state.node_id - 1u - instance.roots.x;
+            let stride = max(parameters.counts.x, 1u);
+            let phase = instance.roots.w % min(stride, instance.roots.y);
+            if (root_local % stride == phase) {
+                let geometry = patches[state.node_id - 1u].geometry;
+                patch_count = 1u;
+                meshlet_count = geometry.x;
+                triangle_count = geometry.z;
+                source_triangle = geometry.y;
+            }
+        }
+        triangle_offset = atomicAdd(&dispatch[18], triangle_count);
+        states[root].offset = triangle_offset;
+        root_cut_work = vec4<u32>(triangle_offset, source_triangle, triangle_count, state.instance);
+        heap[item] = patch_count;
+        heap[item + 1u] = meshlet_count;
+        heap[item + 2u] = triangle_count;
+        heap[item + 3u] = 0u;
+        heap[item + 4u] = 0u;
+        heap[item + 5u] = 0u;
+        heap[item + 6u] = 0u;
+        heap[item + 7u] = 0u;
+    }
+    workgroupBarrier();
+    for (var triangle = lane; triangle < root_cut_work.z; triangle += 64u) {
+        work[root_cut_work.x + triangle] = vec2<u32>(root_cut_work.y + triangle, root_cut_work.w);
+    }
+}
+var<workgroup> sum_a: array<vec4<u32>, 64>;
+var<workgroup> sum_b: array<vec4<u32>, 64>;
+@compute @workgroup_size(64)
+fn finish_cut(@builtin(local_invocation_index) lane: u32) {
+    var a = vec4<u32>(0u); var b = vec4<u32>(0u);
+    for (var root = lane; root < parameters.counts.y; root += 64u) {
+        let i = root * 8u;
+        a = vec4<u32>(a.xyz + vec3<u32>(heap[i], heap[i+1u], heap[i+2u]), a.w | heap[i+3u]);
+        b = vec4<u32>(b.xyz + vec3<u32>(heap[i+4u], heap[i+5u], heap[i+6u]), max(b.w, heap[i+7u]));
+    }
+    sum_a[lane] = a; sum_b[lane] = b;
+    workgroupBarrier();
+    for (var step = 32u; step > 0u; step /= 2u) {
+        if (lane < step) {
+            sum_a[lane] = vec4<u32>(sum_a[lane].xyz + sum_a[lane+step].xyz, sum_a[lane].w | sum_a[lane+step].w);
+            sum_b[lane] = vec4<u32>(sum_b[lane].xyz + sum_b[lane+step].xyz, max(sum_b[lane].w, sum_b[lane+step].w));
+        }
+        workgroupBarrier();
+    }
+    if (lane == 0u) {
+        a = sum_a[0]; b = sum_b[0];
+        status.draw = vec4<u32>(a.z * 3u, 1u, 0u, 0u);
         status.post_draw = vec4<u32>(0u, 1u, 0u, 0u);
-        status.selection = vec4<u32>(totals.xy, u32(limited) | (u32(unreachable) << 1u), 0u);
-        status.culling = vec4<u32>(totals.z, 0u, 0u, 0u);
-        status.traversal = vec4<u32>(parameters.counts.y + refined_nodes, candidates, refinements, heap_peak);
+        status.selection = vec4<u32>(a.xy, a.w, 0u);
+        status.culling = vec4<u32>(a.z, 0u, 0u, 0u);
+        status.traversal = vec4<u32>(parameters.counts.y + node_reservation(), b.x, b.y, b.w);
         dispatch_size(0u, (status.traversal.x + 63u) / 64u);
         dispatch_size(3u, status.traversal.x);
         var count = status.traversal.x;
@@ -224,9 +325,9 @@ fn select_cut(@builtin(local_invocation_index) lane: u32) {
 
 fn dispatch_size(offset: u32, size: u32) {
     let count = max(1u, size);
-    dispatch[offset] = min(count, parameters.counts.w);
-    dispatch[offset + 1u] = (count + parameters.counts.w - 1u) / parameters.counts.w;
-    dispatch[offset + 2u] = 1u;
+    atomicStore(&dispatch[offset], min(count, parameters.counts.w));
+    atomicStore(&dispatch[offset + 1u], (count + parameters.counts.w - 1u) / parameters.counts.w);
+    atomicStore(&dispatch[offset + 2u], 1u);
 }
 
 @compute @workgroup_size(64)

@@ -6,12 +6,47 @@ using Sia.Engine.Rendering.Benchmarks;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Math;
 
+if (args.SequenceEqual(new[] { "--verify-resolution-budget" })) {
+    var controller = new Sia.Engine.Example.RenderResolutionController(5.56, 1);
+    controller.Observe(0, 3, 1, 20); controller.Observe(1, 4, 1, 20);
+    if (controller.Scale != .5f) throw new Exception("Budget panic did not reduce scale.");
+    controller.Observe(2, 5, 1, 1);
+    if (controller.Changes != 1) throw new Exception("Stale scale feedback changed resolution.");
+    for (var i = 5; i < 37; i++) controller.Observe(i, i + 3, .5f, 1);
+    if (controller.Scale != .5625f) throw new Exception("Stable headroom did not slowly recover scale.");
+    var previous = controller.Scale;
+    controller.Observe(10, 100, previous, 100); controller.Observe(100, 103, previous, double.NaN);
+    if (controller.Scale != previous) throw new Exception("Invalid feedback changed scale.");
+    var minimum = new Sia.Engine.Example.RenderResolutionController(5.56, 1);
+    for (var i = 0; i < 256; i++) minimum.Observe(i, i + 20, minimum.Scale, 100);
+    if (minimum.Scale != .0625f) throw new Exception("Over-budget feedback did not reach the ultra-low minimum scale.");
+    Console.WriteLine("Resolution budget passed: fast reduction, 1/16 minimum scale, delayed sample rejection, slow recovery and invalid feedback.");
+    return;
+}
+
+if (args.SequenceEqual(new[] { "--verify-pbr-performance" })) {
+    await VisibilityCacheVerification.RunPbrAsync();
+    return;
+}
+
 if (args.SequenceEqual(new[] { "--verify-gpu-scene" })) {
     await BenchmarkScene.VerifyInstancesAsync();
     return;
 }
 if (args.SequenceEqual(new[] { "--verify-visibility-cache" })) {
     await VisibilityCacheVerification.RunAsync();
+    return;
+}
+if (args.Length == 2 && args[0] == "--cook-performance-fixture") {
+    var sphere = MeshPatchAsset.Cook(ProceduralMesh.Sphere(radius: .4f));
+    var materials = Enumerable.Range(0, 4).Select(i => new PbrMaterialAsset(PbrMaterial.Default with {
+        BaseColor = new(.15f + i * .2f, .65f - i * .1f, .2f + i * .1f)
+    })).ToArray();
+    var instances = Enumerable.Range(0, 256).Select(i => new PbrSceneInstance(0, i % 4,
+        float4x4.Translate(new((i % 16 - 7.5f), 0, i / 16 - 7.5f)))).ToArray();
+    var scene = PbrSceneAsset.Create([sphere], materials, instances, "Generated 256-sphere performance fixture; no external assets.");
+    WriteAsset(args[1], scene.Encode());
+    Console.WriteLine($"Generated {scene.Instances.Length} sphere instances in {args[1]}.");
     return;
 }
 
@@ -39,6 +74,7 @@ var buildSettings = MeshPatchBuildSettings.Default;
 if (args.Contains("--help")) {
     Console.WriteLine("""
         Cook without creating a GPU device:
+          --cook-performance-fixture OUTPUT.siapbr (256 generated spheres)
           --strip-scene-lod OUTPUT.siapbr --source INPUT.siapbr
           --cook-scene OUTPUT.siapbr --source SCENE.gltf|SCENE.glb [--texture-size 256 --attribution TEXT]
           --cook PATH --fixture grid|terrain|plane --size N
@@ -55,6 +91,8 @@ if (args.Contains("--help")) {
         Rendering options: --refinement-budget N --refinement-nodes N --in-flight N --no-timing
         GPU Scene mutation/readback regression: --verify-gpu-scene
         Cached visibility pixel regression: --verify-visibility-cache
+        Fused PBR and shadow regression: --verify-pbr-performance
+        Dynamic resolution controller regression: --verify-resolution-budget
           --repeats N (rerun each case N times in a fresh scene; reports cross-run RepeatSpread
           alongside the usual per-frame distribution, to separate device-clock noise from a real change)
         """);

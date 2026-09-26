@@ -45,7 +45,7 @@ internal sealed partial class BenchmarkScene : IDisposable
     public int GraphPassCount => _registry.PreparePlan().Graph.Passes.Count;
 
     public BenchmarkScene(GpuDevice gpu, MeshPatchTree tree, VisibilityInstance[] instances, uint width, uint height, MeshPatchBudget budget,
-        int inFlightFrames = 1, bool retainedInstances = false)
+        int inFlightFrames = 1, bool retainedInstances = false, uint rootCutStride = 1)
     {
         _gpu = gpu; _width = width; _height = height;
         _refinementBudget = budget.MaxRefinementCandidates;
@@ -62,7 +62,8 @@ internal sealed partial class BenchmarkScene : IDisposable
             if (retainedInstances) foreach (var instance in instances) _main.Create(HList.From(instance));
             _feature = retainedInstances ? VisibilityPbrFeature.CreateGpuScene(in _frame, [tree], instances.Length,
                 new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]),
-                new(8, budget), WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: gpu.TimingEnabled)
+                new VisibilityLodSettings(8, budget) { RootCutStride = rootCutStride },
+                WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: gpu.TimingEnabled)
                 : VisibilityPbrFeature.CreateGpuLod(in _frame, tree, instances,
                 new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]),
                 new(8, budget), WGPUTextureFormat.RGBA8Unorm,
@@ -187,7 +188,8 @@ internal sealed partial class BenchmarkScene : IDisposable
         finally { Wgpu.UnmapBuffer(buffer); slot.Mapping = null; }
         var waitMs = clock.Elapsed.TotalMilliseconds;
         _gpu.CheckErrors();
-        if (status[0] % 3 != 0 || status[8] % 3 != 0 || status[1] != 1 || status[9] != 1 || status[10] != status[0]
+        if (status[0] % 3 != 0 || status[8] % 3 != 0 || status[1] != 1 || status[9] != 1
+            || (_refinementBudget > 0 && status[10] != status[0])
             || ((ulong)status[0] + status[8]) / 3 > status[12] || status[12] > _feature.TriangleCapacity
             || status[18] > status[17] || status[17] > status[16] || status[19] > status[16]
             || status[17] > _refinementBudget || status[16] > _projectionBudget) {

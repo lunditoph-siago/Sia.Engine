@@ -24,8 +24,10 @@ struct DirectionalLightBuffer {
 
 @group(1) @binding(0) var<uniform> cluster_config: ClusterConfig;
 @group(1) @binding(1) var<storage, read> clustered_lights: array<ClusteredLight>;
+#ifndef FUSED_LIGHTING
 @group(1) @binding(2) var<storage, read> light_grid: array<vec2<u32>>;
 @group(1) @binding(3) var<storage, read> light_index_list: array<u32>;
+#endif
 @group(1) @binding(4) var<uniform> directional_lights: DirectionalLightBuffer;
 @group(1) @binding(5) var shadow_atlas: texture_2d_array<f32>;
 @group(1) @binding(6) var shadow_sampler: sampler_comparison;
@@ -69,6 +71,11 @@ fn scene_lighting(world_position: vec3<f32>, normal: vec3<f32>, view_dir: vec3<f
             normal, view_dir, light_dir, radiance, base_color, metallic, roughness);
     }
 
+#ifdef FUSED_LIGHTING
+    let offset = 0u;
+    let overflow = true;
+    let count = u32(cluster_config.z_factors.z);
+#else
     let slice = cluster_z_slice_from_view_z(cluster_config, view_z);
     let tile = cluster_tile_from_screen(cluster_config, pixel_position);
     let cell = cluster_index(cluster_config, tile, slice);
@@ -77,11 +84,14 @@ fn scene_lighting(world_position: vec3<f32>, normal: vec3<f32>, view_dir: vec3<f
     let overflow = cell_info.y == 0xffffffffu;
     let count = select(cell_info.y, u32(cluster_config.z_factors.z), overflow);
 
+#endif
     for (var i = 0u; i < count; i = i + 1u) {
         var light_index = i;
+#ifndef FUSED_LIGHTING
         if (!overflow) {
             light_index = light_index_list[offset + i];
         }
+#endif
         let light = clustered_lights[light_index];
         let to_light = light.position_range.xyz - world_position;
         let distance = length(to_light);
