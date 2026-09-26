@@ -77,8 +77,8 @@ internal sealed partial class SceneExampleApp
         _visibilityLod = _materialStream is { } stream ? VisibilityPbrFeature.CreateStreamScene(in frame, stream, _surfaceFormat, _renderProfile.DetailGeometryBytes, _renderProfile.UploadBytesPerFrame, mode: _patchDebugMode)
             : _finest
             ? VisibilityPbrFeature.CreateFixedScene(in frame, scene, scene.Instances.Span.ToArray().Select(instance =>
-                new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode)
-            : VisibilityPbrFeature.CreateGpuScene(in frame, scene, System.Math.Max(32, scene.Instances.Length), settings, _surfaceFormat, _patchDebugMode);
+                new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode, enableGpuTiming: _gpuTimingEnabled)
+            : VisibilityPbrFeature.CreateGpuScene(in frame, scene, System.Math.Max(32, scene.Instances.Length), settings, _surfaceFormat, _patchDebugMode, enableGpuTiming: _gpuTimingEnabled);
         InitializeInspectionControls();
         Console.WriteLine($"PBR: {_visibilityLod.InstanceCount} static instances, {(_materialStream is not null ? "streamed detail" : _finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles.");
         _materialScene = null;

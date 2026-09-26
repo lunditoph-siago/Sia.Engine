@@ -57,7 +57,7 @@ public sealed partial class VisibilityPbrFeature
         foreach (var material in _materialBatches) { ImportBuffer(ref graph, material.Key, material.Uniform, RenderGraphBufferUsage.Uniform); }
         if (_gpuLod is { } lod) { BuildLodGraph(ref graph, view, lod); }
         if (_fixedGeometry is not null) { view.BuildClusterGraph(ref graph); }
-        if (view.Timing is { } timing) {
+        if (includeOutput && view.Timing is { } timing) {
             ImportBuffer(ref graph, GpuTimingsTarget, timing.Results, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource | RenderGraphBufferUsage.CopyDestination);
         }
         graph.UsePass(new("visibility-raster"), "visibility-raster", view.DeclareRaster, view.Raster);
@@ -67,7 +67,6 @@ public sealed partial class VisibilityPbrFeature
         view.BuildMaterialTiles(ref graph);
         graph.UseComputePass(new("visibility-resolve"), "visibility-resolve", view.DeclareResolve, view.Resolve);
         if (includeOutput) { graph.UsePass(new("visibility-output"), "visibility-output", view.DeclareOutput, view.Output); }
-        else if (view.Timing is not null) { graph.UseComputePass(new("visibility-timing-resolve"), "visibility-timing-resolve", view.DeclareSurfaceTiming, view.ResolveSurfaceTiming); }
     }
 
     private static void ImportBuffer(ref RenderGraphBuildContext graph, RenderGraphBufferKey key, Entity entity, RenderGraphBufferUsage usage)
@@ -192,7 +191,7 @@ public sealed partial class VisibilityPbrFeature
         private void Raster(WgpuReactiveRenderGraphPassContext context, bool post)
         {
             if (post && ReuseVisibility) return;
-            if (Timing is not null && IsCheckpoint(context)) { TimedRaster(context, post); return; }
+            if (TimingActive && IsCheckpoint(context)) { TimedRaster(context, post); return; }
             var pass = context.GetOrBeginRenderPass(
                 new WgpuReactiveRenderGraphColorAttachment(Owner.VisibilityTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear),
                 new WgpuReactiveRenderGraphDepthStencilAttachment(Frame.DepthTarget, post ? WGPULoadOp.Load : WGPULoadOp.Clear));
@@ -286,7 +285,7 @@ public sealed partial class VisibilityPbrFeature
                 _outputGroup = next;
                 _outputSource = source;
             }
-            if (Timing is not null && IsCheckpoint(context)) { TimedOutput(context); return; }
+            if (TimingActive && IsCheckpoint(context)) { TimedOutput(context); return; }
             var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(
                 Frame.ColorTarget, Frame.ColorLoadOp, Cacheable: Frame.ColorCacheable));
             Wgpu.SetRenderPipeline(pass, Owner._output.Pipeline.GetWgpu<WGPURenderPipeline>());

@@ -18,7 +18,7 @@ public sealed partial class VisibilityPbrFeature
     private static readonly RenderGraphBufferKey s_LodDispatchKey = new("visibility-lod-dispatch");
 
     private static LodGpu CreateLodGpu(World world, WgpuHandle<WGPUDevice> device, WgpuHandle<WGPUQueue> queue,
-        SceneLodData scene, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired, bool enableTiming)
+        SceneLodData scene, VisibilityLodSettings settings, WGPULimits limits, List<Entity> acquired)
     {
         var instances = (uint)scene.InstanceRoots.Length;
         if (System.Math.Max(scene.StateCapacity, (uint)scene.InstanceCapacity) > (ulong)limits.MaxComputeWorkgroupsPerDimension * limits.MaxComputeWorkgroupsPerDimension) {
@@ -52,7 +52,7 @@ public sealed partial class VisibilityPbrFeature
             ComputePipeline(world, device, shader, selectLayout, "select_cut", acquired),
             ComputePipeline(world, device, shader, pipelineLayout, "emit_work", acquired),
             scene.StateCapacity, limits.MaxComputeWorkgroupsPerDimension, occlusion,
-            CreateCompactionGpu(world, device, acquired), enableTiming) { ParameterData = parameterData };
+            CreateCompactionGpu(world, device, acquired)) { ParameterData = parameterData };
     }
 
     private static unsafe Entity ComputePipeline(World world, WgpuHandle<WGPUDevice> device, Entity shader,
@@ -152,7 +152,7 @@ public sealed partial class VisibilityPbrFeature
     private readonly record struct LodParamsGpu(uint4 Counts, uint4 Budget, uint4 Traversal);
 
     private readonly record struct LodGpu(Entity Patches, Entity Parameters, Entity Layout, Entity DispatchLayout, Entity Project, Entity Select,
-        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction, bool EnableTiming)
+        Entity Emit, uint Capacity, uint DispatchDimension, OcclusionGpu Occlusion, CompactionGpu Compaction)
     {
         public LodParamsGpu ParameterData { get; init; }
     }

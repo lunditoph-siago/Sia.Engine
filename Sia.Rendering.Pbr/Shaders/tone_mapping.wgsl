@@ -23,14 +23,22 @@ fn aces_fitted(color: vec3<f32>) -> vec3<f32> {
     return clamp(output_transform * (numerator / denominator), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
+struct OutputVertex {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
 @vertex
-fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    return vec4<f32>(ibl_fullscreen_ndc(index), 0.0, 1.0);
+fn vertex(@builtin(vertex_index) index: u32) -> OutputVertex {
+    let ndc = ibl_fullscreen_ndc(index);
+    return OutputVertex(vec4<f32>(ndc, 0.0, 1.0), ndc * vec2<f32>(0.5, -0.5) + 0.5);
 }
 
 @fragment
-fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let exposed = max(textureLoad(hdr, vec2<i32>(position.xy), 0).rgb * settings.x, vec3<f32>(0.0));
+fn fragment(input: OutputVertex) -> @location(0) vec4<f32> {
+    let size = textureDimensions(hdr);
+    let pixel = min(vec2<u32>(input.uv * vec2<f32>(size)), size - 1u);
+    let exposed = max(textureLoad(hdr, pixel, 0).rgb * settings.x, vec3<f32>(0.0));
     var color = exposed / (vec3<f32>(1.0) + exposed);
     if (settings.z > 0.5) {
         color = aces_fitted(exposed);

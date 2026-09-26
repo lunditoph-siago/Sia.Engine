@@ -71,11 +71,11 @@ internal sealed unsafe partial class SceneExampleApp
             return;
         }
 
+        InitializeMaterialRendering();
         _sceneRenderer = new PbrRenderer(
             ClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
             PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice),
             PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
-        InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
             .Add(new PbrRenderFeature(_sceneRenderer, _visibilityLod!, PbrRenderFeatureOptions.FromProfile(_renderProfile), transparency: _transparency))
             .Build();
@@ -157,6 +157,11 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
+        var nextScale = _resolutionController?.Scale ?? Program.RenderScale;
+        if (_renderScale != nextScale) {
+            _renderScale = nextScale;
+            OnFramebufferResized();
+        }
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
@@ -193,7 +198,7 @@ internal sealed unsafe partial class SceneExampleApp
         if (_sceneWorld is not { } world) {
             return;
         }
-        world.AcquireAddon<Viewport>().Value = new ViewportSize(_framebufferWidth, _framebufferHeight);
+        world.AcquireAddon<Viewport>().Value = new ViewportSize(RenderWidth, RenderHeight);
     }
 
     private void DisposeScene()

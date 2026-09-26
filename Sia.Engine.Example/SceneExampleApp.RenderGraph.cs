@@ -1,4 +1,5 @@
 using Sia;
+using System.Diagnostics;
 using Sia.Engine.Rendering;
 using Sia.Graphics.Reactive;
 using Sia.Reactive;
@@ -47,19 +48,27 @@ internal sealed unsafe partial class SceneExampleApp
             renderWorld,
             view,
             frameContext);
+        var stageStart = Stopwatch.GetTimestamp();
         _renderPipeline!.Extract(in featureContext);
+        _extractMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
+        stageStart = Stopwatch.GetTimestamp();
         _renderPipeline.Prepare(in featureContext);
         _renderPipeline.Queue(in featureContext);
+        _prepareMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
+        stageStart = Stopwatch.GetTimestamp();
         var props = new RenderGraphProps(
             _renderGraph!, _renderPipeline, featureContext,
-            _framebufferWidth, _framebufferHeight, _surfaceFormat, surfaceTexture);
+            _framebufferWidth, _framebufferHeight, RenderWidth, RenderHeight, _surfaceFormat, surfaceTexture,
+            PrepareGpuTiming(), _visibilityLod);
 
         if (_renderGraphMount is not { } mount) {
             _renderGraphMount = _renderGraphWorld!.Mount(RenderGraph, props);
             Console.WriteLine($"{_pipeline}: {_renderGraph!.PreparePlan().Graph.Passes.Count} render graph pass(es).");
+            _graphMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
             return;
         }
         mount.Update(props);
+        _graphMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
     }
 
     private void ExecuteRenderGraph() => _renderGraphWorld!.ExecuteWgpuRenderGraph();
@@ -79,11 +88,24 @@ internal sealed unsafe partial class SceneExampleApp
             _depthKey,
             new RenderGraphTextureDescriptor(
                 "depth", RenderGraphTextureFormat.Depth32Float,
-                (uint)props.FramebufferWidth, (uint)props.FramebufferHeight,
+                (uint)props.RenderWidth, (uint)props.RenderHeight,
                 usage: RenderGraphTextureUsage.RenderAttachment));
 
         var context = props.Context;
         props.Pipeline.BuildRenderGraph(ref graph, in context);
+        if (props.TimingReadback.IsValid) {
+            var visibility = props.Visibility!;
+            var timings = visibility.GpuTimingsTarget;
+            graph.UseImportedBuffer(_gpuReadbackKey, new("example-gpu-timing", TimingBytes,
+                RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
+            graph.BindImportedBuffer(_gpuReadbackKey, props.TimingReadback.GetWgpu<WGPUBuffer>());
+            graph.ExportBuffer(_gpuReadbackKey, RenderGraphBufferUsage.MapRead);
+            graph.UseComputePass(new("example-gpu-timing"), "example-gpu-timing", declaration => declaration
+                .Read(timings, RenderGraphBufferUsage.CopySource)
+                .Write(_gpuReadbackKey, RenderGraphBufferUsage.CopyDestination),
+                pass => { if (visibility.SampleGpuTiming) Wgpu.CopyBufferToBuffer(pass.CommandEncoder, pass.GetBuffer(timings), 0,
+                    pass.GetBuffer(_gpuReadbackKey), 0, TimingBytes); });
+        }
 
         return SiaReactive.None;
     }
@@ -105,6 +127,9 @@ internal sealed unsafe partial class SceneExampleApp
         RenderFeatureContext<RenderFrameContext> Context,
         int FramebufferWidth,
         int FramebufferHeight,
+        int RenderWidth,
+        int RenderHeight,
         WGPUTextureFormat SurfaceFormat,
-        WgpuHandle<WGPUTexture> SurfaceTexture);
+        WgpuHandle<WGPUTexture> SurfaceTexture,
+        Entity TimingReadback, Sia.Engine.Rendering.Pbr.VisibilityPbrFeature? Visibility);
 }
