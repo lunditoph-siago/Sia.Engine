@@ -95,7 +95,8 @@ public sealed partial class VisibilityPbrFeature
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityRaster(worldSpace), "visibility-raster"), acquired);
         var pipelineLayout = PipelineLayout(world, device, [layout], acquired);
         var entry = first ? "indexed_first"u8 : indexed ? (shadow ? "indexed_shadow"u8 : "indexed"u8) : "vertex"u8;
-        var fragmentEntry = first ? "fragment_first"u8 : core ? "fragment"u8 : "fragment_depth"u8;
+        var explicitDepth = OperatingSystem.IsBrowser() && !core;
+        var fragmentEntry = first ? "fragment_first"u8 : explicitDepth ? "fragment_depth"u8 : "fragment"u8;
         fixed (byte* vertexName = entry)
         fixed (byte* fragmentName = fragmentEntry) {
             var target = WGPUColorTargetState.Default;

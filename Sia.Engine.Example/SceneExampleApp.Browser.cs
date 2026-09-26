@@ -44,6 +44,8 @@ internal sealed partial class SceneExampleApp
             return running;
         });
         if (_browserPublish is { } pending) { await pending; }
+        while (await Program.BrowserOwner.RunGraphicsAsync(() => Task.FromResult(DrainGpuTimingStep())))
+            await Task.Delay(1);
     }
 
     private bool RenderAnimationFrame(double timestampMilliseconds)
@@ -84,6 +86,7 @@ internal sealed partial class SceneExampleApp
         _instance = Wgpu.CreateInstance();
         _surface = CreateSurface(_instance, _window);
         _adapter = await RequestBrowserAdapterAsync();
+        ReadAdapterDescription();
         var surfaceInfo = GetSurfaceInfo(_surface, _adapter);
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
@@ -213,6 +216,11 @@ internal sealed partial class SceneExampleApp
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
         var descriptor = CreateDeviceDescriptor();
         descriptor.RequiredLimits = &required;
+        var timingFeature = WGPUFeatureName.TimestampQuery;
+        _gpuTimingEnabled = Program.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature((WGPUAdapter*)_adapter.DangerousGetHandle(), timingFeature) != 0;
+        if (Program.TargetFps != 0 && !_gpuTimingEnabled) throw new NotSupportedException("Dynamic resolution requires timestamp-query support.");
+        descriptor.RequiredFeatureCount = _gpuTimingEnabled ? 1u : 0u;
+        descriptor.RequiredFeatures = _gpuTimingEnabled ? &timingFeature : null;
         return Wgpu.RequestDeviceAsync(_adapter, descriptor);
     }
 }
