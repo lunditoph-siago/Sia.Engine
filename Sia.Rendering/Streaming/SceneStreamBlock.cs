@@ -5,7 +5,6 @@ using Sia.Asset;
 
 namespace Sia.Engine.Rendering;
 
-// Content hashes cover the compressed envelope; decoded allocation is independently bounded.
 public static class SceneStreamBlock
 {
     public static byte[] Encode(ReadOnlySpan<byte> bytes)
@@ -28,10 +27,6 @@ public static class SceneStreamBlock
         return output;
     }
 
-    /// <summary>Decodes directly into a caller-owned destination, avoiding the intermediate allocation and
-    /// copy <see cref="Decode(ReadOnlyMemory{byte}, int)"/> requires when the caller already has somewhere
-    /// to put the bytes (e.g. assembling several parts into one combined buffer). Returns the decoded length,
-    /// which may be less than <paramref name="destination"/>'s length.</summary>
     public static int Decode(ReadOnlyMemory<byte> bytes, Span<byte> destination)
     {
         var length = ReadHeader(bytes.Span, destination.Length);
@@ -51,8 +46,6 @@ public static class SceneStreamBlock
         return length;
     }
 
-    // Wraps the compressed envelope without copying when it is already array-backed (the common case for
-    // chunk leases and cooked byte[] payloads); falls back to a copy only for a non-array-backed source.
     private static void DecodeInto(ReadOnlyMemory<byte> bytes, Span<byte> destination)
     {
         var compressed = bytes[16..];

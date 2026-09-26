@@ -5,7 +5,6 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-/// <summary>Owns checksum-verified reads and startup data for one streaming renderer.</summary>
 public sealed partial class PbrSceneStream : IAsyncDisposable
 {
     [JsonSourceGenerationOptions(UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
@@ -20,7 +19,6 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
     internal Detail?[] Details { get; }
     internal GeometryPage[] RootPages { get; private set; }
     public ReadOnlyMemory<VisibilityInstance> Instances { get; }
-    /// <summary>Resident materials and transparent geometry; opaque geometry uses GPU-ready pages.</summary>
     public PbrSceneAsset Bootstrap { get; }
     public Aabb Bounds { get; }
     public AssetChunkCacheStatistics Statistics => _cache.Statistics;
@@ -100,8 +98,6 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
                 foreach (var id in ids) {
                     using var lease = await cache.AcquireAsync(manifest.GetChunk(id), cancellationToken: cancellationToken);
                     var memory = lease.Memory; var start = offset;
-                    // Decode straight into this part's slice of the combined buffer instead of an
-                    // intermediate array plus a CopyTo -- the destination is already the final home.
                     offset += await Task.Run(() => SceneStreamBlock.Decode(memory, bytes.AsSpan(start, System.Math.Min(4 * 1024 * 1024, length - start))), cancellationToken);
                 }
                 if (offset != length) throw new InvalidDataException("Startup decoded lengths do not match metadata.");
@@ -115,7 +111,6 @@ public sealed partial class PbrSceneStream : IAsyncDisposable
         => _cache.AcquireAsync(_manifest.GetChunk(Details[geometry]!.Id), cancellationToken: cancellationToken);
     public ValueTask DisposeAsync() => _cache.DisposeAsync();
 
-    /// <summary>Cooks immutable chunks. Publish the returned metadata only after every chunk is durable.</summary>
     public static async Task<byte[]> CookAsync(PbrSceneAsset source,
         Func<AssetChunk, ReadOnlyMemory<byte>, CancellationToken, ValueTask> write, CancellationToken cancellationToken = default)
     {
