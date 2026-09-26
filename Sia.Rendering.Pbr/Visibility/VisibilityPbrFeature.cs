@@ -218,6 +218,7 @@ public sealed partial class VisibilityPbrFeature :
         PrepareInstances(in context);
         UpdateStreaming(context.Frame.Camera.Get<CameraMatrices>(), context.RenderWorld.FrameIndex);
         var view = context.View.PersistentResources.GetOrAdd(() => CreateView());
+        view.TimingWritten = 0;
         if (!ReferenceEquals(view.Owner, this)) {
             throw new InvalidOperationException("A view cannot reuse state from another visibility feature.");
         }

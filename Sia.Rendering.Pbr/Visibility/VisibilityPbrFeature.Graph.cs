@@ -273,7 +273,7 @@ public sealed partial class VisibilityPbrFeature
             declaration.Read(s_OutputKey, RenderGraphBufferUsage.Uniform)
                 .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
                 .Write(Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
-            if (Timing is not null) { declaration.Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve); }
+            if (Timing is not null) { declaration.Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination); }
         }
 
         public void Output(WgpuReactiveRenderGraphPassContext context)

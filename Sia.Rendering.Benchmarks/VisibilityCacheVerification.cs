@@ -15,6 +15,7 @@ internal sealed class VisibilityCacheVerification : IDisposable
     private static readonly RenderGraphTextureKey s_Color = new("cache-check-color"), s_Depth = new("cache-check-depth");
     private static readonly RenderGraphBufferKey s_Readback = new("cache-check-pixels");
     private readonly GpuDevice _gpu;
+    private readonly bool _timingEnabled;
     private readonly World _main = new(), _graphWorld = new();
     private readonly RenderWorld _render = new();
     private readonly GpuFrame _frame;
@@ -25,9 +26,10 @@ internal sealed class VisibilityCacheVerification : IDisposable
     private readonly record struct GraphProps(VisibilityCacheVerification Scene);
     private ReactiveMount<GraphProps>? _mount;
 
-    private VisibilityCacheVerification(GpuDevice gpu, PbrSceneAsset asset)
+    private VisibilityCacheVerification(GpuDevice gpu, PbrSceneAsset asset, bool timing = false)
     {
         _gpu = gpu;
+        _timingEnabled = timing && gpu.TimingEnabled;
         try {
             _frame = new(_main, _render.Entities,
                 _render.Entities.OwnWgpu(gpu.Device, static (ref WgpuHandle<WGPUDevice> _) => { }),
@@ -37,9 +39,9 @@ internal sealed class VisibilityCacheVerification : IDisposable
             _registry = _graphWorld.ConfigureWgpuRenderGraph(gpu.Device, gpu.Queue);
             _feature = VisibilityPbrFeature.CreateFixedScene(in _frame, asset,
                 asset.Instances.ToArray().Select(i => new VisibilityInstance(i.Transform, i.Material) { AssetIndex = i.Geometry }).ToArray(),
-                WGPUTextureFormat.RGBA8Unorm);
+                WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: _timingEnabled);
             _pixels = _render.Entities.CreateWgpuBuffer(_frame.Device, new WGPUBufferDescriptor {
-                Size = 128 * 128 * 4, Usage = WGPUBufferUsage.MapRead | WGPUBufferUsage.CopyDst });
+                Size = 128 * 128 * 4 + (ulong)VisibilityPbrFeature.GpuTimingStages.Length * 16, Usage = WGPUBufferUsage.MapRead | WGPUBufferUsage.CopyDst });
         }
         catch { Dispose(); throw; }
     }
@@ -54,10 +56,24 @@ internal sealed class VisibilityCacheVerification : IDisposable
         else _mount = _graphWorld.Mount(BuildGraph, new GraphProps(this));
         _graphWorld.FlushReactive(); _registry.Execute();
         var buffer = _pixels.GetWgpu<WGPUBuffer>();
-        var mapping = Wgpu.MapBufferReadAsync(buffer, 0, 128 * 128 * 4);
+        var mapping = Wgpu.MapBufferReadAsync(buffer, 0, Wgpu.GetBufferSize(buffer));
         while (!mapping.IsCompleted) { Wgpu.ProcessEvents(_gpu.Instance); if (!mapping.IsCompleted) await Task.WhenAny(mapping, Task.Delay(1)); }
         await mapping;
-        try { _gpu.CheckErrors(); return Wgpu.GetMappedRangeReadOnly<byte>(buffer, 0, 128 * 128 * 4).ToArray(); }
+        try {
+            _gpu.CheckErrors();
+            if (_timingEnabled) {
+                var times = Wgpu.GetMappedRangeReadOnly<ulong>(buffer, 128 * 128 * 4, VisibilityPbrFeature.GpuTimingStages.Length * 2);
+                for (var i = 0; i < times.Length; i += 2)
+                    if (times[i + 1] < times[i]) throw new InvalidOperationException("Invalid timing pair.");
+                if (times[0] != 0 || times[1] != 0)
+                    throw new InvalidOperationException("Fixed rendering resolved unused LOD queries.");
+                if (_feature.FrameStatistics.VisibilityCacheHits != 0 && (times[2] != 0 || times[3] != 0))
+                    throw new InvalidOperationException("Cached rendering retained stale HZB queries.");
+                if (times[4] == 0 || times[5] == 0)
+                    throw new InvalidOperationException("Fixed rendering did not write raster timestamps.");
+            }
+            return Wgpu.GetMappedRangeReadOnly<byte>(buffer, 0, 128 * 128 * 4).ToArray();
+        }
         finally { Wgpu.UnmapBuffer(buffer); }
     }
 
@@ -68,23 +84,40 @@ internal sealed class VisibilityCacheVerification : IDisposable
         graph.UseTexture(s_Color, new("cache-check-color", RenderGraphTextureFormat.RGBA8Unorm, 128, 128));
         graph.UseTexture(s_Depth, new("cache-check-depth", RenderGraphTextureFormat.Depth32Float, 128, 128));
         owner._feature.BuildRenderGraph(ref graph, in owner._context);
-        graph.UseImportedBuffer(s_Readback, new("cache-check-pixels", 128 * 128 * 4,
+        graph.UseImportedBuffer(s_Readback, new("cache-check-pixels", Wgpu.GetBufferSize(owner._pixels.GetWgpu<WGPUBuffer>()),
             RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
         graph.BindImportedBuffer(s_Readback, owner._pixels.GetWgpu<WGPUBuffer>());
         graph.ExportBuffer(s_Readback, RenderGraphBufferUsage.MapRead);
-        graph.UseComputePass(new("cache-check-copy"), "cache-check-copy", declaration => declaration
-            .Read(s_Color, RenderGraphTextureUsage.CopySource).Write(s_Readback, RenderGraphBufferUsage.CopyDestination),
-            context => Wgpu.CopyTextureToBuffer(context.CommandEncoder, context.GetTexture(s_Color), context.GetBuffer(s_Readback), 128, 128, 512));
+        graph.UseComputePass(new("cache-check-copy"), "cache-check-copy", declaration => {
+            declaration.Read(s_Color, RenderGraphTextureUsage.CopySource).Write(s_Readback, RenderGraphBufferUsage.CopyDestination);
+            if (owner._timingEnabled) declaration.Read(owner._feature.GpuTimingsTarget, RenderGraphBufferUsage.CopySource);
+        }, context => {
+            Wgpu.CopyTextureToBuffer(context.CommandEncoder, context.GetTexture(s_Color), context.GetBuffer(s_Readback), 128, 128, 512);
+            if (owner._timingEnabled) Wgpu.CopyBufferToBuffer(context.CommandEncoder, context.GetBuffer(owner._feature.GpuTimingsTarget), 0,
+                context.GetBuffer(s_Readback), 128 * 128 * 4, (ulong)VisibilityPbrFeature.GpuTimingStages.Length * 16);
+        });
         return Sia.Reactive.Reactive.None;
     }
 
     public static async Task RunAsync()
     {
-        using var gpu = await GpuDevice.CreateAsync(false);
+        using var gpu = await GpuDevice.CreateAsync(true);
         var mesh = MeshPatchAsset.Cook(Assets.Grid(16));
         var transformed = PbrSceneAsset.Create([mesh], [new(PbrMaterial.Default, DoubleSided: true)],
             [new(0, 0, float4x4.Scale(new float3(.6f, .6f, 1))), new(0, 0, float4x4.Translate(new(.3f, 0, .2f)))]);
         var worldSpace = PbrSceneAsset.Create([mesh], [new(PbrMaterial.Default, DoubleSided: true)], [new(0, 0, float4x4.identity)]);
+        Console.WriteLine($"Fixed timing adapter: {gpu.Description}; timestamps={gpu.TimingEnabled}.");
+        if (!gpu.TimingEnabled) throw new NotSupportedException("The timing regression requires timestamp-query support.");
+        foreach (var asset in new[] { transformed, worldSpace }) {
+            using var timed = new VisibilityCacheVerification(gpu, asset, timing: true);
+            using var untimed = new VisibilityCacheVerification(gpu, asset);
+            foreach (var shear in new[] { 0f, .8f, .8f, -.8f, 0f }) {
+                var projection = float4x4.identity; projection.c2.x = shear;
+                var expected = await untimed.FrameAsync(projection);
+                var actual = await timed.FrameAsync(projection);
+                if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("Fixed GPU timing changed raster output.");
+            }
+        }
         foreach (var asset in new[] { transformed, worldSpace }) {
             using var cached = new VisibilityCacheVerification(gpu, asset);
             var projection = float4x4.identity;
