@@ -222,7 +222,7 @@ public sealed partial class VisibilityPbrFeature
     {
         var lease = await source.AcquireAsync(id, token).ConfigureAwait(false);
         try {
-            var page = await Task.Run(() => GeometryPage.Decode(SceneStreamBlock.Decode(lease.Memory.Span)), token).ConfigureAwait(false);
+            var page = await Task.Run(() => GeometryPage.Decode(SceneStreamBlock.Decode(lease.Memory)), token).ConfigureAwait(false);
             if (page.Size != source.Details[id]!.Size) throw new InvalidDataException("Detail page differs from its reservation.");
             return (lease, page);
         } catch { lease.Dispose(); throw; }
