@@ -14,6 +14,10 @@ if (args.SequenceEqual(new[] { "--verify-visibility-cache" })) {
     await VisibilityCacheVerification.RunAsync();
     return;
 }
+if (args.SequenceEqual(new[] { "--verify-stream-block" })) {
+    StreamBlockVerification.Run();
+    return;
+}
 
 var suite = "smoke";
 var output = "visibility-benchmark.json";
@@ -55,6 +59,7 @@ if (args.Contains("--help")) {
         Rendering options: --refinement-budget N --refinement-nodes N --in-flight N --no-timing
         GPU Scene mutation/readback regression: --verify-gpu-scene
         Cached visibility pixel regression: --verify-visibility-cache
+        Scene stream block codec regression: --verify-stream-block
           --repeats N (rerun each case N times in a fresh scene; reports cross-run RepeatSpread
           alongside the usual per-frame distribution, to separate device-clock noise from a real change)
         """);
