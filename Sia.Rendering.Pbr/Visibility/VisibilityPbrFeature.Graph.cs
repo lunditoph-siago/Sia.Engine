@@ -98,7 +98,7 @@ public sealed partial class VisibilityPbrFeature
                 BufferEntry(3, _geometry[1]), BufferEntry(4, _geometry[2]), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)];
             var group = Own(_world, BindGroup(_geometryLayout, entries), acquired);
             var lodView = lodConfiguration is { } lod ? CreateLodView(lod, uniform, workBuffer, indirect, limits, acquired) : (LodViewGpu?)null;
-            var timing = !shadow && _gpuLod is { EnableTiming: true } ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
+            var timing = !shadow && _enableGpuTiming ? CreateTiming(device, limits, acquired) : (TimingGpu?)null;
             var clusters = _fixedGeometry is { } fixedGeometry ? CreateClusterView(fixedGeometry, uniform, workBuffer, indirect, limits, acquired, shadow) : (ClusterViewGpu?)null;
             var materialGroup = Own(_world, BindGroup(_materialTiles.GeometryLayout,
                 [BufferEntry(0, uniform), BufferEntry(5, _geometry[3]), BufferEntry(6, workBuffer)]), acquired);
@@ -273,7 +273,7 @@ public sealed partial class VisibilityPbrFeature
             declaration.Read(s_OutputKey, RenderGraphBufferUsage.Uniform)
                 .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
                 .Write(Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
-            if (Timing is not null) { declaration.Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve); }
+            if (Timing is not null) { declaration.Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination); }
         }
 
         public void Output(WgpuReactiveRenderGraphPassContext context)
