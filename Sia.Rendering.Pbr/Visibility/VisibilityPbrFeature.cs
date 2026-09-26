@@ -18,6 +18,7 @@ public sealed partial class VisibilityPbrFeature :
     private readonly float4x4[] _transforms;
     private readonly VisibilityLodSettings _lod;
     private readonly LodGpu? _gpuLod;
+    private readonly bool _enableGpuTiming;
     private readonly MaterialBatchGpu[] _materialBatches;
     private readonly MaterialTextureGpu[] _materialTextures;
     private bool[] _doubleSided = [];
@@ -48,7 +49,7 @@ public sealed partial class VisibilityPbrFeature :
         MaterialBatchGpu[] materials, MaterialTextureGpu[] textures, Entity materialParameters, int materialCount, Entity geometryLayout, Entity resolveLayout,
         Entity raster, ResolveGpu resolve, OutputGpu output, uint triangles, uint capacity, float4x4[] transforms,
         MeshPatchTree? patchTree, VisibilityLodSettings lod, VisibilityDebugMode mode, LodGpu? gpuLod,
-        MaterialTilesGpu materialTiles, FixedGeometryGpu? fixedGeometry)
+        MaterialTilesGpu materialTiles, FixedGeometryGpu? fixedGeometry, bool enableGpuTiming)
     {
         _world = frame.ResourceWorld;
         _device = frame.Device;
@@ -58,6 +59,7 @@ public sealed partial class VisibilityPbrFeature :
         _transforms = transforms;
         _lod = lod;
         _gpuLod = gpuLod;
+        _enableGpuTiming = enableGpuTiming;
         _fixedGeometry = fixedGeometry;
         _materialTiles = materialTiles;
         _materialBatches = materials;
@@ -192,7 +194,7 @@ public sealed partial class VisibilityPbrFeature :
             var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired, worldSpace,
                 reservation is null ? null : capacity);
             return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,
-                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry) {
+                raster, resolve, output, triangles, capacity, transforms, tree, lod, mode, gpuLod, materialTiles, fixedGeometry, enableGpuTiming) {
                 InstanceCapacity = (uint)gpuInstances.Length,
                 _worldSpaceGeometry = worldSpace,
                 _doubleSided = sourceMaterials.Select(material => material.DoubleSided).ToArray(),
@@ -216,6 +218,7 @@ public sealed partial class VisibilityPbrFeature :
         PrepareInstances(in context);
         UpdateStreaming(context.Frame.Camera.Get<CameraMatrices>(), context.RenderWorld.FrameIndex);
         var view = context.View.PersistentResources.GetOrAdd(() => CreateView());
+        view.TimingWritten = 0;
         if (!ReferenceEquals(view.Owner, this)) {
             throw new InvalidOperationException("A view cannot reuse state from another visibility feature.");
         }

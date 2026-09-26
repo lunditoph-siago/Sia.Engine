@@ -18,26 +18,38 @@ public sealed partial class VisibilityPbrFeature
 
     private TimingGpu CreateTiming(WgpuHandle<WGPUDevice> device, WGPULimits limits, List<Entity> acquired) => new(
         Own(_world, Wgpu.CreateQuerySet(device, WGPUQueryType.Timestamp, (uint)s_TimingStages.Length * 2, "visibility-timings"), acquired),
-        Allocate(_world, device, (ulong)s_TimingStages.Length * 16, WGPUBufferUsage.QueryResolve | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst, limits, acquired));
+        Allocate(_world, device, (ulong)s_TimingStages.Length * 16, WGPUBufferUsage.QueryResolve | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst, limits, acquired),
+        Allocate(_world, device, (ulong)s_TimingStages.Length * 256, WGPUBufferUsage.QueryResolve | WGPUBufferUsage.CopySrc, limits, acquired));
 
-    private readonly record struct TimingGpu(Entity Queries, Entity Results);
+    private readonly record struct TimingGpu(Entity Queries, Entity Results, Entity Scratch);
 
     private sealed partial class ViewState
     {
         public TimingGpu? Timing { get; init; }
+        public uint TimingWritten { get; set; }
+
+        private unsafe void ResolveTiming(WgpuReactiveRenderGraphPassContext context)
+        {
+            if (Timing is not { } timing) return;
+            var target = context.GetBuffer(Owner.GpuTimingsTarget);
+            // Resolve only queries actually written this frame. Each sparse resolve
+            // has the required 256-byte alignment; pack the public results by copy.
+            WgpuUnsafe.wgpuCommandEncoderClearBuffer((WGPUCommandEncoder*)context.CommandEncoder.DangerousGetHandle(),
+                (WGPUBuffer*)target.DangerousGetHandle(), 0, (ulong)s_TimingStages.Length * 16);
+            for (var stage = 0; stage < s_TimingStages.Length; stage++) {
+                if ((TimingWritten & (1u << stage)) == 0) continue;
+                Wgpu.ResolveQuerySet(context.CommandEncoder, timing.Queries.GetWgpu<WGPUQuerySet>(),
+                    (uint)stage * 2, 2, timing.Scratch.GetWgpu<WGPUBuffer>(), (ulong)stage * 256);
+                Wgpu.CopyBufferToBuffer(context.CommandEncoder, timing.Scratch.GetWgpu<WGPUBuffer>(), (ulong)stage * 256,
+                    target, (ulong)stage * 16, 16);
+            }
+        }
 
         public void DeclareSurfaceTiming(RenderGraphPassDeclarationBuilder declaration) => declaration
             .Read(Owner.HdrTarget, RenderGraphTextureUsage.TextureBinding)
             .Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
 
-        public unsafe void ResolveSurfaceTiming(WgpuReactiveRenderGraphPassContext context)
-        {
-            var buffer = context.GetBuffer(Owner.GpuTimingsTarget);
-            Wgpu.ResolveQuerySet(context.CommandEncoder, Timing!.Value.Queries.GetWgpu<WGPUQuerySet>(),
-                0, (uint)(s_TimingStages.Length - 1) * 2, buffer);
-            WgpuUnsafe.wgpuCommandEncoderClearBuffer((WGPUCommandEncoder*)context.CommandEncoder.DangerousGetHandle(),
-                (WGPUBuffer*)buffer.DangerousGetHandle(), (ulong)(s_TimingStages.Length - 1) * 16, 16);
-        }
+        public void ResolveSurfaceTiming(WgpuReactiveRenderGraphPassContext context) => ResolveTiming(context);
 
         private static bool IsCheckpoint(WgpuReactiveRenderGraphPassContext context) => Array.IndexOf(s_TimingStages, context.Pass.Name) >= 0;
 
@@ -45,6 +57,7 @@ public sealed partial class VisibilityPbrFeature
         {
             var stage = Array.IndexOf(s_TimingStages, context.Pass.Name);
             if (stage < 0) { throw new InvalidOperationException("Unknown visibility timing stage."); }
+            TimingWritten |= 1u << stage;
             return (uint)stage * 2;
         }
 
@@ -95,12 +108,15 @@ public sealed partial class VisibilityPbrFeature
             try {
                 Wgpu.SetRenderPipeline(pass, Owner._raster.GetWgpu<WGPURenderPipeline>());
                 Wgpu.SetBindGroup(pass, 0, Group.GetWgpu<WGPUBindGroup>());
-                Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), post ? 32ul : 0ul);
+                if (Owner._fixedGeometry is not null) {
+                    Wgpu.SetIndexBuffer(pass, Clusters!.Value.Indices.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
+                    Wgpu.DrawIndexedIndirect(pass, Indirect.GetWgpu<WGPUBuffer>());
+                } else Wgpu.DrawIndirect(pass, Indirect.GetWgpu<WGPUBuffer>(), post ? 32ul : 0ul);
             }
             finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }
         }
 
-        private void TimedOutput(WgpuReactiveRenderGraphPassContext context)
+        private unsafe void TimedOutput(WgpuReactiveRenderGraphPassContext context)
         {
             var pass = BeginTimedRender(context, Frame.ColorTarget, Frame.ColorLoadOp, false);
             try {
@@ -109,8 +125,7 @@ public sealed partial class VisibilityPbrFeature
                 Wgpu.Draw(pass, 3);
             }
             finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }
-            Wgpu.ResolveQuerySet(context.CommandEncoder, Timing!.Value.Queries.GetWgpu<WGPUQuerySet>(),
-                0, (uint)s_TimingStages.Length * 2, context.GetBuffer(Owner.GpuTimingsTarget));
+            ResolveTiming(context);
         }
     }
 }

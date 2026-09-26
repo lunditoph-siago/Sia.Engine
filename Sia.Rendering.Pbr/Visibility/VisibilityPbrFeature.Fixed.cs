@@ -15,7 +15,7 @@ public sealed partial class VisibilityPbrFeature
 
     public static VisibilityPbrFeature CreateFixedScene(in GpuFrame frame, PbrSceneAsset asset,
         ReadOnlySpan<VisibilityInstance> instances, WGPUTextureFormat outputFormat,
-        VisibilityDebugMode mode = VisibilityDebugMode.Shaded)
+        VisibilityDebugMode mode = VisibilityDebugMode.Shaded, bool enableGpuTiming = false)
     {
         ArgumentNullException.ThrowIfNull(asset);
         var geometry = new MeshletRasterData[asset.Geometry.Length];
@@ -57,6 +57,6 @@ public sealed partial class VisibilityPbrFeature
         var scene = new SceneLodData(combined, [], ranges, default, 1, (uint)capacity,
             asset.Geometry.ToArray().Select(mesh => PatchBounds(mesh.Build.Tree)).ToArray());
         return Create(in frame, scene.Geometry, instances, null, outputFormat, mode, null, default,
-            scene: scene, materials: asset.Materials.Span, fixedClusters: work);
+            enableGpuTiming: enableGpuTiming, scene: scene, materials: asset.Materials.Span, fixedClusters: work);
     }
 }
