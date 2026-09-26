@@ -13,7 +13,6 @@ public static partial class Program
     internal static int BenchmarkFrames { get; private set; }
     internal static bool BenchmarkMotion { get; private set; }
     internal static RenderQuality Quality { get; private set; } = RenderQuality.Low;
-    internal static bool FlatShading { get; private set; }
     internal static float RenderScale { get; private set; } = 1;
     internal static int Width { get; private set; } = 1280;
     internal static int Height { get; private set; } = 720;
@@ -118,9 +117,6 @@ public static partial class Program
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
             else if (args[i] == "--scene") { scenePath = args[i + 1]; }
             else if (args[i] == "--offscreen") { Offscreen = bool.Parse(args[i + 1]); }
-            else if (args[i] == "--shading") { FlatShading = args[i + 1] switch {
-                "pbr" => false, "flat" => true, _ => throw new ArgumentException("Expected --shading pbr|flat.")
-            }; }
             else if (args[i] == "--gpu-timing") { GpuTiming = bool.Parse(args[i + 1]); }
             else if (args[i] == "--target-fps") {
                 if (!int.TryParse(args[i + 1], out var fps) || fps is < 1 or > 1000) throw new ArgumentException("Expected --target-fps 1..1000.");
@@ -182,8 +178,8 @@ public static partial class Program
         if ((debugMode is not null || distance is not null) && pipeline == ScenePipeline.Unlit) {
             throw new ArgumentException("--debug and --distance require --pipeline bunny|pbr.");
         }
-        if ((FlatShading || RenderScale != 1) && pipeline != ScenePipeline.Pbr) {
-            throw new ArgumentException("--shading flat and --render-scale require --pipeline pbr.");
+        if (RenderScale != 1 && pipeline != ScenePipeline.Pbr) {
+            throw new ArgumentException("--render-scale requires --pipeline pbr.");
         }
         if (TargetFps != 0) {
             GpuTiming = true;
@@ -193,9 +189,6 @@ public static partial class Program
         var streamed = scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true;
         if (GpuTiming && (pipeline != ScenePipeline.Pbr || streamed))
             throw new ArgumentException("--gpu-timing currently requires a monolithic PBR scene.");
-        if (FlatShading && debugMode is not (null or VisibilityDebugMode.Shaded)) {
-            throw new ArgumentException("Flat shading cannot be combined with a diagnostic --debug mode.");
-        }
         if (Offscreen && (pipeline != ScenePipeline.Pbr || BenchmarkFrames == 0)) {
             throw new ArgumentException("--offscreen true requires a PBR benchmark with a finite --benchmark-frames count.");
         }

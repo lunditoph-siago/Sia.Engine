@@ -12,7 +12,7 @@ internal sealed partial class SceneExampleApp
     private sealed record Timing(double Mean, double Median, double P95, double P99, double Max);
     private sealed record CpuStages(double Acquire, double Extract, double PrepareAndQueue, double GraphUpdate, double EncodeAndSubmit, double Present);
     private sealed record FrameSample(double CpuMilliseconds, double CadenceMilliseconds, CpuStages CpuStages, VisibilityFrameStatistics? Visibility, float RenderScale);
-    private sealed record BenchmarkReport(string Mode, string Shading, string Quality, int Width, int Height, int RenderWidth, int RenderHeight,
+    private sealed record BenchmarkReport(string Mode, string Quality, int Width, int Height, int RenderWidth, int RenderHeight,
         string Adapter, string PresentMode, string[] Passes, double FirstSubmittedFrameMilliseconds,
         int WarmupFrames, int SampleFrames, bool Moving, Timing CpuFrameMilliseconds, Timing FrameCadenceMilliseconds,
         PbrStreamingStatistics? Streaming, AssetChunkCacheStatistics? Chunks, long ManagedHeapBytes, FrameSample[] Frames,
@@ -43,7 +43,7 @@ internal sealed partial class SceneExampleApp
         _previousBenchmarkFrame = start;
         if (_benchmarkFrames != Program.BenchmarkFrames + 120) return;
         Console.WriteLine("BISTRO_BENCHMARK " + JsonSerializer.Serialize(new BenchmarkReport(
-            _materialStream is null ? (_finest ? "finest" : "auto") : "streaming", Program.FlatShading ? "flat" : "pbr", Program.Quality.ToString(),
+            _materialStream is null ? (_finest ? "finest" : "auto") : "streaming", Program.Quality.ToString(),
             OutputWidth, OutputHeight, RenderWidth, RenderHeight, _adapterDescription,
             Program.Offscreen ? "OffscreenReadback3" : _presentMode.ToString(),
             _renderGraph!.PreparePlan().Graph.Passes.Select(pass => pass.Name).ToArray(),

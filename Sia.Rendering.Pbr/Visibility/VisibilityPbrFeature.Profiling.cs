@@ -73,12 +73,6 @@ public sealed partial class VisibilityPbrFeature
             }
         }
 
-        public void DeclareSurfaceTiming(RenderGraphPassDeclarationBuilder declaration) => declaration
-            .Read(Owner._fusedLighting is null ? Owner.HdrTarget : FusedTarget, RenderGraphTextureUsage.TextureBinding)
-            .Write(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
-
-        public void ResolveSurfaceTiming(WgpuReactiveRenderGraphPassContext context) => ResolveTiming(context);
-
         private static bool IsCheckpoint(WgpuReactiveRenderGraphPassContext context) => Array.IndexOf(s_TimingStages, context.Pass.Name) >= 0;
 
         private uint TimingIndex(WgpuReactiveRenderGraphPassContext context)
@@ -144,7 +138,7 @@ public sealed partial class VisibilityPbrFeature
             finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }
         }
 
-        private unsafe void TimedOutput(WgpuReactiveRenderGraphPassContext context)
+        private void TimedOutput(WgpuReactiveRenderGraphPassContext context)
         {
             var pass = BeginTimedRender(context, Frame.ColorTarget, Frame.ColorLoadOp, false);
             try {

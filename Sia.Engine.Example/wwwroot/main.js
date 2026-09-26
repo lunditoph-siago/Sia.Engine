@@ -236,7 +236,7 @@ try {
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   if (parameters.has('quality')) args.push('--quality', parameters.get('quality'));
-  for (const name of ['shading', 'render-scale', 'width', 'height', 'gpu-timing', 'target-fps']) {
+  for (const name of ['render-scale', 'width', 'height', 'gpu-timing', 'target-fps']) {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
   }
   if (parameters.has('benchmark-frames')) args.push('--benchmark-frames', parameters.get('benchmark-frames'));

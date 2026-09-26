@@ -125,8 +125,6 @@ public sealed partial class PbrRenderer(
     private static ShadowAtlasConfig Copy(ShadowAtlasConfig source) => new() {
         TileResolution = source.TileResolution,
         CascadeCount = source.CascadeCount,
-        SceneBoundsDirectional = source.SceneBoundsDirectional,
-        ConservativeCasterBounds = source.ConservativeCasterBounds,
         CascadeSplitLambda = source.CascadeSplitLambda,
         CascadeShadowPullback = source.CascadeShadowPullback,
         ShadowDistance = source.ShadowDistance,

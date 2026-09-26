@@ -72,11 +72,6 @@ internal sealed unsafe partial class SceneExampleApp
         }
 
         InitializeMaterialRendering();
-        if (Program.FlatShading) {
-            _visibilityLod!.FlatShading = true;
-            _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
-            return;
-        }
         _sceneRenderer = new PbrRenderer(
             ClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
             PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice),

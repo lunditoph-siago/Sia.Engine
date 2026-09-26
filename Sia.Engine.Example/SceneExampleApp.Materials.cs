@@ -38,9 +38,7 @@ internal sealed partial class SceneExampleApp
         }
         if (_materialStream is { } stream) { _materialBounds = stream.Bounds; }
         var shadows = world.AcquireAddon<ShadowAtlasConfig>();
-        shadows.SceneBoundsDirectional = _renderProfile.Quality == RenderQuality.Low;
-        shadows.ConservativeCasterBounds = _renderProfile.Quality == RenderQuality.Low;
-        shadows.TileResolution = _renderProfile.ShadowResolution; shadows.CascadeCount = shadows.SceneBoundsDirectional ? 1 : 3; shadows.MaxShadowedSpotLights = 1; shadows.ShadowDistance = 30;
+        shadows.TileResolution = _renderProfile.ShadowResolution; shadows.CascadeCount = 3; shadows.MaxShadowedSpotLights = 1; shadows.ShadowDistance = 30;
         world.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky { Intensity = .75f };
         var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
         world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
@@ -56,37 +54,24 @@ internal sealed partial class SceneExampleApp
     {
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var source = _materialScene!;
-        if (!Program.FlatShading && source.Instances.ToArray().Any(instance => source.Materials.Span[instance.Material].AlphaBlend)) {
+        if (source.Instances.ToArray().Any(instance => source.Materials.Span[instance.Material].AlphaBlend)) {
             _transparency = new(in frame, source);
         }
         var scene = _opaqueScene!;
-        var rootCutOnly = _renderProfile.Quality == RenderQuality.Low;
-        var rootCutStride = rootCutOnly ? 16u : 1u;
         var roots = 0; var meshlets = 0; var triangles = 0;
-        var sampledTriangles = 0;
         foreach (var instance in scene.Instances.Span) {
             var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
             roots = checked(roots + tree.RootCount);
-            var phase = tree.RootCount == 0 ? 0u : (uint)instance.Geometry % System.Math.Min(rootCutStride, (uint)tree.RootCount);
-            for (var rootIndex = 0; rootIndex < tree.RootCount; rootIndex++) {
-                var root = tree.Nodes.Span[rootIndex];
+            foreach (var root in tree.Nodes.Span[..tree.RootCount]) {
                 meshlets = checked(meshlets + root.MeshletCount);
                 triangles = checked(triangles + root.TriangleCount);
-                if ((uint)rootIndex % rootCutStride == phase) sampledTriangles = checked(sampledTriangles + root.TriangleCount);
             }
         }
-        var settings = new VisibilityLodSettings(rootCutOnly ? 32 : 4,
-            new(rootCutOnly ? roots : checked(roots + 8192), rootCutOnly ? meshlets : checked(meshlets + 16384),
-                rootCutOnly ? sampledTriangles : checked(triangles + 1048576)) {
-            MaxRefinementCandidates = rootCutOnly ? 0 : 4096,
-            MaxRefinementNodes = rootCutOnly ? 0 : 16384
+        var settings = new VisibilityLodSettings(4, new(checked(roots + 8192), checked(meshlets + 16384), checked(triangles + 1048576)) {
+            MaxRefinementCandidates = 4096, MaxRefinementNodes = 16384
         }) {
-            RootCutStride = rootCutStride,
-            Shadows = new(rootCutOnly ? 32 : 8,
-                new(rootCutOnly ? roots : checked(roots + 512), rootCutOnly ? meshlets : checked(meshlets + 2048),
-                    rootCutOnly ? triangles : checked(triangles + 131072)) {
-                MaxRefinementCandidates = rootCutOnly ? 0 : 512,
-                MaxRefinementNodes = rootCutOnly ? 0 : 2048
+            Shadows = new(8, new(checked(roots + 512), checked(meshlets + 2048), checked(triangles + 131072)) {
+                MaxRefinementCandidates = 512, MaxRefinementNodes = 2048
             })
         };
         _visibilityLod = _materialStream is { } stream ? VisibilityPbrFeature.CreateStreamScene(in frame, stream, _surfaceFormat, _renderProfile.DetailGeometryBytes, _renderProfile.UploadBytesPerFrame, mode: _patchDebugMode)

@@ -57,8 +57,6 @@ public sealed class ShadowGpuStore
 
     public void Refresh(World world, ShadowAtlasConfig config, Entity cameraEntity, Aabb? casterBounds = null)
     {
-        if (config.SceneBoundsDirectional && config.CascadeCount != 1)
-            throw new ArgumentException("Scene-bound directional shadows require exactly one cascade.", nameof(config));
         _cascadeCount = config.CascadeCount;
         _layerViewProj = new ShadowViewProjGpu[System.Math.Max(config.LayerCount, 1)];
         _spotShadowLayerByEntity.Clear();
@@ -79,8 +77,7 @@ public sealed class ShadowGpuStore
             _hasDirectionalShadow = true;
             var direction = -math.normalize(entity.Get<GlobalTransform>().Affine.RotationScale.c2);
             for (var i = 0; i < config.CascadeCount; i++) {
-                var viewProj = config.SceneBoundsDirectional && casterBounds is { } bounds
-                    ? CascadeSplitting.ComputeSceneViewProj(bounds, direction) : CascadeSplitting.ComputeCascadeViewProj(
+                var viewProj = CascadeSplitting.ComputeCascadeViewProj(
                     in cameraTransform, camera.VerticalFovRadians, aspect,
                     _cascadeSplits[i], _cascadeSplits[i + 1], direction, config.CascadeShadowPullback, casterBounds);
                 _layerViewProj[i] = new ShadowViewProjGpu(viewProj);

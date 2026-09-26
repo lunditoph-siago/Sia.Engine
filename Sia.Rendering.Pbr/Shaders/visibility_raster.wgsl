@@ -80,16 +80,3 @@ fn fragment_first(input: FirstRasterOutput, @builtin(front_facing) front: bool) 
     if (!front && input.double_sided == 0.0) { discard; }
     return input.id;
 }
-
-// Depth-only conservative proxy. The main view always uses the original mesh.
-@vertex
-fn shadow_bounds(@builtin(vertex_index) vertex: u32, @builtin(instance_index) id: u32) -> @builtin(position) vec4<f32> {
-    let corners = array<u32, 36>(0u,2u,1u,1u,2u,3u, 4u,5u,6u,5u,7u,6u,
-        0u,1u,4u,1u,5u,4u, 2u,6u,3u,3u,6u,7u, 0u,4u,2u,2u,4u,6u, 1u,3u,5u,3u,7u,5u);
-    let source = visibility_instances[id];
-    let lo = visibility_vertices[source.roots.w * 2u].xyz;
-    let hi = visibility_vertices[source.roots.w * 2u + 1u].xyz;
-    let corner = corners[vertex];
-    let p = select(lo, hi, (vec3<u32>(corner) & vec3<u32>(1u,2u,4u)) != vec3<u32>(0u));
-    return visibility_camera.view_projection * source.transform * vec4<f32>(p, 1.0);
-}

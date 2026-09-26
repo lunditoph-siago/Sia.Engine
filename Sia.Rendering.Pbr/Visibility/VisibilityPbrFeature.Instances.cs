@@ -10,14 +10,12 @@ public sealed partial class VisibilityPbrFeature
     private static readonly IEntityMatcher s_InstanceMatcher = Matchers.Of<VisibilityInstance>();
     private World? _instanceWorld;
     private AssetRoots[] _instanceAssets = [];
-    private uint[][] _rootCutTrianglesByAsset = [];
     private InstanceSnapshot? _extractedInstances;
     private InstanceSnapshot? _preparedInstances;
     private RenderWorld? _instanceRenderWorld;
     private readonly SceneChanges _sceneChanges = new();
     private ulong _instanceVersion => _sceneChanges.Version;
     private readonly List<Entity> _instanceQuery = [];
-    private bool _instanceMembershipDirty = true;
     private SceneInstanceSlots? _instanceSlots;
     private VisibilityInstance?[] _instanceSources = [];
     private InstanceGpu[] _instanceConverted = [];
@@ -53,16 +51,12 @@ public sealed partial class VisibilityPbrFeature
         ulong maxRoots = 0, maxNodes = 0, maxFinest = 0;
         for (var i = 0; i < assets.Length; i++) {
             var tree = assets[i];
-            uint meshlets = 0, triangles = 0, sampledTriangles = 0;
-            var stride = lod.RootCutStride;
-            var phase = tree.RootCount == 0 ? 0u : (uint)i % System.Math.Min(stride, (uint)tree.RootCount);
-            for (var rootIndex = 0; rootIndex < tree.RootCount; rootIndex++) {
-                var root = tree.Nodes.Span[rootIndex];
+            uint meshlets = 0, triangles = 0;
+            foreach (var root in tree.Nodes.Span[..tree.RootCount]) {
                 meshlets = checked(meshlets + (uint)root.MeshletCount);
                 triangles = checked(triangles + (uint)root.TriangleCount);
-                if ((uint)rootIndex % stride == phase) sampledTriangles = checked(sampledTriangles + (uint)root.TriangleCount);
             }
-            ranges[i] = new(offset, (uint)tree.RootCount, meshlets, triangles, sampledTriangles);
+            ranges[i] = new(offset, (uint)tree.RootCount, meshlets, triangles);
             offset = checked(offset + (uint)tree.Nodes.Length);
             maxRoots = System.Math.Max(maxRoots, (uint)tree.RootCount);
             maxNodes = System.Math.Max(maxNodes, (uint)(tree.Nodes.Length - tree.RootCount));
@@ -77,35 +71,14 @@ public sealed partial class VisibilityPbrFeature
             StateCapacity = checked((uint)System.Math.Max(1ul, roots + refined)),
             TriangleCapacity = checked((uint)System.Math.Min(maxFinest * (uint)instanceCapacity, (uint)lod.Budget.MaxTriangles))
         };
-        var staticRootCut = UseStaticRootCut(lod);
-        var feature = Create(in frame, scene.Geometry, [], albedo, outputFormat, mode, null, lod, enableGpuTiming, scene, materials,
-            staticRootCut: staticRootCut);
+        var feature = Create(in frame, scene.Geometry, [], albedo, outputFormat, mode, null, lod, enableGpuTiming, scene, materials);
         feature._instanceWorld = frame.MainWorld;
-        feature.SubscribeInstanceChanges(frame.MainWorld);
         feature._instanceAssets = ranges;
-        feature._rootCutTrianglesByAsset = BuildRootCutTriangles(ranges, scene.Patches, lod.RootCutStride);
         feature._instanceSlots = new(instanceCapacity);
         feature._instanceSources = new VisibilityInstance?[instanceCapacity];
         feature._instanceConverted = new InstanceGpu[instanceCapacity];
         feature._instanceBounds = new(instanceCapacity);
         return feature;
-    }
-
-    private static uint[][] BuildRootCutTriangles(AssetRoots[] assets, PatchGpu[] patches, uint stride)
-    {
-        var result = new uint[assets.Length][];
-        for (var assetIndex = 0; assetIndex < assets.Length; assetIndex++) {
-            var asset = assets[assetIndex];
-            var phase = asset.Count == 0 ? 0u : (uint)assetIndex % System.Math.Min(stride, asset.Count);
-            var triangles = new List<uint>();
-            for (uint root = 0; root < asset.Count; root++) {
-                if (root % stride != phase) continue;
-                var range = patches[asset.Offset + root].Geometry;
-                for (uint triangle = 0; triangle < range.z; triangle++) triangles.Add(range.y + triangle);
-            }
-            result[assetIndex] = triangles.ToArray();
-        }
-        return result;
     }
 
     public void Extract(in RenderFeatureContext<RenderFrameContext> context)
@@ -114,12 +87,6 @@ public sealed partial class VisibilityPbrFeature
         BeginStatistics(context.RenderWorld.FrameIndex);
         if (_instanceWorld is null) { return; }
         if (_extractedInstances?.Frame == context.RenderWorld.FrameIndex) { return; }
-        if (!_instanceMembershipDirty && !_extractionDesynced && _extractedInstances is { } unchanged
-            && !InstanceValuesChanged()) {
-            unchanged.Frame = context.RenderWorld.FrameIndex;
-            _instanceRenderWorld = context.RenderWorld;
-            return;
-        }
         var recoverFromDesync = _extractionDesynced;
         _extractionDesynced = true;
         var entities = _instanceQuery;
@@ -130,7 +97,7 @@ public sealed partial class VisibilityPbrFeature
         }
         var slots = _instanceSlots!;
         var changed = slots.Synchronize(entities);
-        uint roots = 0, meshlets = 0, triangles = 0, sampledTriangles = 0;
+        uint roots = 0, meshlets = 0, triangles = 0;
         for (var i = 0; i < slots.Length; i++) {
             if (slots.Owners[i] is not { } entity) {
                 changed |= _instanceSources[i] is not null;
@@ -156,10 +123,9 @@ public sealed partial class VisibilityPbrFeature
             roots = checked(roots + asset.Count);
             meshlets = checked(meshlets + asset.Meshlets);
             triangles = checked(triangles + asset.Triangles);
-            sampledTriangles = checked(sampledTriangles + asset.SampledTriangles);
         }
-        if (roots > _lod.Budget.MaxPatches || meshlets > _lod.Budget.MaxMeshlets || sampledTriangles > _lod.Budget.MaxTriangles) {
-            throw new InvalidOperationException("The visibility budget cannot hold the configured root cut.");
+        if (roots > _lod.Budget.MaxPatches || meshlets > _lod.Budget.MaxMeshlets || triangles > _lod.Budget.MaxTriangles) {
+            throw new InvalidOperationException("The visibility budget cannot hold the complete scene root cut.");
         }
         if (_lod.Shadows is { } shadow) { ValidateShadowRoots(new(roots, meshlets, triangles), shadow.Budget); }
         changed |= _extractedInstances is null || slots.Length != _extractedInstances.Instances.Length
@@ -168,46 +134,11 @@ public sealed partial class VisibilityPbrFeature
         if (!changed && _extractedInstances is { } retained) { retained.Frame = context.RenderWorld.FrameIndex; }
         else {
             _extractedInstances = new(slots.Owners[..slots.Length].ToArray(),
-                _instanceConverted.AsSpan(0, slots.Length).ToArray(), roots, meshlets, sampledTriangles) { Frame = context.RenderWorld.FrameIndex };
+                _instanceConverted.AsSpan(0, slots.Length).ToArray(), roots, meshlets, triangles) { Frame = context.RenderWorld.FrameIndex };
         }
         ShadowBounds = _instanceBounds!.Bounds;
         _instanceRenderWorld = context.RenderWorld;
-        _instanceMembershipDirty = false;
         _extractionDesynced = false;
-    }
-
-    // Get<T>() exposes a writable ref without a Set event. Membership events let
-    // us skip the query, but retained values must still be checked before reuse.
-    private bool InstanceValuesChanged()
-    {
-        var slots = _instanceSlots!;
-        for (var i = 0; i < slots.Length; i++) {
-            if (slots.Owners[i] is { } entity
-                && (!entity.IsValid || _instanceSources[i] != entity.Get<VisibilityInstance>())) return true;
-        }
-        return false;
-    }
-
-    private void SubscribeInstanceChanges(World world)
-    {
-        world.Dispatcher.Listen<WorldEvents.Add<VisibilityInstance>>(OnVisibilityInstanceChanged<WorldEvents.Add<VisibilityInstance>>);
-        world.Dispatcher.Listen<WorldEvents.Remove<VisibilityInstance>>(OnVisibilityInstanceChanged<WorldEvents.Remove<VisibilityInstance>>);
-        world.Dispatcher.Listen<WorldEvents.Set<VisibilityInstance>>(OnVisibilityInstanceChanged<WorldEvents.Set<VisibilityInstance>>);
-        world.OnDisposed += OnInstanceWorldDisposed;
-    }
-
-    private bool OnVisibilityInstanceChanged<TEvent>(Entity _, in TEvent __) where TEvent : IEvent
-    {
-        _instanceMembershipDirty = true;
-        return false;
-    }
-
-    private void OnInstanceWorldDisposed(World world)
-    {
-        world.Dispatcher.Unlisten<WorldEvents.Add<VisibilityInstance>>(OnVisibilityInstanceChanged<WorldEvents.Add<VisibilityInstance>>);
-        world.Dispatcher.Unlisten<WorldEvents.Remove<VisibilityInstance>>(OnVisibilityInstanceChanged<WorldEvents.Remove<VisibilityInstance>>);
-        world.Dispatcher.Unlisten<WorldEvents.Set<VisibilityInstance>>(OnVisibilityInstanceChanged<WorldEvents.Set<VisibilityInstance>>);
-        world.OnDisposed -= OnInstanceWorldDisposed;
     }
 
     private void ValidateFrame(in RenderFeatureContext<RenderFrameContext> context)
@@ -245,13 +176,14 @@ public sealed partial class VisibilityPbrFeature
             }
             start = end;
         }
-        if (_gpuLod is { } lod && (previous is null || previous.RootCount != snapshot.RootCount || previous.Instances.Length != instances.Length)) {
+        if (previous is null || previous.RootCount != snapshot.RootCount || previous.Instances.Length != instances.Length) {
+            var lod = _gpuLod!.Value;
             Wgpu.WriteBuffer<uint4>(queue, lod.Parameters.GetWgpu<WGPUBuffer>(), 0,
-                [new uint4(_lod.RootCutStride, snapshot.RootCount,
+                [new uint4((uint)(Wgpu.GetBufferSize(lod.Patches.GetWgpu<WGPUBuffer>()) / 64), snapshot.RootCount,
                     (uint)instances.Length, lod.DispatchDimension)]);
         }
-        if (_gpuLod is not null && (previous is null || previous.RootMeshlets != snapshot.RootMeshlets || previous.RootTriangles != snapshot.RootTriangles)) {
-            Wgpu.WriteBuffer<uint>(queue, _gpuLod.Value.Parameters.GetWgpu<WGPUBuffer>(), 40,
+        if (previous is null || previous.RootMeshlets != snapshot.RootMeshlets || previous.RootTriangles != snapshot.RootTriangles) {
+            Wgpu.WriteBuffer<uint>(queue, _gpuLod!.Value.Parameters.GetWgpu<WGPUBuffer>(), 40,
                 [snapshot.RootMeshlets, snapshot.RootTriangles]);
         }
         if (changed) {
@@ -295,7 +227,7 @@ public sealed partial class VisibilityPbrFeature
             new float4(material.Metallic, material.Roughness, instance.MaterialIndex, doubleSided ? 1 : 0), new float4(emissive, 0), roots);
     }
 
-    private readonly record struct AssetRoots(uint Offset, uint Count, uint Meshlets, uint Triangles, uint SampledTriangles);
+    private readonly record struct AssetRoots(uint Offset, uint Count, uint Meshlets, uint Triangles);
     private sealed record InstanceSnapshot(Entity?[] Entities, InstanceGpu[] Instances, uint RootCount, uint RootMeshlets, uint RootTriangles)
     {
         public ulong Frame { get; set; }

@@ -74,7 +74,7 @@ public sealed partial class VisibilityPbrFeature
         }
         var batches = new Dictionary<(MaterialTextureGpu, MaterialTextureGpu, MaterialTextureGpu, MaterialTextureGpu, MaterialTextureGpu), int>();
         var result = new List<MaterialBatchGpu>();
-        var parameters = new MaterialParametersGpu[MaximumMaterialCount];
+        var parameters = new MaterialParametersGpu[materials.Length];
         for (var i = 0; i < materials.Length; i++) {
             var source = materials[i];
             var maps = MaterialMaps(source).Select(texture => references[texture]).ToArray();
@@ -92,7 +92,7 @@ public sealed partial class VisibilityPbrFeature
                 new(maps[0].Layer, maps[1].Layer, maps[2].Layer, maps[3].Layer), new(maps[4].Layer, (uint)batch, 0, 0));
         }
         return (result.ToArray(), textures.ToArray(), Upload<MaterialParametersGpu>(world, device, queue, parameters,
-            WGPUBufferUsage.Storage | WGPUBufferUsage.Uniform, limits, acquired));
+            WGPUBufferUsage.Storage, limits, acquired));
     }
 
     internal static unsafe MaterialTextureGpu CreateMaterialTexture(World world, WgpuHandle<WGPUDevice> device,

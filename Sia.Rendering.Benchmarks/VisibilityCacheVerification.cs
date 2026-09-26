@@ -30,8 +30,8 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
     private readonly record struct GraphProps(VisibilityCacheVerification Scene);
     private ReactiveMount<GraphProps>? _mount;
 
-    private VisibilityCacheVerification(GpuDevice gpu, PbrSceneAsset asset, bool flat = false, uint renderSize = 128, bool lod = false,
-        bool timing = true, bool pbr = false, bool reference = false, bool shadowsEnabled = true)
+    private VisibilityCacheVerification(GpuDevice gpu, PbrSceneAsset asset, uint renderSize = 128, bool lod = false,
+        bool timing = true, bool pbr = false, bool shadowsEnabled = true)
     {
         _gpu = gpu;
         _timingEnabled = timing && gpu.TimingEnabled;
@@ -49,14 +49,12 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
                 : VisibilityPbrFeature.CreateFixedScene(in _frame, asset,
                 asset.Instances.ToArray().Select(i => new VisibilityInstance(i.Transform, i.Material) { AssetIndex = i.Geometry }).ToArray(),
                 WGPUTextureFormat.RGBA8Unorm, enableGpuTiming: _timingEnabled);
-            _feature.FlatShading = flat;
             if (lod) {
                 foreach (var i in asset.Instances.Span) _caster = _main.Create(HList.From(new VisibilityInstance(i.Transform, i.Material) { AssetIndex = i.Geometry }));
             }
             if (pbr) {
                 var shadows = _main.AcquireAddon<ShadowAtlasConfig>();
                 shadows.CascadeCount = 1; shadows.TileResolution = 64; shadows.MaxShadowedSpotLights = 0;
-                shadows.SceneBoundsDirectional = true; shadows.ConservativeCasterBounds = true;
                 _sun = shadowsEnabled
                     ? _main.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1,1,1), 2), new GlobalTransform(AffineTransform.Identity)))
                     : _main.Create(HList.From(new DirectionalLight(), new LightColor(new(1,1,1), 2), new GlobalTransform(AffineTransform.Identity)));
@@ -65,8 +63,9 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
                 var renderer = new PbrRenderer(ClusterLightCullingPipeline.Create(_render.Entities, _frame.Device),
                     PbrIblPrecomputePipelines.Create(_render.Entities, _frame.Device),
                     PbrOutputPipelines.Create(_render.Entities, _frame.Device, WGPUTextureFormat.RGBA8Unorm));
-                _pbr = new(renderer, _feature, new() { ScreenSpaceReflections = reference, ScreenSpaceIndirectLighting = false });
+                _pbr = new(renderer, _feature, new() { ScreenSpaceReflections = false, ScreenSpaceIndirectLighting = false });
             }
+            gpu.CheckErrors();
             _pixels = _render.Entities.CreateWgpuBuffer(_frame.Device, new WGPUBufferDescriptor {
                 Size = 128 * 128 * 4 + (ulong)VisibilityPbrFeature.GpuTimingStages.Length * 16, Usage = WGPUBufferUsage.MapRead | WGPUBufferUsage.CopyDst });
         }
@@ -101,6 +100,12 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
             _gpu.CheckErrors();
             if (_timingEnabled) {
                 var times = Wgpu.GetMappedRangeReadOnly<ulong>(buffer, 128 * 128 * 4, VisibilityPbrFeature.GpuTimingStages.Length * 2);
+                if (_pbr is not null && _feature.SampleGpuTiming) {
+                    var begin = VisibilityPbrFeature.GpuTimingStages.IndexOf("pbr-frame-begin") * 2;
+                    var end = VisibilityPbrFeature.GpuTimingStages.IndexOf("pbr-frame-end") * 2;
+                    if (times[begin] == 0 || times[end + 1] <= times[begin])
+                        throw new InvalidOperationException("Missing full-frame PBR timestamps.");
+                }
                 for (var i = 0; i < times.Length; i += 2)
                     if (times[i + 1] < times[i]) throw new InvalidOperationException("Invalid timing pair.");
                 if (_feature.FrameStatistics.VisibilityCacheHits != 0 && (times[2] != 0 || times[3] != 0))
@@ -145,11 +150,10 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
         var transformed = PbrSceneAsset.Create([mesh], [new(PbrMaterial.Default, DoubleSided: true)],
             [new(0, 0, float4x4.Scale(new float3(.6f, .6f, 1))), new(0, 0, float4x4.Translate(new(.3f, 0, .2f)))]);
         var worldSpace = PbrSceneAsset.Create([mesh], [new(PbrMaterial.Default, DoubleSided: true)], [new(0, 0, float4x4.identity)]);
-        foreach (var flat in new[] { false, true })
         foreach (var lod in new[] { false, true })
         foreach (var asset in new[] { transformed, worldSpace }) {
-            using var untimed = new VisibilityCacheVerification(gpu, asset, flat: flat, lod: lod, timing: false);
-            using var timed = new VisibilityCacheVerification(gpu, asset, flat: flat, lod: lod);
+            using var untimed = new VisibilityCacheVerification(gpu, asset, lod: lod, timing: false);
+            using var timed = new VisibilityCacheVerification(gpu, asset, lod: lod);
             foreach (var shear in new[] { 0f, .8f, .8f, -.8f, 0f }) {
                 var projection = float4x4.identity; projection.c2.x = shear;
                 var expected = await untimed.FrameAsync(projection);
@@ -157,9 +161,8 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
                 if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("GPU timing changed raster output.");
             }
         }
-        foreach (var flat in new[] { false, true })
         foreach (var asset in new[] { transformed, worldSpace }) {
-            using var cached = new VisibilityCacheVerification(gpu, asset, flat);
+            using var cached = new VisibilityCacheVerification(gpu, asset);
             var projection = float4x4.identity;
             var first = await cached.FrameAsync(projection);
             if (first.Where((_, i) => i % 4 != 3).All(value => value == 0)) throw new InvalidOperationException("Pixel fixture is empty.");
@@ -168,7 +171,7 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
                 throw new InvalidOperationException("Static cache hit differs from its fully rendered frame.");
             foreach (var shear in new[] { .8f, -.8f, 0f }) {
                 projection.c2.x = shear;
-                using var fresh = new VisibilityCacheVerification(gpu, asset, flat);
+                using var fresh = new VisibilityCacheVerification(gpu, asset);
                 var expected = await fresh.FrameAsync(projection);
                 if (shear != 0 && first.AsSpan().SequenceEqual(expected))
                     throw new InvalidOperationException("The camera change did not exercise different pixels.");
@@ -181,41 +184,27 @@ internal sealed partial class VisibilityCacheVerification : IDisposable
             }
         }
         foreach (var lod in new[] { false, true }) {
-            using var scaled = new VisibilityCacheVerification(gpu, worldSpace, flat: true, renderSize: 64, lod: lod);
+            using var scaled = new VisibilityCacheVerification(gpu, worldSpace, renderSize: 64, lod: lod);
             var pixels = await scaled.FrameAsync(float4x4.identity);
-            // Independent expected output: default material 0.8, Reinhard, then sRGB.
-            var linear = .8 / 1.8;
-            var expected = (int)System.Math.Round((1.055 * System.Math.Pow(linear, 1 / 2.4) - .055) * 255);
-            var center = (64 * 128 + 64) * 4;
-            if (System.Math.Abs(pixels[center] - expected) > 1 || pixels[center + 3] != 255)
-                throw new InvalidOperationException("Flat material color/transfer is incorrect or geometry was not drawn.");
+            if (pixels.Where((_, i) => i % 4 != 3).All(value => value == 0))
+                throw new InvalidOperationException("Scaled frame is empty.");
             for (var y = 0; y < 128; y += 2) for (var x = 0; x < 128; x += 2) {
                 var p = (y * 128 + x) * 4;
                 if (!pixels.AsSpan(p, 4).SequenceEqual(pixels.AsSpan(p + 4, 4))
                     || !pixels.AsSpan(p, 8).SequenceEqual(pixels.AsSpan(p + 512, 8)))
                     throw new InvalidOperationException("Half-resolution output must upscale each source pixel to a 2x2 block.");
             }
-            var graph = scaled._registry.PreparePlan().Graph;
-            if (graph.Passes.Any(p => p.Name is "visibility-material-tiles" or "visibility-resolve")
-                || graph.Textures.Any(t => t.Descriptor.Name is "visibility-hdr" or "visibility-base-roughness" or "visibility-normal-metallic" or "visibility-emissive-occlusion"))
-                throw new InvalidOperationException("Flat shading retained PBR surface work.");
-            var rejected = false;
-            try { scaled._feature.FlatShading = false; }
-            catch (InvalidOperationException) { rejected = true; }
-            if (!rejected) throw new InvalidOperationException("Graph structure changes must be rejected before mutating a mounted feature.");
-            var restored = await scaled.FrameAsync(float4x4.identity);
-            if (!pixels.AsSpan().SequenceEqual(restored)) throw new InvalidOperationException("Rejected shading switch changed flat output.");
         }
         foreach (var lod in new[] { false, true }) {
-            using var resizing = new VisibilityCacheVerification(gpu, transformed, flat: true, lod: lod);
+            using var resizing = new VisibilityCacheVerification(gpu, transformed, lod: lod);
             foreach (var size in new uint[] { 128, 64, 64, 96, 128 }) {
-                using var fresh = new VisibilityCacheVerification(gpu, transformed, flat: true, renderSize: size, lod: lod);
+                using var fresh = new VisibilityCacheVerification(gpu, transformed, renderSize: size, lod: lod);
                 var expected = await fresh.FrameAsync(float4x4.identity);
                 var actual = await resizing.FrameAsync(float4x4.identity, size);
                 if (!expected.AsSpan().SequenceEqual(actual)) throw new InvalidOperationException("Live resolution change differs from fresh rendering.");
             }
         }
-        Console.WriteLine("Visibility verification passed: timed/untimed raster, fused output without HDR intermediate, cached/fresh frames, camera changes, fixed/GPU LOD live resizing, timestamps and rejected live graph changes.");
+        Console.WriteLine("Visibility verification passed: timed/untimed raster, cached/fresh frames, camera changes, fixed/GPU LOD live resizing and timestamps.");
     }
 
     public void Dispose() => GpuDevice.DisposeAll(() => _mount?.Unmount(), _graphWorld.Dispose, _render.Dispose, _main.Dispose);

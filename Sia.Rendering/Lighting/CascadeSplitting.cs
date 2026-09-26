@@ -59,15 +59,6 @@ public static class CascadeSplitting
         return math.mul(proj, view);
     }
 
-    public static float4x4 ComputeSceneViewProj(Aabb bounds, float3 direction)
-    {
-        var radius = MathF.Max(.01f, math.length(bounds.HalfExtents));
-        var up = MathF.Abs(direction.y) > .99f ? new float3(0, 0, 1) : new float3(0, 1, 0);
-        var world = float4x4.TRS(bounds.Center - direction * (radius + .02f),
-            quaternion.LookRotation(-direction, up), float3.one);
-        return math.mul(float4x4.Ortho(radius * 2, radius * 2, .01f, radius * 2 + .04f), math.inverse(world));
-    }
-
     public static float4x4 ComputeSpotViewProj(
         in AffineTransform lightWorldTransform,
         float outerAngle,

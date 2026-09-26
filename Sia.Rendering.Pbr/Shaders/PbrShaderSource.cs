@@ -45,12 +45,6 @@ public static class PbrShaderSource
     internal static string LoadVisibilityRaster(bool worldSpace = false) => LoadGeometry("visibility_raster", worldSpace);
 
     internal static string LoadVisibilityResolve(bool worldSpace = false) => LoadGeometry("visibility_resolve", worldSpace);
-    internal static string LoadFusedLighting(bool worldSpace) {
-        var definitions = new Dictionary<string, string> { ["FUSED_LIGHTING"] = "true" };
-        if (worldSpace) definitions["WORLD_SPACE_GEOMETRY"] = "true";
-        return Load(k_ResourcePrefix + "visibility_resolve.wgsl", definitions);
-    }
-    internal static string LoadVisibilityFlat() => Load(k_ResourcePrefix + "visibility_flat.wgsl");
     internal static string LoadVisibilityMaterialTiles() => Load(k_ResourcePrefix + "visibility_material_tiles.wgsl");
     internal static string LoadVisibilityLighting() => Load(k_ResourcePrefix + "visibility_lighting.wgsl");
 
@@ -70,10 +64,6 @@ public static class PbrShaderSource
     private static string Load(string entryResourceName, IReadOnlyDictionary<string, string>? definitions = null)
     {
         var registry = BuildModuleRegistry();
-        if (definitions?.ContainsKey("FUSED_LIGHTING") == true) {
-            registry["pbr::scene_lighting"] = registry["pbr::scene_lighting"]
-                .Replace("@group(2)", "@group(3)").Replace("@group(1)", "@group(2)");
-        }
         var entrySource = ReadResource(entryResourceName);
         var result = WgslPreprocessor.Process(
             entrySource, definitions, (importPath, _) =>

@@ -7,22 +7,12 @@ namespace Sia.Engine.Rendering.Pbr;
 public readonly record struct VisibilityLodSettings(float TargetPixelError, MeshPatchBudget Budget)
 {
     public VisibilityShadowLodSettings? Shadows { get; init; }
-    /// <summary>Root-only rendering keeps one root in each fixed interval. This deliberately sparse mode is for extreme low-quality budgets.</summary>
-    public uint RootCutStride { get; init; } = 1;
 }
 
 public readonly record struct VisibilityShadowLodSettings(float TargetPixelError, MeshPatchBudget Budget);
 
 public sealed partial class VisibilityPbrFeature
 {
-    private bool RootCutOnly => _gpuLod is not null
-        && _lod.Budget.MaxRefinementCandidates == 0 && _lod.Budget.MaxRefinementNodes == 0;
-
-    private bool CpuRootCut => _staticRootCut || (_patchTree is not null && UseStaticRootCut(_lod));
-
-    private static bool UseStaticRootCut(VisibilityLodSettings lod) => lod.RootCutStride >= 16
-        && lod.Budget.MaxRefinementCandidates == 0 && lod.Budget.MaxRefinementNodes == 0;
-
     private static uint WorkCapacity(MeshPatchTree? tree, uint triangles, uint instances, MeshPatchBudget budget)
     {
         if (tree is null) { return checked(triangles * instances); }
@@ -45,42 +35,6 @@ public sealed partial class VisibilityPbrFeature
         MeshPatchSelection? nextSelection = null;
         if (_fixedGeometry is { } geometry) {
             view.WorkCount = checked(geometry.Count * geometry.Stride);
-            return;
-        }
-        else if (CpuRootCut) {
-            if (view.WorkInitialized && view.WorkVersion == _instanceVersion) return;
-            if (_instanceWorld is not null) {
-                var snapshot = _preparedInstances ?? throw new InvalidOperationException("The extracted root-cut scene is unavailable.");
-                for (var instance = 0; instance < snapshot.Entities.Length; instance++) {
-                    if (snapshot.Entities[instance] is null) continue;
-                    var asset = checked((int)snapshot.Instances[instance].Roots.w);
-                    foreach (var triangle in _rootCutTrianglesByAsset[asset]) {
-                        if (count == view.WorkItems.Length) throw new InvalidOperationException("The sparse root cut exceeds its reserved work list.");
-                        view.WorkItems[count++] = new(triangle, (uint)instance);
-                    }
-                }
-            } else if (_patchTree is { } rootTree) {
-                for (uint instance = 0; instance < _transforms.Length; instance++) {
-                    for (var root = 0; root < rootTree.RootCount; root++) {
-                        if ((uint)root % _lod.RootCutStride != 0) continue;
-                        var patch = rootTree.Nodes.Span[root];
-                        for (var triangle = patch.TriangleOffset; triangle < patch.TriangleOffset + patch.TriangleCount; triangle++) {
-                            if (count == view.WorkItems.Length) throw new InvalidOperationException("The sparse root cut exceeds its reserved work list.");
-                            view.WorkItems[count++] = new((uint)triangle, instance);
-                        }
-                    }
-                }
-            } else {
-                throw new InvalidOperationException("A static root cut requires a patch tree or extracted scene assets.");
-            }
-            var staticQueue = _queue.GetWgpu<WGPUQueue>();
-            if (count > 0) Wgpu.WriteBuffer<WorkGpu>(staticQueue, view.WorkBuffer.GetWgpu<WGPUBuffer>(), 0, view.WorkItems.AsSpan(0, count));
-            Wgpu.WriteBuffer<uint>(staticQueue, view.Indirect.GetWgpu<WGPUBuffer>(), 0, [checked((uint)count * 3u), 1, 0, 0]);
-            Wgpu.WriteBuffer<uint>(staticQueue, view.Indirect.GetWgpu<WGPUBuffer>(), 12u * sizeof(uint), [(uint)count]);
-            view.WorkCount = (uint)count;
-            view.Selection = null;
-            view.WorkVersion = _instanceVersion;
-            view.WorkInitialized = true;
             return;
         }
         else if (_patchTree is { } tree) {

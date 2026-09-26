@@ -39,15 +39,15 @@ public sealed partial class VisibilityPbrFeature
 
     private static Entity CreateGeometryLayout(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired) =>
         Layout(world, device, [
-            BufferLayout(0, WGPUBufferBindingType.Uniform, 160, WGPUShaderStage.Vertex | WGPUShaderStage.Compute | WGPUShaderStage.Fragment),
+            BufferLayout(0, WGPUBufferBindingType.Uniform, 160),
             BufferLayout(1, WGPUBufferBindingType.ReadOnlyStorage, 48),
             BufferLayout(3, WGPUBufferBindingType.ReadOnlyStorage, 4),
             BufferLayout(4, WGPUBufferBindingType.ReadOnlyStorage, 8),
-            BufferLayout(5, WGPUBufferBindingType.ReadOnlyStorage, 192, WGPUShaderStage.Vertex | WGPUShaderStage.Compute | WGPUShaderStage.Fragment),
-            BufferLayout(6, WGPUBufferBindingType.ReadOnlyStorage, 8, WGPUShaderStage.Vertex | WGPUShaderStage.Compute | WGPUShaderStage.Fragment)
+            BufferLayout(5, WGPUBufferBindingType.ReadOnlyStorage, 192),
+            BufferLayout(6, WGPUBufferBindingType.ReadOnlyStorage, 8)
         ], acquired);
 
-    private static Entity CreateResolveLayout(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired, bool fused = false)
+    private static Entity CreateResolveLayout(World world, WgpuHandle<WGPUDevice> device, List<Entity> acquired)
     {
         var hdr = WGPUBindGroupLayoutEntry.Default;
         hdr.Binding = 1;
@@ -71,11 +71,6 @@ public sealed partial class VisibilityPbrFeature
         for (uint i = 13; i < 16; i++) { entries[i] = hdr; entries[i].Binding = i; }
         entries[16] = BufferLayout(16, WGPUBufferBindingType.ReadOnlyStorage, 4, WGPUShaderStage.Compute);
         entries[17] = BufferLayout(17, WGPUBufferBindingType.ReadOnlyStorage, 80, WGPUShaderStage.Compute);
-        if (fused) {
-            entries[17].Buffer.Type = WGPUBufferBindingType.Uniform;
-            entries[17].Buffer.MinBindingSize = MaximumMaterialCount * 80ul;
-            entries = entries.Where(e => e.Binding is < 13 or > 15).ToArray();
-        }
         return Layout(world, device, entries, acquired);
     }
 
@@ -93,15 +88,13 @@ public sealed partial class VisibilityPbrFeature
     }
 
     private static unsafe Entity CreateRaster(World world, WgpuHandle<WGPUDevice> device,
-        Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false, bool doubleSided = false, bool worldSpace = false, bool bounds = false)
+        Entity layout, List<Entity> acquired, bool shadow = false, bool indexed = false, bool doubleSided = false, bool worldSpace = false)
     {
         var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
         var first = indexed && !shadow && core;
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadVisibilityRaster(worldSpace), "visibility-raster"), acquired);
         var pipelineLayout = PipelineLayout(world, device, [layout], acquired);
-        var entry = bounds ? "shadow_bounds"u8 : first ? "indexed_first"u8 : indexed ? (shadow ? "indexed_shadow"u8 : "indexed"u8) : "vertex"u8;
-        // Browser compatibility devices need explicit depth writes (#106).
-        // A missing Core flag on native wgpu does not require that workaround.
+        var entry = first ? "indexed_first"u8 : indexed ? (shadow ? "indexed_shadow"u8 : "indexed"u8) : "vertex"u8;
         var explicitDepth = OperatingSystem.IsBrowser() && !core;
         var fragmentEntry = first ? "fragment_first"u8 : explicitDepth ? "fragment_depth"u8 : "fragment"u8;
         fixed (byte* vertexName = entry)
@@ -158,8 +151,8 @@ public sealed partial class VisibilityPbrFeature
         var shader = Own(world, Wgpu.CreateWgslShaderModule(device, PbrShaderSource.LoadToneMapping(), "visibility-output"), acquired);
         var pipeline = Own(world, PbrIblPrecomputePipelines.CreateFullscreenPipeline(device,
             shader.GetWgpu<WGPUShaderModule>(), pipelineLayout.GetWgpu<WGPUPipelineLayout>(), format), acquired);
-        return new(pipeline, layout, format is WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.BGRA8Unorm, format);
+        return new(pipeline, layout, format is WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.BGRA8Unorm);
     }
 
-    private readonly record struct OutputGpu(Entity Pipeline, Entity Layout, bool EncodeSrgb, WGPUTextureFormat Format);
+    private readonly record struct OutputGpu(Entity Pipeline, Entity Layout, bool EncodeSrgb);
 }
