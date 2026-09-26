@@ -11,6 +11,7 @@ public readonly record struct PbrStreamingStatistics(long GeometryBufferBytes, l
 public sealed partial class VisibilityPbrFeature
 {
     private readonly record struct GeometryReservation(int Vertices, int Indices, int Triangles);
+
     private sealed record StreamAsset(int[] Instances, int[] ClusterOffsets, int ClusterCapacity, GeometryClusterGpu[] RootClusters,
         Aabb Bounds, PbrSceneStream.Detail? Detail)
     {
@@ -19,9 +20,9 @@ public sealed partial class VisibilityPbrFeature
         public bool Failed;
         public Aabb ChangedBounds = Bounds;
     }
-    // A cell's bounds are the exact union of its members' bounds, so a cell the frustum culler
-    // rejects guarantees every member is rejected too (AABB support is monotonic under containment).
+
     private readonly record struct AssetCell(int[] Members, Aabb Bounds);
+
     private sealed class GeometryStreaming
     {
         public required PbrSceneStream Source;
@@ -46,13 +47,14 @@ public sealed partial class VisibilityPbrFeature
         public float4x4 LastProjection;
         public bool DemandExhausted;
     }
+
     private GeometryStreaming? _streaming;
+
     public PbrStreamingStatistics? StreamingStatistics => _streaming is not { } s ? null : new(
         s.Reservation.Vertices * 48L + s.Reservation.Indices * 4L + s.Reservation.Triangles * 8L,
         s.Assets.Sum(a => a.Resident?.Bytes ?? 0) + (s.Upload?.Bytes ?? 0), s.UploadedBytes,
         s.PeakUploadBytes, s.Assets.Count(a => a.Resident is not null), s.Published, s.Evicted, s.Pending is not null || s.Ready is not null);
 
-    /// <summary>Creates resident coarse geometry and a bounded detail arena. Call StopStreamingAsync before disposing its resource world.</summary>
     public static VisibilityPbrFeature CreateStreamScene(in GpuFrame frame, PbrSceneStream source,
         WGPUTextureFormat outputFormat, long detailByteBudget = 64 * 1024 * 1024,
         int uploadBytesPerFrame = 1024 * 1024, VisibilityDebugMode mode = VisibilityDebugMode.Shaded)
@@ -128,9 +130,6 @@ public sealed partial class VisibilityPbrFeature
         }
     }
 
-    // Buckets assets into a uniform grid over their combined bounds so distant/off-screen groups
-    // can be rejected by one frustum test instead of one per asset. Built once per streamed scene;
-    // this path has no dynamic instance add/remove yet, so the membership never goes stale.
     private static AssetCell[] BuildCells(StreamAsset[] assets)
     {
         if (assets.Length == 0) return [];
