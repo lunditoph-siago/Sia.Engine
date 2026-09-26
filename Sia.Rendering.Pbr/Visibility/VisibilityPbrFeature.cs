@@ -190,7 +190,7 @@ public sealed partial class VisibilityPbrFeature :
             var resolve = CreateResolve(world, device, geometryLayout, resolveLayout, acquired, worldSpace);
             var materialTiles = CreateMaterialTiles(world, device, acquired);
             var output = CreateOutput(world, device, outputFormat, acquired);
-            var gpuLod = scene is not null && fixedClusters is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired, enableGpuTiming) : (LodGpu?)null;
+            var gpuLod = scene is not null && fixedClusters is null ? CreateLodGpu(world, device, queue, scene, lod, limits, acquired) : (LodGpu?)null;
             var fixedGeometry = fixedClusters is null ? null : (FixedGeometryGpu?)CreateFixedGeometry(world, device, queue, fixedClusters, limits, acquired, worldSpace,
                 reservation is null ? null : capacity);
             return new(in frame, buffers, materialGpu, textures, materialParameters, sourceMaterials.Length, geometryLayout, resolveLayout,

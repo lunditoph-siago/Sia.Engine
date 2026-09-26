@@ -85,6 +85,7 @@ public sealed class PbrRenderFeature :
             "pbr-hdr", RenderGraphTextureFormat.RGBA16Float,
             (uint)extracted.Viewport.Width, (uint)extracted.Viewport.Height));
 
+        Visibility.BuildFrameTiming(ref graph, in context, begin: true);
         PbrRenderGraphHooks.UseClusterLightCullingPass(
             ref graph,
             Renderer,
@@ -121,5 +122,6 @@ public sealed class PbrRenderFeature :
             ref graph, state, extracted, Options, hdr, in frameContext);
         PbrRenderGraphHooks.UseToneMappingPass(
             ref graph, Renderer, state, Options.ToneMappingPass, output, in frameContext);
+        Visibility.BuildFrameTiming(ref graph, in context, begin: false);
     }
 }
