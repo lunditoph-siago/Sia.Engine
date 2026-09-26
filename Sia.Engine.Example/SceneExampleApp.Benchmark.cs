@@ -44,8 +44,8 @@ internal sealed partial class SceneExampleApp
         if (_benchmarkFrames != Program.BenchmarkFrames + 120) return;
         Console.WriteLine("BISTRO_BENCHMARK " + JsonSerializer.Serialize(new BenchmarkReport(
             _materialStream is null ? (_finest ? "finest" : "auto") : "streaming", Program.Quality.ToString(),
-            OutputWidth, OutputHeight, RenderWidth, RenderHeight, _adapterDescription,
-            Program.Offscreen ? "OffscreenReadback3" : _presentMode.ToString(),
+            _framebufferWidth, _framebufferHeight, RenderWidth, RenderHeight, _adapterDescription,
+            _presentMode.ToString(),
             _renderGraph!.PreparePlan().Graph.Passes.Select(pass => pass.Name).ToArray(),
             _firstFrameMilliseconds, 120, Program.BenchmarkFrames, Program.BenchmarkMotion,
             Summarize(_submissionSamples), Summarize(_cadenceSamples), _visibilityLod?.StreamingStatistics,

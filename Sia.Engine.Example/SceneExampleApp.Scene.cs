@@ -167,11 +167,11 @@ internal sealed unsafe partial class SceneExampleApp
         if (_pipeline == ScenePipeline.Bunny) {
             UpdatePatchInspection(deltaTime);
             target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
-            var aspect = (float)OutputWidth / System.Math.Max(1, OutputHeight);
+            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = PatchEye(aspect, target);
         } else if (_pipeline == ScenePipeline.Pbr) {
             UpdatePatchInspection(deltaTime);
-            var aspect = (float)OutputWidth / System.Math.Max(1, OutputHeight);
+            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             var size = _materialBounds.Max - _materialBounds.Min;
             target = new float3(-15.1f, 3.9f, 1.6f);
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));

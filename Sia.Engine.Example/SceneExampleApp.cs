@@ -12,12 +12,10 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 {
     private static int _initialWidth => Program.Width;
     private static int _initialHeight => Program.Height;
-    private int OutputWidth => Program.Offscreen ? Program.Width : _framebufferWidth;
-    private int OutputHeight => Program.Offscreen ? Program.Height : _framebufferHeight;
     private float _renderScale;
     private readonly RenderResolutionController? _resolutionController;
-    private int RenderWidth => System.Math.Max(1, (int)(OutputWidth * _renderScale));
-    private int RenderHeight => System.Math.Max(1, (int)(OutputHeight * _renderScale));
+    private int RenderWidth => System.Math.Max(1, (int)(_framebufferWidth * _renderScale));
+    private int RenderHeight => System.Math.Max(1, (int)(_framebufferHeight * _renderScale));
 
     private GlfwWindow _window;
     private WgpuHandle<WGPUInstance> _instance;
@@ -99,8 +97,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _glfwInitialized = true;
         _window = Glfw.CreateWindow(
             new WindowDescriptor(
-                Program.Offscreen ? 1280 : _initialWidth,
-                Program.Offscreen ? 720 : _initialHeight,
+                _initialWidth,
+                _initialHeight,
                 $"Sia.Engine - {_pipeline} Example",
                 Resizable: true),
             new GlfwWindowOptions(ClientApi.NoApi));
@@ -354,9 +352,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private void RenderFrame()
     {
-#if !BROWSER
-        if (Program.Offscreen) { RenderOffscreenFrame(); return; }
-#endif
         var benchmarkStart = Stopwatch.GetTimestamp();
         var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         _acquireMilliseconds = Stopwatch.GetElapsedTime(benchmarkStart).TotalMilliseconds;
@@ -406,7 +401,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
         Exception? completionError = null;
 #if !BROWSER
-        try { DrainOffscreen(); if (!_device.IsNull) while (DrainGpuTimingStep()) Thread.Yield(); }
+        try { if (!_device.IsNull) while (DrainGpuTimingStep()) Thread.Yield(); }
         catch (Exception error) { completionError = error; }
 #endif
 

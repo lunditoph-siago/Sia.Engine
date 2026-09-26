@@ -40,7 +40,7 @@ internal sealed unsafe partial class SceneExampleApp
             _camera,
             _surfaceKey,
             _depthKey,
-            ColorCacheable: Program.Offscreen);
+            ColorCacheable: false);
         var renderWorld = _renderWorld!;
         var view = renderWorld.GetOrCreateView(_mainViewKey);
         renderWorld.BeginFrame();
@@ -58,8 +58,8 @@ internal sealed unsafe partial class SceneExampleApp
         stageStart = Stopwatch.GetTimestamp();
         var props = new RenderGraphProps(
             _renderGraph!, _renderPipeline, featureContext,
-            OutputWidth, OutputHeight, RenderWidth, RenderHeight, _surfaceFormat, surfaceTexture,
-            Program.Offscreen ? _offscreenBuffers[_offscreenSlot] : default, PrepareGpuTiming(), _visibilityLod);
+            _framebufferWidth, _framebufferHeight, RenderWidth, RenderHeight, _surfaceFormat, surfaceTexture,
+            PrepareGpuTiming(), _visibilityLod);
 
         if (_renderGraphMount is not { } mount) {
             _renderGraphMount = _renderGraphWorld!.Mount(RenderGraph, props);
@@ -81,11 +81,8 @@ internal sealed unsafe partial class SceneExampleApp
             "surface", (RenderGraphTextureFormat)(int)props.SurfaceFormat,
             (uint)props.FramebufferWidth, (uint)props.FramebufferHeight,
             usage: RenderGraphTextureUsage.RenderAttachment);
-        if (Program.Offscreen) { graph.UseTexture(_surfaceKey, surfaceDescriptor); }
-        else {
-            graph.UseImportedTexture(_surfaceKey, surfaceDescriptor);
-            graph.BindImportedTexture(_surfaceKey, props.SurfaceTexture);
-        }
+        graph.UseImportedTexture(_surfaceKey, surfaceDescriptor);
+        graph.BindImportedTexture(_surfaceKey, props.SurfaceTexture);
 
         graph.UseTexture(
             _depthKey,
@@ -108,15 +105,6 @@ internal sealed unsafe partial class SceneExampleApp
                 .Write(_gpuReadbackKey, RenderGraphBufferUsage.CopyDestination),
                 pass => { if (visibility.SampleGpuTiming) Wgpu.CopyBufferToBuffer(pass.CommandEncoder, pass.GetBuffer(timings), 0,
                     pass.GetBuffer(_gpuReadbackKey), 0, TimingBytes); });
-        }
-        if (Program.Offscreen) {
-            graph.UseImportedBuffer(_offscreenReadbackKey, new("offscreen-completion", 256,
-                RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
-            graph.BindImportedBuffer(_offscreenReadbackKey, props.Readback.GetWgpu<WGPUBuffer>());
-            graph.ExportBuffer(_offscreenReadbackKey, RenderGraphBufferUsage.MapRead);
-            graph.UseComputePass(new("offscreen-completion"), "offscreen-completion", declaration => declaration
-                .Read(_surfaceKey, RenderGraphTextureUsage.CopySource).Write(_offscreenReadbackKey, RenderGraphBufferUsage.CopyDestination),
-                pass => Wgpu.CopyTextureToBuffer(pass.CommandEncoder, pass.GetTexture(_surfaceKey), pass.GetBuffer(_offscreenReadbackKey), 1, 1, 256));
         }
 
         return SiaReactive.None;
@@ -143,5 +131,5 @@ internal sealed unsafe partial class SceneExampleApp
         int RenderHeight,
         WGPUTextureFormat SurfaceFormat,
         WgpuHandle<WGPUTexture> SurfaceTexture,
-        Entity Readback, Entity TimingReadback, Sia.Engine.Rendering.Pbr.VisibilityPbrFeature? Visibility);
+        Entity TimingReadback, Sia.Engine.Rendering.Pbr.VisibilityPbrFeature? Visibility);
 }

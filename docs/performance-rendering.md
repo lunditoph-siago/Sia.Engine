@@ -8,7 +8,7 @@ effects. This increment does not establish browser 720p60 or native 4K144.
 ## Scope
 
 The retained changes add output/internal resolution separation, sampled full-frame
-GPU timing and bounded native offscreen completion. Native visibility uses implicit
+GPU timing. Native visibility uses implicit
 depth; the browser retains its capability-dependent depth workaround. Rendering
 uses the existing clustered PBR, LOD selection and instance extraction paths.
 
@@ -32,7 +32,6 @@ Run the native example with arguments; browser queries use the same names withou
 | `--render-scale F` | Internal scale, 0.0625..1; nearest-neighbor final scaling |
 | `--gpu-timing true` | Optional timestamp queries for monolithic PBR scenes |
 | `--target-fps N` | GPU feedback budget, 1..1000; requires timestamp queries |
-| `--offscreen true --benchmark-frames N` | Native only; exact-size PBR output, three bounded completion readbacks |
 | `--present fifo\|immediate` | Native only; immediate falls back when unsupported |
 
 The resolution controller uses a GPU budget of `800 / targetFps` milliseconds,
@@ -41,8 +40,8 @@ sampled every 16 frames. Two over-budget samples reduce scale; 32 samples below
 Output dimensions remain fixed. CPU cadence never drives the GPU controller.
 
 Benchmark JSON reports actual output/internal dimensions, adapter, quality,
-per-frame scale, CPU stages and sampled GPU stages. `OffscreenReadback3` measures
-completion throughput with readback overhead, not physical presentation. Pending
+per-frame scale, CPU stages and sampled GPU stages. Native output uses the window
+surface, and reported dimensions reflect its actual framebuffer size. Pending
 GPU sample counts are reported; final pending samples may miss the emitted report.
 CPU/RAF cadence and summed GPU stages are not interchangeable with full-frame GPU
 time. PBR begin/end markers cover the composed PBR graph.

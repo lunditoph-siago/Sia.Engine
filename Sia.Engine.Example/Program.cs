@@ -17,7 +17,6 @@ public static partial class Program
     internal static int Width { get; private set; } = 1280;
     internal static int Height { get; private set; } = 720;
     internal static bool ImmediatePresent { get; private set; }
-    internal static bool Offscreen { get; private set; }
     internal static bool GpuTiming { get; private set; }
     internal static int TargetFps { get; private set; }
     public static async Task<int> Main(string[] args)
@@ -116,7 +115,6 @@ public static partial class Program
             if (i + 1 == args.Length) { throw new ArgumentException($"Missing value for {args[i]}."); }
             if (args[i] == "--pipeline") { pipeline = ParsePipeline(args[i + 1]); }
             else if (args[i] == "--scene") { scenePath = args[i + 1]; }
-            else if (args[i] == "--offscreen") { Offscreen = bool.Parse(args[i + 1]); }
             else if (args[i] == "--gpu-timing") { GpuTiming = bool.Parse(args[i + 1]); }
             else if (args[i] == "--target-fps") {
                 if (!int.TryParse(args[i + 1], out var fps) || fps is < 1 or > 1000) throw new ArgumentException("Expected --target-fps 1..1000.");
@@ -189,11 +187,8 @@ public static partial class Program
         var streamed = scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true;
         if (GpuTiming && (pipeline != ScenePipeline.Pbr || streamed))
             throw new ArgumentException("--gpu-timing currently requires a monolithic PBR scene.");
-        if (Offscreen && (pipeline != ScenePipeline.Pbr || BenchmarkFrames == 0)) {
-            throw new ArgumentException("--offscreen true requires a PBR benchmark with a finite --benchmark-frames count.");
-        }
 #if BROWSER
-        if (Offscreen || ImmediatePresent) throw new ArgumentException("Offscreen and immediate present benchmarks are native-only.");
+        if (ImmediatePresent) throw new ArgumentException("Immediate present benchmarks are native-only.");
 #endif
         if ((scenePath is not null || finest is not null || camera is not null) && pipeline != ScenePipeline.Pbr) {
             throw new ArgumentException("--scene, --lod and --camera require --pipeline pbr.");
