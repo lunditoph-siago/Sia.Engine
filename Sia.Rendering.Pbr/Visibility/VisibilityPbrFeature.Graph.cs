@@ -47,7 +47,7 @@ public sealed partial class VisibilityPbrFeature
             ImportBuffer(ref graph, s_GeometryKeys[i], _geometry[i], RenderGraphBufferUsage.Storage);
         }
         foreach (var texture in _materialTextures) {
-            var info = Wgpu.GetTextureInfo(texture.Texture.GetWgpu<WGPUTexture>());
+            var info = texture.Texture.Get<WgpuTextureInfo>();
             graph.UseImportedTexture(texture.Key, new RenderGraphTextureDescriptor(texture.Key.ToString(),
                 texture.Srgb ? RenderGraphTextureFormat.RGBA8UnormSrgb : RenderGraphTextureFormat.RGBA8Unorm,
                 info.Size.Width, info.Size.Height, depthOrArrayLayers: info.Size.DepthOrArrayLayers,
@@ -72,7 +72,7 @@ public sealed partial class VisibilityPbrFeature
     private static void ImportBuffer(ref RenderGraphBuildContext graph, RenderGraphBufferKey key, Entity entity, RenderGraphBufferUsage usage)
     {
         var buffer = entity.GetWgpu<WGPUBuffer>();
-        graph.UseImportedBuffer(key, new RenderGraphBufferDescriptor(key.ToString(), Wgpu.GetBufferSize(buffer), usage));
+        graph.UseImportedBuffer(key, new RenderGraphBufferDescriptor(key.ToString(), entity.Get<WgpuBufferInfo>().Size, usage));
         graph.BindImportedBuffer(key, buffer);
     }
 
@@ -117,7 +117,7 @@ public sealed partial class VisibilityPbrFeature
         var entry = WGPUBindGroupEntry.Default;
         entry.Binding = binding;
         entry.Buffer = (WGPUBuffer*)buffer.DangerousGetHandle();
-        entry.Size = Wgpu.GetBufferSize(buffer);
+        entry.Size = entity.Get<WgpuBufferInfo>().Size;
         return entry;
     }
 

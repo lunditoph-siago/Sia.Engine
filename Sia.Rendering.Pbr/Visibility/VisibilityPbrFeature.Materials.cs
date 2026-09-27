@@ -109,6 +109,8 @@ public sealed partial class VisibilityPbrFeature
         descriptor.Usage = WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopyDst;
         descriptor.MipLevelCount = (uint)source.MipLevels.Length;
         var texture = Own(world, Wgpu.CreateTexture(device, descriptor), acquired);
+        texture.AddMany(HList.From(new WgpuTextureInfo(descriptor.Size, descriptor.Dimension,
+            descriptor.Format, descriptor.Usage, descriptor.MipLevelCount, descriptor.SampleCount)));
         for (var layer = 0; layer < sources.Length; layer++) {
             var width = source.Width; var height = source.Height;
             for (var level = 0; level < source.MipLevels.Length; level++) {

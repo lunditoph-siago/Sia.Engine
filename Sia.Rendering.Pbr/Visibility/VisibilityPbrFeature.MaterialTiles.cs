@@ -40,7 +40,7 @@ public sealed partial class VisibilityPbrFeature
         public void PrepareMaterialTiles()
         {
             var size = checked((((ulong)Width + 7) / 8 * (((ulong)Height + 7) / 8) + 1) * (uint)Owner._materialBatches.Length * 4);
-            if (_materialTileBuffer.IsValid && Wgpu.GetBufferSize(_materialTileBuffer.GetWgpu<WGPUBuffer>()) == size) { return; }
+            if (_materialTileBuffer.IsValid && _materialTileBuffer.Get<WgpuBufferInfo>().Size == size) { return; }
             var acquired = new List<Entity>();
             var device = Owner._device.GetWgpu<WGPUDevice>();
             var limits = Wgpu.GetLimits(device);

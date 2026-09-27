@@ -112,9 +112,10 @@ public sealed unsafe class PbrTransparentScene
         }
         Entity Upload<T>(ReadOnlySpan<T> values, WGPUBufferUsage usage, RenderGraphBufferUsage graphUsage) where T : unmanaged
         {
-            var entity = Own(Wgpu.CreateBuffer(device, new WGPUBufferDescriptor {
+            var entity = _world.CreateWgpuBuffer(_device, new WGPUBufferDescriptor {
                 Size = (ulong)values.Length * (ulong)sizeof(T), Usage = usage | WGPUBufferUsage.CopyDst
-            }));
+            });
+            acquired.Add(entity);
             Wgpu.WriteBuffer(_queue.GetWgpu<WGPUQueue>(), entity.GetWgpu<WGPUBuffer>(), 0, values);
             _buffers.Add((new($"transparent-buffer-{_buffers.Count}"), entity, graphUsage));
             return entity;
@@ -141,7 +142,7 @@ public sealed unsafe class PbrTransparentScene
         ImportBuffer(view.CameraKey, view.Camera, RenderGraphBufferUsage.Uniform, ref graph);
         foreach (var buffer in _buffers) { ImportBuffer(buffer.Key, buffer.Buffer, buffer.Usage, ref graph); }
         foreach (var texture in _textures) {
-            var info = Wgpu.GetTextureInfo(texture.Texture.GetWgpu<WGPUTexture>());
+            var info = texture.Texture.Get<WgpuTextureInfo>();
             graph.UseImportedTexture(texture.Key, new RenderGraphTextureDescriptor(texture.Key.ToString(),
                 texture.Srgb ? RenderGraphTextureFormat.RGBA8UnormSrgb : RenderGraphTextureFormat.RGBA8Unorm,
                 info.Size.Width, info.Size.Height, mipLevelCount: info.MipLevelCount, usage: RenderGraphTextureUsage.TextureBinding));
@@ -152,7 +153,7 @@ public sealed unsafe class PbrTransparentScene
 
     private static void ImportBuffer(RenderGraphBufferKey key, Entity buffer, RenderGraphBufferUsage usage, ref RenderGraphBuildContext graph)
     {
-        graph.UseImportedBuffer(key, new RenderGraphBufferDescriptor(key.ToString(), Wgpu.GetBufferSize(buffer.GetWgpu<WGPUBuffer>()), usage));
+        graph.UseImportedBuffer(key, new RenderGraphBufferDescriptor(key.ToString(), buffer.Get<WgpuBufferInfo>().Size, usage));
         graph.BindImportedBuffer(key, buffer.GetWgpu<WGPUBuffer>());
     }
 
@@ -184,8 +185,8 @@ public sealed unsafe class PbrTransparentScene
             _bundles = new Entity[(owner._draws.Length + DrawsPerBundle - 1) / DrawsPerBundle];
             _orderedBundles = new nint[_bundles.Length];
             _recordedCounts = new int[_bundles.Length];
-            Camera = owner._world.OwnWgpu(Wgpu.CreateBuffer(owner._device.GetWgpu<WGPUDevice>(),
-                new WGPUBufferDescriptor { Size = 144, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst }));
+            Camera = owner._world.CreateWgpuBuffer(owner._device,
+                new WGPUBufferDescriptor { Size = 144, Usage = WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst });
             try { if (!owner.HasTransmission) { Group = owner._world.OwnWgpu(PbrTransparentScene.Group(owner._device.GetWgpu<WGPUDevice>(), owner._cameraLayout, [BufferEntry(0, Camera)])); } }
             catch { Camera.Destroy(); throw; }
         }
@@ -256,8 +257,8 @@ public sealed unsafe class PbrTransparentScene
                     WgpuUnsafe.wgpuRenderBundleEncoderSetBindGroup(encoder, 3, (WGPUBindGroup*)draw.Group.GetWgpu<WGPUBindGroup>().DangerousGetHandle(), 0, null);
                     var vertices = draw.Vertices.GetWgpu<WGPUBuffer>();
                     var indices = draw.Indices.GetWgpu<WGPUBuffer>();
-                    WgpuUnsafe.wgpuRenderBundleEncoderSetVertexBuffer(encoder, 0, (WGPUBuffer*)vertices.DangerousGetHandle(), 0, Wgpu.GetBufferSize(vertices));
-                    WgpuUnsafe.wgpuRenderBundleEncoderSetIndexBuffer(encoder, (WGPUBuffer*)indices.DangerousGetHandle(), WGPUIndexFormat.Uint32, 0, Wgpu.GetBufferSize(indices));
+                    WgpuUnsafe.wgpuRenderBundleEncoderSetVertexBuffer(encoder, 0, (WGPUBuffer*)vertices.DangerousGetHandle(), 0, draw.Vertices.Get<WgpuBufferInfo>().Size);
+                    WgpuUnsafe.wgpuRenderBundleEncoderSetIndexBuffer(encoder, (WGPUBuffer*)indices.DangerousGetHandle(), WGPUIndexFormat.Uint32, 0, draw.Indices.Get<WgpuBufferInfo>().Size);
                     WgpuUnsafe.wgpuRenderBundleEncoderDrawIndexed(encoder, draw.Count, 1, 0, 0, 0);
                 }
                 var bundle = WgpuUnsafe.wgpuRenderBundleEncoderFinish(encoder, null);
@@ -284,7 +285,7 @@ public sealed unsafe class PbrTransparentScene
     }
     private static WGPUBindGroupEntry BufferEntry(uint binding, Entity buffer) => new() {
         Binding = binding, Buffer = (WGPUBuffer*)buffer.GetWgpu<WGPUBuffer>().DangerousGetHandle(),
-        Size = Wgpu.GetBufferSize(buffer.GetWgpu<WGPUBuffer>())
+        Size = buffer.Get<WgpuBufferInfo>().Size
     };
     private static WgpuHandle<WGPUBindGroup> Group(WgpuHandle<WGPUDevice> device, Entity layout, ReadOnlySpan<WGPUBindGroupEntry> entries)
     {

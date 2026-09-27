@@ -87,7 +87,7 @@ public sealed partial class VisibilityPbrFeature
         var prefix = Allocate(_world, device, geometry.Count * 16ul + 16, WGPUBufferUsage.Storage, limits, acquired);
         // Main views retain complete index lists. Shadow views share scratch space
         // because their cached result is the atlas depth, not the index list.
-        var indices = shadow ? geometry.Indices : Allocate(_world, device, Wgpu.GetBufferSize(geometry.Indices.GetWgpu<WGPUBuffer>()),
+        var indices = shadow ? geometry.Indices : Allocate(_world, device, geometry.Indices.Get<WgpuBufferInfo>().Size,
             WGPUBufferUsage.Storage | WGPUBufferUsage.Index, limits, acquired);
         var blocks = Allocate(_world, device, CompactionGroups(geometry.Count) * 8ul, WGPUBufferUsage.Storage, limits, acquired);
         WGPUBindGroupEntry[] entries = [BufferEntry(0, uniform), BufferEntry(1, geometry.Source),
