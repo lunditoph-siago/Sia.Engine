@@ -17,7 +17,7 @@ internal sealed partial class SceneExampleApp
         int WarmupFrames, int SampleFrames, bool Moving, Timing CpuFrameMilliseconds, Timing FrameCadenceMilliseconds,
         PbrStreamingStatistics? Streaming, AssetChunkCacheStatistics? Chunks, long ManagedHeapBytes, FrameSample[] Frames,
         bool GpuTimingEnabled, int GpuTimingDropped, int GpuTimingPending, GpuSample[] GpuFrames,
-        int TargetFps, int ResolutionChanges);
+        int TargetFps, int ResolutionChanges, int GraphCompilationCount);
     [JsonSerializable(typeof(BenchmarkReport))]
     private partial class BenchmarkJsonContext : JsonSerializerContext;
     private readonly List<double> _submissionSamples = [], _cadenceSamples = [];
@@ -51,7 +51,7 @@ internal sealed partial class SceneExampleApp
             Summarize(_submissionSamples), Summarize(_cadenceSamples), _visibilityLod?.StreamingStatistics,
             _materialStream?.Statistics, GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
             _timingDropped, _timingSlots.Count(s => s.Mapping is not null), _gpuSamples.ToArray(),
-            Program.TargetFps, _resolutionController?.Changes ?? 0), BenchmarkJsonContext.Default.BenchmarkReport));
+            Program.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount), BenchmarkJsonContext.Default.BenchmarkReport));
         Glfw.RequestClose(_window);
     }
     private static Timing Summarize(List<double> samples)

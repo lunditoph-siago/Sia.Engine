@@ -30,10 +30,8 @@ public sealed partial class VisibilityPbrFeature
         if (begin) ImportBuffer(ref graph, GpuTimingsTarget, timing.Results,
             RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource | RenderGraphBufferUsage.CopyDestination);
         var name = begin ? "pbr-frame-begin" : "pbr-frame-end";
-        graph.UseComputePass(new(name), name, declaration => {
-            declaration.ReadWrite(GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
-            if (!begin) declaration.Read(view.Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
-        }, view.FrameTimestamp);
+        graph.UseComputePass(new(name), name,
+            begin ? view.DeclareFrameBegin : view.DeclareFrameEnd, view.FrameTimestamp);
     }
 
     private TimingGpu CreateTiming(WgpuHandle<WGPUDevice> device, WGPULimits limits, List<Entity> acquired) => new(
@@ -47,6 +45,13 @@ public sealed partial class VisibilityPbrFeature
     {
         public TimingGpu? Timing { get; init; }
         private bool TimingActive => Timing is not null && Owner.SampleGpuTiming;
+        public void DeclareFrameBegin(RenderGraphPassDeclarationBuilder declaration) => declaration
+            .ReadWrite(Owner.GpuTimingsTarget, RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopyDestination);
+        public void DeclareFrameEnd(RenderGraphPassDeclarationBuilder declaration)
+        {
+            DeclareFrameBegin(declaration);
+            declaration.Read(Frame.ColorTarget, RenderGraphTextureUsage.RenderAttachment);
+        }
         public void FrameTimestamp(WgpuReactiveRenderGraphPassContext context)
         {
             if (!TimingActive) return;
