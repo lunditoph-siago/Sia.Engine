@@ -276,6 +276,7 @@ public sealed partial class VisibilityPbrFeature :
         }
         var entity = Own(world, Wgpu.CreateBuffer(device,
             new WGPUBufferDescriptor { Size = size, Usage = usage | WGPUBufferUsage.CopyDst }), acquired);
+        entity.AddMany(HList.From(new WgpuBufferInfo(size, usage | WGPUBufferUsage.CopyDst)));
         Wgpu.WriteBuffer(queue, entity.GetWgpu<WGPUBuffer>(), 0, data);
         return entity;
     }

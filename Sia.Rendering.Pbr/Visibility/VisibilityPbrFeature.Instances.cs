@@ -179,7 +179,7 @@ public sealed partial class VisibilityPbrFeature
         if (previous is null || previous.RootCount != snapshot.RootCount || previous.Instances.Length != instances.Length) {
             var lod = _gpuLod!.Value;
             Wgpu.WriteBuffer<uint4>(queue, lod.Parameters.GetWgpu<WGPUBuffer>(), 0,
-                [new uint4((uint)(Wgpu.GetBufferSize(lod.Patches.GetWgpu<WGPUBuffer>()) / 64), snapshot.RootCount,
+                [new uint4((uint)(lod.Patches.Get<WgpuBufferInfo>().Size / 64), snapshot.RootCount,
                     (uint)instances.Length, lod.DispatchDimension)]);
         }
         if (previous is null || previous.RootMeshlets != snapshot.RootMeshlets || previous.RootTriangles != snapshot.RootTriangles) {
