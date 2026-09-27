@@ -75,7 +75,9 @@ public sealed partial class VisibilityPbrFeature
         if (size > limits.MaxBufferSize || ((usage & WGPUBufferUsage.Storage) != 0 && size > limits.MaxStorageBufferBindingSize)) {
             throw new ArgumentException("Visibility scratch storage exceeds the device binding limit.");
         }
-        return Own(world, Wgpu.CreateBuffer(device, new WGPUBufferDescriptor { Size = size, Usage = usage }), acquired);
+        var entity = Own(world, Wgpu.CreateBuffer(device, new WGPUBufferDescriptor { Size = size, Usage = usage }), acquired);
+        entity.AddMany(HList.From(new WgpuBufferInfo(size, usage)));
+        return entity;
     }
 
     private LodViewGpu CreateLodView(LodGpu lod, Entity camera, Entity work, Entity indirect, WGPULimits limits, List<Entity> acquired)
