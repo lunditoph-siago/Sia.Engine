@@ -68,6 +68,8 @@ internal sealed unsafe partial class SceneExampleApp
             return;
         }
         mount.Update(props);
+        _renderGraphWorld!.FlushReactive();
+        _renderGraph!.PrepareBindings();
         _graphMilliseconds = Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
     }
 
@@ -94,20 +96,33 @@ internal sealed unsafe partial class SceneExampleApp
         var context = props.Context;
         props.Pipeline.BuildRenderGraph(ref graph, in context);
         if (props.TimingReadback.IsValid) {
-            var visibility = props.Visibility!;
-            var timings = visibility.GpuTimingsTarget;
+            var timing = graph.UseState(static () => new TimingReadbackPass());
+            timing.Visibility = props.Visibility!;
             graph.UseImportedBuffer(_gpuReadbackKey, new("example-gpu-timing", TimingBytes,
                 RenderGraphBufferUsage.CopyDestination | RenderGraphBufferUsage.MapRead));
             graph.BindImportedBuffer(_gpuReadbackKey, props.TimingReadback.GetWgpu<WGPUBuffer>());
             graph.ExportBuffer(_gpuReadbackKey, RenderGraphBufferUsage.MapRead);
-            graph.UseComputePass(new("example-gpu-timing"), "example-gpu-timing", declaration => declaration
-                .Read(timings, RenderGraphBufferUsage.CopySource)
-                .Write(_gpuReadbackKey, RenderGraphBufferUsage.CopyDestination),
-                pass => { if (visibility.SampleGpuTiming) Wgpu.CopyBufferToBuffer(pass.CommandEncoder, pass.GetBuffer(timings), 0,
-                    pass.GetBuffer(_gpuReadbackKey), 0, TimingBytes); });
+            graph.UseComputePass(new("example-gpu-timing"), "example-gpu-timing", timing.Declare, timing.Copy);
         }
 
         return SiaReactive.None;
+    }
+
+    private sealed class TimingReadbackPass
+    {
+        public Sia.Engine.Rendering.Pbr.VisibilityPbrFeature Visibility { get; set; } = null!;
+
+        public void Declare(RenderGraphPassDeclarationBuilder declaration) => declaration
+            .Read(Visibility.GpuTimingsTarget, RenderGraphBufferUsage.CopySource)
+            .Write(_gpuReadbackKey, RenderGraphBufferUsage.CopyDestination);
+
+        public void Copy(WgpuReactiveRenderGraphPassContext pass)
+        {
+            if (Visibility.SampleGpuTiming) {
+                Wgpu.CopyBufferToBuffer(pass.CommandEncoder, pass.GetBuffer(Visibility.GpuTimingsTarget), 0,
+                    pass.GetBuffer(_gpuReadbackKey), 0, TimingBytes);
+            }
+        }
     }
 
     private void DisposeRenderGraph()
