@@ -18,6 +18,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Shaders/*.wgsl" />
+    <EmbeddedResource Include="Shaders/**/*.wgsl" />
   </ItemGroup>
 </Project>

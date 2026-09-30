@@ -134,9 +134,9 @@ public sealed class MeshletRasterData
                 }
                 seen[source] = true;
                 for (var corner = 0; corner < 3; corner++) {
-                    var local = meshlets.TriangleIndices[ordinal * 3 + corner];
+                    var local = meshlets.TriangleIndices[(ordinal * 3) + corner];
                     if (local >= cluster.VertexCount
-                        || meshlets.VertexIndices[nextVertex + local] != mesh.Indices[(int)source * 3 + corner]) {
+                        || meshlets.VertexIndices[nextVertex + local] != mesh.Indices[((int)source * 3) + corner]) {
                         throw new ArgumentException("Meshlet topology differs from the source mesh.", nameof(meshlets));
                     }
                 }
@@ -152,7 +152,7 @@ public sealed class MeshletRasterData
         var indices = new uint[checked(meshlets.VertexIndices.Length + triangleCount)];
         WriteMeshlets(meshlets.Meshlets, meshlets.VertexIndices, meshlets.TriangleIndices,
             descriptors, indices, triangles, 0, 0, 0, 0);
-        return new(mesh.Vertices.ToArray(), descriptors, indices, triangles);
+        return new([.. mesh.Vertices], descriptors, indices, triangles);
     }
 
     private static void WriteMeshlets(ReadOnlySpan<Meshlet> source, ReadOnlySpan<uint> references,
@@ -171,7 +171,7 @@ public sealed class MeshletRasterData
             for (var t = 0; t < cluster.TriangleCount; t++) {
                 var ordinal = firstTriangle + t;
                 var corner = ordinal * 3;
-                indices[packedOffset + ordinal] = (uint)(corners[corner] | corners[corner + 1] << 8 | corners[corner + 2] << 16);
+                indices[packedOffset + ordinal] = (uint)(corners[corner] | (corners[corner + 1] << 8) | (corners[corner + 2] << 16));
                 triangles[triangleOffset + ordinal] = new((uint)(meshletOffset + m), (uint)t, 0, 0);
             }
         }

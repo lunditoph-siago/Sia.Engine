@@ -8,14 +8,37 @@ public readonly record struct AssetChunkCacheStatistics(
 
 public sealed class AssetChunkCache : IAsyncDisposable
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Func<AssetChunk, CancellationToken, ValueTask<Stream>> _open;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly HashSet<Entry> _loading = [];
+    private readonly List<Entry> _queued = [];
     private readonly long _budget;
-    private readonly int _concurrency, _maximumPending, _maximumAttempts;
-    private long _reserved, _peak, _clock, _readBytes, _attempts, _hits, _coalesced, _evictions;
+    private readonly int _concurrency;
+    private readonly int _maximumPending;
+    private readonly int _maximumAttempts;
+    private long _reserved, _peak;
+    private long _clock;
+    private long _readBytes, _attempts;
+    private long _hits, _coalesced, _evictions;
     private bool _disposed;
+
+    public AssetChunkCacheStatistics Statistics
+    {
+        get {
+            lock (_gate) {
+                var resident = 0;
+                var queued = 0;
+                foreach (var entry in _entries.Values) {
+                    if (entry.Data is not null) resident++;
+                    else if (!entry.Loading) queued++;
+                }
+                return new(_reserved, _peak, resident, _loading.Count,
+                    queued, Interlocked.Read(ref _readBytes),
+                    Interlocked.Read(ref _attempts), _hits, _coalesced, _evictions);
+            }
+        }
+    }
 
     public AssetChunkCache(Func<AssetChunk, CancellationToken, ValueTask<Stream>> open,
         long byteBudget, int maximumConcurrentReads = 2, int maximumPendingChunks = 128, int maximumReadAttempts = 2)
@@ -33,17 +56,6 @@ public sealed class AssetChunkCache : IAsyncDisposable
         _maximumAttempts = maximumReadAttempts;
     }
 
-    public AssetChunkCacheStatistics Statistics
-    {
-        get {
-            lock (_gate) {
-                return new(_reserved, _peak, _entries.Values.Count(e => e.Data is not null), _loading.Count,
-                    _entries.Values.Count(e => e.Data is null && !e.Loading), Interlocked.Read(ref _readBytes),
-                    Interlocked.Read(ref _attempts), _hits, _coalesced, _evictions);
-            }
-        }
-    }
-
     public async ValueTask<AssetChunkLease> AcquireAsync(AssetChunk chunk, int priority = 0,
         CancellationToken cancellationToken = default)
     {
@@ -58,7 +70,9 @@ public sealed class AssetChunkCache : IAsyncDisposable
                 if (entry.Data is not null) { _hits++; } else { _coalesced++; }
                 entry.Priority = Math.Min(entry.Priority, priority);
             } else {
-                if (_entries.Values.Count(e => e.Data is null) >= _maximumPending) {
+                var pending = 0;
+                foreach (var existing in _entries.Values) if (existing.Data is null) pending++;
+                if (pending >= _maximumPending) {
                     throw new InvalidOperationException("The bounded chunk request queue is full.");
                 }
                 entry = new(chunk, priority, ++_clock);
@@ -83,13 +97,23 @@ public sealed class AssetChunkCache : IAsyncDisposable
     private void Pump()
     {
         if (_disposed) { return; }
-        foreach (var entry in _entries.Values.Where(e => e.Data is null && !e.Loading)
-            .OrderBy(e => e.Priority).ThenBy(e => e.Sequence).ToArray()) {
+        if (_loading.Count >= _concurrency) return;
+        _queued.Clear();
+        foreach (var entry in _entries.Values)
+            if (entry.Data is null && !entry.Loading) _queued.Add(entry);
+        _queued.Sort(static (a, b) => {
+            var priority = a.Priority.CompareTo(b.Priority);
+            return priority != 0 ? priority : a.Sequence.CompareTo(b.Sequence);
+        });
+        foreach (var entry in _queued) {
             if (_loading.Count >= _concurrency) { break; }
             var required = (long)entry.Chunk.Length + 1;
             byte[]? reusable = null;
             while (_reserved + required > _budget) {
-                var victim = _entries.Values.Where(e => e.Data is not null && e.Users == 0).MinBy(e => e.LastUse);
+                Entry? victim = null;
+                foreach (var candidate in _entries.Values)
+                    if (candidate.Data is not null && candidate.Users == 0
+                        && (victim is null || candidate.LastUse < victim.LastUse)) victim = candidate;
                 if (victim is null) { break; }
                 _entries.Remove(victim.Chunk.Id);
                 if (victim.Data!.Length == entry.Chunk.Length) { reusable ??= victim.Data; }
@@ -105,6 +129,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
             _loading.Add(entry);
             _ = LoadAsync(entry);
         }
+        _queued.Clear();
     }
 
     private async Task LoadAsync(Entry entry)
@@ -221,7 +246,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
         Entry[] loading;
         lock (_gate) {
             _disposed = true;
-            loading = _loading.ToArray();
+            loading = [.. _loading];
             foreach (var entry in loading) { RequestCancellation(entry); }
             foreach (var entry in _entries.Values.ToArray()) {
                 if (entry.Data is null && !entry.Loading) {
@@ -241,8 +266,6 @@ public sealed class AssetChunkCache : IAsyncDisposable
 
     private sealed class Entry(AssetChunk chunk, int priority, long sequence)
     {
-        public AssetChunk Chunk { get; } = chunk;
-        public long Sequence { get; } = sequence;
         public int Priority = priority;
         public int Users;
         public long LastUse;
@@ -251,6 +274,9 @@ public sealed class AssetChunkCache : IAsyncDisposable
         public Task? CancelCallbacks;
         public byte[]? Data;
         public byte[]? Reusable;
+
+        public AssetChunk Chunk { get; } = chunk;
+        public long Sequence { get; } = sequence;
         public CancellationTokenSource Cancellation { get; } = new();
         public TaskCompletionSource<byte[]> Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -261,14 +287,25 @@ public sealed class AssetChunkLease : IDisposable
 {
     private Action? _release;
     private ReadOnlyMemory<byte> _memory;
-    internal AssetChunkLease(byte[] bytes, Action release) { _memory = bytes; _release = release; }
-    public ReadOnlyMemory<byte> Memory {
-        get { ObjectDisposedException.ThrowIf(_release is null, this); return _memory; }
+
+    public ReadOnlyMemory<byte> Memory
+    {
+        get {
+            ObjectDisposedException.ThrowIf(_release is null, this);
+            return _memory;
+        }
     }
+
+    internal AssetChunkLease(byte[] bytes, Action release)
+    {
+        _memory = bytes;
+        _release = release;
+    }
+
     public void Dispose()
     {
         var release = Interlocked.Exchange(ref _release, null);
-        if (release is null) { return; }
+        if (release is null) return;
         _memory = default;
         release();
     }

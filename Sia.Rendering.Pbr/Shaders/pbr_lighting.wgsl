@@ -1,6 +1,6 @@
-#define_import_path pbr::pbr
+#define_import_path pbr/pbr_lighting
 
-#import pbr::ibl::{evaluate_sh_irradiance, sample_prefiltered_specular, sample_brdf_lut, fresnel_schlick_roughness}
+#import rendering/Environment/ibl
 
 const PBR_PI: f32 = 3.14159265359;
 
@@ -39,22 +39,17 @@ fn direct_lighting(
     let n_dot_l = max(dot(normal, light_dir), 0.0);
     let n_dot_h = max(dot(normal, half_dir), 0.0);
     let v_dot_h = max(dot(view_dir, half_dir), 0.0);
-
     if (n_dot_l <= 0.0) {
         return vec3<f32>(0.0);
     }
-
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     let ndf = distribution_ggx(n_dot_h, roughness);
     let g = geometry_smith_ggx(n_dot_v, n_dot_l, roughness);
     let f = fresnel_schlick(v_dot_h, f0);
-
     let specular = (ndf * g * f) / max(4.0 * n_dot_v * n_dot_l, 1e-4);
-
     let k_s = f;
     let k_d = (vec3<f32>(1.0) - k_s) * (1.0 - metallic);
     let diffuse = k_d * base_color / PBR_PI;
-
     return (diffuse + specular) * radiance * n_dot_l;
 }
 
@@ -64,7 +59,7 @@ fn indirect_lighting(
     base_color: vec3<f32>,
     metallic: f32,
     roughness: f32,
-    sh: array<vec4<f32>, 9>,
+    irradiance: vec3<f32>,
     prefiltered_env: texture_cube<f32>,
     prefiltered_sampler: sampler,
     prefiltered_mip_count: f32,
@@ -74,17 +69,12 @@ fn indirect_lighting(
     let n_dot_v = max(dot(normal, view_dir), 1e-4);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     let f = fresnel_schlick_roughness(n_dot_v, f0, roughness);
-
     let k_s = f;
     let k_d = (vec3<f32>(1.0) - k_s) * (1.0 - metallic);
-    let irradiance = evaluate_sh_irradiance(sh, normal);
     let diffuse = k_d * base_color * irradiance / PBR_PI;
-
     let reflect_dir = reflect(-view_dir, normal);
-    let prefiltered = sample_prefiltered_specular(
-        prefiltered_env, prefiltered_sampler, reflect_dir, roughness, prefiltered_mip_count);
+    let prefiltered = sample_prefiltered_specular(prefiltered_env, prefiltered_sampler, reflect_dir, roughness, prefiltered_mip_count);
     let env_brdf = sample_brdf_lut(brdf_lut, brdf_lut_sampler, n_dot_v, roughness);
     let specular = prefiltered * (f0 * env_brdf.x + vec3<f32>(env_brdf.y));
-
     return diffuse + specular;
 }

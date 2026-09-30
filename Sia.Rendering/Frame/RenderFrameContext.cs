@@ -13,4 +13,5 @@ public readonly record struct RenderFrameContext(
     RenderGraphTextureKey ColorTarget,
     RenderGraphTextureKey DepthTarget,
     WGPULoadOp ColorLoadOp = WGPULoadOp.Clear,
-    bool ColorCacheable = true);
+    bool ColorCacheable = true,
+    ViewportSize? Viewport = null);

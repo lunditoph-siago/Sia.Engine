@@ -19,7 +19,6 @@ public sealed partial class MeshPatchAsset
         new(Build.Tree.ExtractFinest(), Build.SourceTriangleCount, Build.RemovedDegenerateTriangleCount, 0, 0, 0),
         Settings, SourceHash);
 
-    /// <summary>Returns a standalone coarse cut suitable for a resident streaming fallback.</summary>
     public MeshPatchAsset ExtractRoots()
     {
         var tree = Build.Tree.ExtractRoots();
@@ -33,7 +32,7 @@ public sealed partial class MeshPatchAsset
         ArgumentNullException.ThrowIfNull(source.Vertices);
         ArgumentNullException.ThrowIfNull(source.Indices);
         cancellationToken.ThrowIfCancellationRequested();
-        var snapshot = new MeshData(source.Vertices.ToArray(), source.Indices.ToArray(), source.Bounds);
+        var snapshot = new MeshData([.. source.Vertices], [.. source.Indices], source.Bounds);
         var options = settings ?? MeshPatchBuildSettings.Default;
         var build = MeshPatchBuilder.Build(snapshot, options, cancellationToken);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);

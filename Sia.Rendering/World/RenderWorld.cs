@@ -8,7 +8,6 @@ public sealed class RenderWorld : IDisposable
     private bool _disposed;
 
     public World Entities { get; } = new();
-
     public RenderResourceCollection Resources { get; } = new();
 
     public IReadOnlyCollection<RenderView> Views => _views.Values;
@@ -18,16 +17,19 @@ public sealed class RenderWorld : IDisposable
     public RenderView GetOrCreateView(RenderViewKey key)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_views.TryGetValue(key, out var view)) {
-            return view;
-        }
+        if (_views.TryGetValue(key, out var view)) return view;
 
         view = new RenderView(key);
         _views.Add(key, view);
         return view;
     }
 
-    public bool RemoveView(RenderViewKey key) => _views.Remove(key);
+    public bool RemoveView(RenderViewKey key)
+    {
+        if (!_views.Remove(key, out var view)) return false;
+        view.PersistentResources.DisposeOwned();
+        return true;
+    }
 
     public void BeginFrame()
     {
@@ -40,13 +42,13 @@ public sealed class RenderWorld : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) {
-            return;
-        }
+        if (_disposed) return;
 
         _disposed = true;
+        foreach (var view in _views.Values)
+            view.PersistentResources.DisposeOwned();
         _views.Clear();
-        Resources.Clear();
+        Resources.DisposeOwned();
         Entities.Dispose();
     }
 }

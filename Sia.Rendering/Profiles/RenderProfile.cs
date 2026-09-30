@@ -2,13 +2,20 @@ namespace Sia.Engine.Rendering;
 
 public enum RenderQuality { Low, Medium, High }
 
-/// <summary>Enabled device limits, independent of API names, platform and material model.</summary>
-public readonly record struct RenderCapabilities(ulong MaxBufferBytes, ulong MaxStorageBufferBytes,
-    uint MaxTextureDimension2D, uint MaxTextureArrayLayers, bool TimestampQueries);
+public readonly record struct RenderCapabilities(
+    ulong MaxBufferBytes,
+    ulong MaxStorageBufferBytes,
+    uint MaxTextureDimension2D,
+    uint MaxTextureArrayLayers,
+    bool TimestampQueries);
 
-/// <summary>Explicit quality and residency policy; device limits do not predict device speed.</summary>
-public sealed record RenderProfile(RenderQuality Quality, long DetailGeometryBytes, int UploadBytesPerFrame,
-    uint ShadowResolution, bool ScreenSpaceReflections, bool ScreenSpaceIndirectLighting)
+public sealed record RenderProfile(
+    RenderQuality Quality,
+    long DetailGeometryBytes,
+    int UploadBytesPerFrame,
+    uint ShadowResolution,
+    bool ScreenSpaceReflections,
+    bool ScreenSpaceIndirectLighting)
 {
     public static RenderProfile For(RenderQuality quality) => quality switch {
         RenderQuality.Low => new(quality, 24 * 1024 * 1024, 256 * 1024, 256, false, false),
