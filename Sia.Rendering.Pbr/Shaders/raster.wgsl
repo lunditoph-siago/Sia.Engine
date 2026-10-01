@@ -25,6 +25,16 @@ fn raster_fragment(input: RasterVertex) -> @location(0) u32 {
     return input.ordinal + 1u;
 }
 
+struct DepthRasterOutput {
+    @location(0) id: u32,
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn raster_fragment_depth(input: RasterVertex) -> DepthRasterOutput {
+    return DepthRasterOutput(input.ordinal + 1u, input.position.z);
+}
+
 @vertex
 fn stream_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
 #if STREAM_INSTANCES

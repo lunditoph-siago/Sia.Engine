@@ -152,10 +152,12 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 ]);
             }
             var geometry = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout);
+            var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)_gpu.Device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
+            var rasterFragment = core ? "raster_fragment" : "raster_fragment_depth";
             var rasterShader = Module("raster.wgsl", streamInstances: gpuStream);
             if (!gpuStream) {
-                Raster = Render(rasterShader, geometry, "raster_vertex", "raster_fragment", WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
-                RasterDouble = Render(rasterShader, geometry, "raster_vertex", "raster_fragment", WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
+                Raster = Render(rasterShader, geometry, "raster_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
+                RasterDouble = Render(rasterShader, geometry, "raster_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
                 Shadow = Render(rasterShader, geometry, "shadow_vertex", null, null, true, WGPUCullMode.Back, shadowBias: true);
                 ShadowDouble = Render(rasterShader, geometry, "shadow_vertex", null, null, true, WGPUCullMode.None, shadowBias: true);
             }
@@ -165,8 +167,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
                     GpuBinding.Buffer(13, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex, 112)
                 ]);
                 var streamLayout = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout, StreamWorkLayout);
-                StreamRaster = Render(rasterShader, streamLayout, "stream_vertex", "raster_fragment", WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
-                StreamRasterDouble = Render(rasterShader, streamLayout, "stream_vertex", "raster_fragment", WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
+                StreamRaster = Render(rasterShader, streamLayout, "stream_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
+                StreamRasterDouble = Render(rasterShader, streamLayout, "stream_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
                 StreamShadow = Render(rasterShader, streamLayout, "stream_shadow_vertex", null, null, true, WGPUCullMode.Back, shadowBias: true);
                 StreamShadowDouble = Render(rasterShader, streamLayout, "stream_shadow_vertex", null, null, true, WGPUCullMode.None, shadowBias: true);
             }
