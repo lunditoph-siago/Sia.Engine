@@ -23,6 +23,7 @@ struct Material {
 @group(0) @binding(5) var brdf_lut: texture_2d<f32>;
 @group(0) @binding(6) var environment_sampler: sampler;
 @group(0) @binding(7) var brdf_sampler: sampler;
+@group(0) @binding(11) var depth_sampler: sampler_comparison;
 @group(0) @binding(8) var<uniform> sh: array<vec4<f32>, 9>;
 #if SCENE_GI
 @group(0) @binding(9) var probe_volume: texture_3d<f32>;
@@ -30,6 +31,13 @@ struct Material {
 #endif
 @group(1) @binding(0) var<storage, read> vertices: array<vec4<f32>>;
 @group(1) @binding(1) var<storage, read> topology: array<u32>;
+#if STREAM_INSTANCES
+#import pbr/instance_types
+@group(1) @binding(2) var<storage, read> instances: array<Instance>;
+#endif
+#if SHADING_WORK
+@group(3) @binding(6) var<storage, read> visible_work: array<vec2<u32>>;
+#endif
 @group(2) @binding(0) var<storage, read> materials: array<Material>;
 @group(2) @binding(1) var<uniform> batch: vec4<u32>;
 @group(2) @binding(2) var albedo: texture_2d_array<f32>;
@@ -53,7 +61,11 @@ fn shadow_matrix(layer: u32) -> mat4x4<f32> {
 }
 
 fn vertex_index(triangle: u32, corner: u32) -> u32 {
+#if SHADING_WORK
+    return topology[visible_work[triangle].x * 3u + corner];
+#else
     return topology[triangle * 3u + corner];
+#endif
 }
 
 struct Vertex {
@@ -67,7 +79,17 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
     let index = vertex_index(triangle, corner);
     let p = vertices[index];
     let n = vertices[frame.geometry.x + index];
+#if SHADING_WORK
+    let instance = instances[visible_work[triangle].y];
+    let tangent = vertices[frame.geometry.x * 2u + index];
+    return Vertex(
+        (instance.transform * vec4<f32>(p.xyz, 1.0)).xyz,
+        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
+        n.zw,
+        vec4<f32>((instance.transform * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w));
+#else
     return Vertex(p.xyz, vec3<f32>(p.w, n.xy), n.zw, vertices[frame.geometry.x * 2u + index]);
+#endif
 }
 
 fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
@@ -75,5 +97,9 @@ fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
 }
 
 fn triangle_material(triangle: u32) -> u32 {
+#if SHADING_WORK
+    return instances[visible_work[triangle].y].material.x;
+#else
     return u32(abs(vertices[frame.geometry.x * 2u + vertex_index(triangle, 0u)].w)) - 1u;
+#endif
 }

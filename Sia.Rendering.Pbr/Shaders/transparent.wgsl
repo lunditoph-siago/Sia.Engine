@@ -8,7 +8,7 @@ struct GlassVertex {
     @location(1) normal: vec3<f32>,
     @location(2) tangent: vec4<f32>,
     @location(3) uv: vec2<f32>,
-    @location(4) @interpolate(flat) material: u32,
+    @location(4) @interpolate(flat, either) material: u32,
 }
 
 @vertex
@@ -48,12 +48,13 @@ fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool)
         var pixel = vec2<i32>(input.position.xy);
         if (hit.w > 0.0 && all(uv >= vec2<f32>(0)) && all(uv <= vec2<f32>(1))) {
             let candidate = clamp(vec2<i32>(uv * vec2<f32>(frame.size.xy)), vec2<i32>(0), vec2<i32>(frame.size.xy) - 1);
-            if (textureLoad(opaque_depth, candidate, 0) >= input.position.z) {
+            if (textureSampleCompareLevel(opaque_depth, depth_sampler,
+                (vec2<f32>(candidate) + 0.5) / vec2<f32>(textureDimensions(opaque_depth)), input.position.z) > 0.5) {
                 pixel = candidate;
             }
         }
         let background_color = textureLoad(opaque, pixel, 0).rgb;
-        let f = 0.04 + 0.96 * pow(1.0 - max(dot(-view, s.normal), 0.0), 5.0);
+        let f = 0.04 + 0.96 * pow(1.0 - max(dot(-view, s.normal), 0), 5.0);
         let reflection = scene_lighting(s.position, s.normal, vec3<f32>(0), 0.0, s.rough, s.emission, s.ao, input.position.xy);
         color = mix(color, reflection + (1.0 - f) * s.base * background_color, transmission);
     }

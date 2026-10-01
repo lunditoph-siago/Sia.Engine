@@ -8,7 +8,7 @@ struct ForwardVertex {
     @location(1) normal: vec3<f32>,
     @location(2) tangent: vec4<f32>,
     @location(3) uv: vec2<f32>,
-    @location(4) @interpolate(flat) material: u32,
+    @location(4) @interpolate(flat, either) material: u32,
 }
 
 @vertex

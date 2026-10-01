@@ -15,57 +15,63 @@ internal sealed partial class PbrStreamResidency
     internal PbrSceneStream Source => _source;
     internal PbrGpuHierarchy? Hierarchy { get; private set; }
 
-    internal PbrGpuHierarchy CreateHierarchy(in GpuFrame frame)
+    internal PbrGpuHierarchy CreateHierarchy(in GpuFrame frame, Entity instances)
     {
         var slots = new Dictionary<Key, int>();
         var keys = new List<Key>();
         var nodeCount = 0;
         var partCount = 0;
         var rootCount = 0;
+        var assets = new HashSet<int>();
         foreach (var instance in _source.Instances.Span) {
             var tree = _source.Hierarchies[instance.AssetIndex];
-            nodeCount = checked(nodeCount + tree.Nodes.Length);
             rootCount = checked(rootCount + tree.Roots);
+            if (!assets.Add(instance.AssetIndex)) continue;
+            nodeCount = checked(nodeCount + tree.Nodes.Length);
             foreach (var node in tree.Nodes) partCount = checked(partCount + node.Pages.Length);
         }
         if (((ulong)nodeCount * 64) + (((ulong)partCount + (ulong)rootCount) * 16) > _settings.HierarchyBytes)
             throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget.");
         var nodes = new List<PbrGpuHierarchy.Node>(nodeCount);
         var parts = new List<uint4>(checked(partCount + rootCount));
-        var roots = new List<uint>(rootCount);
+        var roots = new List<uint4>(rootCount);
+        var offsets = new Dictionary<int, int>(assets.Count);
         var capacities = _source.Hierarchies.Select(PbrGpuHierarchy.MaximumCutTriangles).ToArray();
         ulong single = 0, twice = 0;
         for (var instance = 0; instance < _source.Instances.Length; instance++) {
             var info = _source.Instances.Span[instance];
             var tree = _source.Hierarchies[info.AssetIndex];
-            var first = nodes.Count;
             var side = _source.Bootstrap.Materials.Span[info.MaterialIndex].DoubleSided ? 1u : 0u;
             if (side == 0) single = checked(single + capacities[info.AssetIndex]);
             else twice = checked(twice + capacities[info.AssetIndex]);
-            for (var n = 0; n < tree.Nodes.Length; n++) {
-                var node = tree.Nodes[n];
-                var bounds = _bounds[instance] is { } cached ? cached[n]
-                    : BoundsTransform.Apply(PbrSceneStream.NodeBounds(node), info.Transform);
-                var at = parts.Count;
-                foreach (var part in node.Pages) {
-                    var key = PageKey(instance, part.Id);
-                    if (!slots.TryGetValue(key, out var slot)) {
-                        slot = keys.Count;
-                        slots.Add(key, slot);
-                        keys.Add(key);
+            if (!offsets.TryGetValue(info.AssetIndex, out var first)) {
+                first = nodes.Count;
+                offsets.Add(info.AssetIndex, first);
+                for (var n = 0; n < tree.Nodes.Length; n++) {
+                    var node = tree.Nodes[n];
+                    var bounds = PbrSceneStream.NodeBounds(node);
+                    var at = parts.Count;
+                    foreach (var part in node.Pages) {
+                        var key = PageKey(instance, part.Id);
+                        if (!slots.TryGetValue(key, out var slot)) {
+                            slot = keys.Count;
+                            slots.Add(key, slot);
+                            keys.Add(key);
+                        }
+                        parts.Add(new((uint)slot, (uint)part.First, (uint)part.Count, 0));
                     }
-                    parts.Add(new((uint)slot, (uint)part.First, (uint)part.Count, 0));
+                    nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, 0),
+                        new((uint)(first + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
+                        new(node.Parent < 0 ? uint.MaxValue : (uint)(first + node.Parent), 0, 0, 0)));
+                    if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + rootCount) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
+                        throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
                 }
-                nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error * _norms[instance])), new(bounds.Max, 0),
-                    new((uint)(first + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
-                    new(node.Parent < 0 ? uint.MaxValue : (uint)(first + node.Parent), side, 0, 0)));
-                if (n < tree.Roots) roots.Add((uint)(first + n));
-                if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + roots.Count) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
-                    throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
             }
+            for (var root = 0; root < tree.Roots; root++)
+                roots.Add(new((uint)(first + root), (uint)instance, side, 0));
         }
         var rootBase = parts.Count;
-        foreach (var root in roots) parts.Add(new(root, 0, 0, 0));
+        parts.AddRange(roots);
         var mapping = new uint4[keys.Count];
         for (var i = 0; i < keys.Count; i++) {
             if (!_resident.TryGetValue(keys[i], out var page)) continue;
@@ -75,7 +81,7 @@ internal sealed partial class PbrStreamResidency
             throw new NotSupportedException("GPU logical cut exceeds indirect vertex addressing capacity.");
         var hierarchy = new PbrGpuHierarchy(frame, _settings.HierarchyBytes, CollectionsMarshal.AsSpan(nodes),
             CollectionsMarshal.AsSpan(parts), mapping, (uint)rootBase, (uint)roots.Count,
-            checked((uint)single), checked((uint)twice));
+            checked((uint)single), checked((uint)twice), instances);
         _gpuKeys = [.. keys];
         _gpuSlots = slots;
         return Hierarchy = hierarchy;

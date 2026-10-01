@@ -23,8 +23,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
     private long _hits, _coalesced, _evictions;
     private bool _disposed;
 
-    public AssetChunkCacheStatistics Statistics
-    {
+    public AssetChunkCacheStatistics Statistics {
         get {
             lock (_gate) {
                 var resident = 0;
@@ -69,7 +68,8 @@ public sealed class AssetChunkCache : IAsyncDisposable
                 if (entry.Chunk.Length != chunk.Length) { throw new ArgumentException("Conflicting chunk length for the same content ID.", nameof(chunk)); }
                 if (entry.Data is not null) { _hits++; } else { _coalesced++; }
                 entry.Priority = Math.Min(entry.Priority, priority);
-            } else {
+            }
+            else {
                 var pending = 0;
                 foreach (var existing in _entries.Values) if (existing.Data is null) pending++;
                 if (pending >= _maximumPending) {
@@ -180,7 +180,8 @@ public sealed class AssetChunkCache : IAsyncDisposable
             if (failure is null && !_disposed && entry.Users != 0 && !entry.Cancellation.IsCancellationRequested) {
                 entry.Data = bytes!;
                 entry.Ready.TrySetResult(bytes!);
-            } else {
+            }
+            else {
                 _reserved -= (long)entry.Chunk.Length + 1;
                 RemoveCurrent(entry);
                 if (failure is OperationCanceledException || entry.Users == 0) { entry.Ready.TrySetCanceled(); }
@@ -253,7 +254,8 @@ public sealed class AssetChunkCache : IAsyncDisposable
                     _entries.Remove(entry.Chunk.Id);
                     entry.Ready.TrySetException(new ObjectDisposedException(nameof(AssetChunkCache)));
                     _ = FinishCancellationAsync(entry);
-                } else if (entry.Data is not null && entry.Users == 0) {
+                }
+                else if (entry.Data is not null && entry.Users == 0) {
                     _entries.Remove(entry.Chunk.Id);
                     entry.Data = null;
                     _reserved -= (long)entry.Chunk.Length + 1;
@@ -288,8 +290,7 @@ public sealed class AssetChunkLease : IDisposable
     private Action? _release;
     private ReadOnlyMemory<byte> _memory;
 
-    public ReadOnlyMemory<byte> Memory
-    {
+    public ReadOnlyMemory<byte> Memory {
         get {
             ObjectDisposedException.ThrowIf(_release is null, this);
             return _memory;

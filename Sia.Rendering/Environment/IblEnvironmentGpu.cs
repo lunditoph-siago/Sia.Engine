@@ -42,7 +42,11 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
                 DepthOrArrayLayers = 6
             };
             desc.MipLevelCount = Mips;
+            var bindingDimension = WGPUTextureBindingViewDimension.Default;
+            bindingDimension.TextureBindingViewDimension = WGPUTextureViewDimension.Cube;
+            if (OperatingSystem.IsBrowser()) desc.NextInChain = &bindingDimension.Chain;
             _cube = _gpu.Texture(desc, 1048560);
+            desc.NextInChain = null;
             var view = WGPUTextureViewDescriptor.Default;
             view.Dimension = WGPUTextureViewDimension.Cube;
             CubeView = _gpu.Own(Wgpu.CreateTextureView(_cube.GetWgpu<WGPUTexture>(), view));

@@ -45,6 +45,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public Entity TileClassify { get; }
     public Entity Background { get; }
     public Entity Resolve { get; }
+    public Entity ResolveDirect { get; }
 
     public Entity Coverage { get; }
     public Entity CoverageDouble { get; }
@@ -61,10 +62,12 @@ internal sealed unsafe class PbrPipelines : IDisposable
         _sceneGi = sceneGi;
         try {
             var limits = _gpu.Limits;
+            if (gpuStream && limits.MaxStorageBuffersPerShaderStage < 8)
+                throw new NotSupportedException("Instanced GPU visibility requires eight storage buffers per shader stage.");
             if (sceneGi && limits.MaxSampledTexturesPerShaderStage < 11)
                 throw new NotSupportedException("Scene probes require eleven sampled textures.");
-            if (limits.MaxStorageBuffersPerShaderStage < 6 || limits.MaxBindGroups < 4 || limits.MaxSampledTexturesPerShaderStage < 10 || limits.MaxSamplersPerShaderStage < 7 || limits.MaxComputeInvocationsPerWorkgroup < 64)
-                throw new NotSupportedException("Fused PBR requires 4 bind groups, 6 storage buffers, 10 sampled textures, 7 samplers and 64 compute lanes.");
+            if (limits.MaxStorageBuffersPerShaderStage < 6 || limits.MaxBindGroups < 4 || limits.MaxSampledTexturesPerShaderStage < 10 || limits.MaxSamplersPerShaderStage < 8 || limits.MaxComputeInvocationsPerWorkgroup < 64)
+                throw new NotSupportedException("Fused PBR requires 4 bind groups, 6 storage buffers, 10 sampled textures, 8 samplers and 64 compute lanes.");
             if (surfaceData && limits.MaxStorageTexturesPerShaderStage < 3)
                 throw new NotSupportedException("Visibility surface export requires three compute storage textures.");
             var frameEntries = new List<WGPUBindGroupLayoutEntry> {
@@ -76,6 +79,11 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 GpuBinding.Texture(5, WGPUTextureSampleType.Float, k_Shade),
                 GpuBinding.Sampler(6, k_Shade),
                 GpuBinding.Sampler(7, k_Shade),
+                new WGPUBindGroupLayoutEntry {
+                    Binding = 11,
+                    Visibility = k_Shade,
+                    Sampler = new() { Type = WGPUSamplerBindingType.Comparison }
+                },
                 GpuBinding.Buffer(8, WGPUBufferBindingType.Uniform, k_Shade, 144)
             };
             if (sceneGi) {
@@ -92,7 +100,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute)
             ]);
-            GeometryLayout = GpuBinding.Layout(_gpu, Enumerable.Range(0, 2).Select(i => GpuBinding.Buffer((uint)i, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Vertex | WGPUShaderStage.Compute)).ToArray());
+            GeometryLayout = GpuBinding.Layout(_gpu, Enumerable.Range(0, gpuStream ? 3 : 2).Select(i => GpuBinding.Buffer((uint)i, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Vertex | WGPUShaderStage.Compute)).ToArray());
             var material = new WGPUBindGroupLayoutEntry[12];
             material[0] = GpuBinding.Buffer(0, WGPUBufferBindingType.ReadOnlyStorage, k_Shade, 96);
             material[1] = GpuBinding.Buffer(1, WGPUBufferBindingType.Uniform, k_Shade, 16);
@@ -112,11 +120,14 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 resolveEntries.Add(GpuBinding.StorageTexture(4, WGPUTextureFormat.RGBA16Float));
                 resolveEntries.Add(GpuBinding.StorageTexture(5, WGPUTextureFormat.RGBA8Unorm));
             }
+            if (gpuStream) resolveEntries.Add(GpuBinding.Buffer(6, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
             ResolveLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(resolveEntries));
-            TileLayout = GpuBinding.Layout(_gpu, [
+            var tileEntries = new List<WGPUBindGroupLayoutEntry> {
                 GpuBinding.Texture(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute)
-            ]);
+            };
+            if (gpuStream) tileEntries.Add(GpuBinding.Buffer(6, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
+            TileLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(tileEntries));
             GlassLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Texture(0, WGPUTextureSampleType.Float, WGPUShaderStage.Fragment),
                 GpuBinding.Texture(1, WGPUTextureSampleType.Depth, WGPUShaderStage.Fragment)
@@ -132,11 +143,16 @@ internal sealed unsafe class PbrPipelines : IDisposable
                     GpuBinding.Texture(1, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension.Cube),
                     GpuBinding.Sampler(2, WGPUShaderStage.Compute),
                     GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float),
-                    GpuBinding.Texture(4, WGPUTextureSampleType.Depth, WGPUShaderStage.Compute)
+                    GpuBinding.Texture(4, WGPUTextureSampleType.Depth, WGPUShaderStage.Compute),
+                    new WGPUBindGroupLayoutEntry {
+                        Binding = 5,
+                        Visibility = WGPUShaderStage.Compute,
+                        Sampler = new() { Type = WGPUSamplerBindingType.Comparison }
+                    }
                 ]);
             }
             var geometry = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout);
-            var rasterShader = Module("raster.wgsl");
+            var rasterShader = Module("raster.wgsl", streamInstances: gpuStream);
             if (!gpuStream) {
                 Raster = Render(rasterShader, geometry, "raster_vertex", "raster_fragment", WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
                 RasterDouble = Render(rasterShader, geometry, "raster_vertex", "raster_fragment", WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
@@ -164,15 +180,17 @@ internal sealed unsafe class PbrPipelines : IDisposable
             }
             var clusterShader = Module("clusters.wgsl", writableClusters: true);
             Cluster = Compute(clusterShader, GpuBinding.PipelineLayout(_gpu, ClusterLayout), "cull");
-            var tiles = Module("tiles.wgsl");
+            var tiles = Module("tiles.wgsl", streamInstances: gpuStream, shadingWork: gpuStream);
             var tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, TileLayout);
             TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-                PbrShaderSource.Compile("resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi), "pbr-resolve"));
+                PbrShaderSource.Compile("resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
+                    streamInstances: gpuStream, shadingWork: gpuStream), "pbr-resolve"));
             var shading = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
             Background = Compute(shade, shading, "background");
             Resolve = Compute(shade, shading, "resolve");
+            ResolveDirect = Compute(shade, shading, "resolve_direct");
             if (opaquePath == PbrOpaquePath.ForwardPlus)
                 ForwardBackground = Compute(Module("forward_background.wgsl"), GpuBinding.PipelineLayout(_gpu, BackgroundLayout), "forward_background");
             var transparent = Module("transparent.wgsl");
@@ -195,8 +213,10 @@ internal sealed unsafe class PbrPipelines : IDisposable
         }
     }
 
-    private Entity Module(string file, bool writableClusters = false)
-        => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(file, writableClusters, sceneGi: _sceneGi), file));
+    private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false)
+        => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
+            PbrShaderSource.Compile(file, writableClusters, sceneGi: _sceneGi,
+                streamInstances: streamInstances, shadingWork: shadingWork), file));
 
     private Entity Compute(Entity shader, Entity layout, string entry)
     {

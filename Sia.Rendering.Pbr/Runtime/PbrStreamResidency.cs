@@ -144,7 +144,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         var page = source.ResidentRoots[id];
                         if (!arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out var allocation))
                             throw new InvalidOperationException("Resident roots cannot fit in the geometry arena.");
-                        var upload = arena.Prepare(page, allocation, instance.Transform, instance.MaterialIndex + 1);
+                        var upload = arena.Prepare(page, allocation,
+                            settings.GpuTraversal ? float4x4.identity : instance.Transform,
+                            settings.GpuTraversal ? 1 : instance.MaterialIndex + 1);
                         while (!upload.Complete) arena.Advance(upload, uint.MaxValue);
                         _resident.Add(key, new(allocation, true, 0));
                         _rootBytes += page.Bytes.Length;
@@ -335,7 +337,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         }
     }
 
-    private Key PageKey(int instance, string id) => new(instance, _pageIndices[id]);
+    private Key PageKey(int instance, string id) => new(_settings.GpuTraversal ? -1 : instance, _pageIndices[id]);
 
     private void Touch(Key key)
     {
@@ -404,8 +406,14 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     if (_resident.ContainsKey(candidate.Key) || !_requests.TryGetReady(_pages[candidate.Key.Page].Id, out var page))
                         continue;
                     if (!Reserve(page!, out var allocation)) continue;
-                    var instance = _source.Instances.Span[candidate.Key.Instance];
-                    _upload = new(candidate.Key, _arena.Prepare(page!, allocation, instance.Transform, instance.MaterialIndex + 1));
+                    var transform = float4x4.identity;
+                    var material = 1;
+                    if (!_settings.GpuTraversal) {
+                        var instance = _source.Instances.Span[candidate.Key.Instance];
+                        transform = instance.Transform;
+                        material = instance.MaterialIndex + 1;
+                    }
+                    _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform, material));
                     break;
                 }
                 if (_upload is null) break;

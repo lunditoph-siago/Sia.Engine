@@ -2,6 +2,7 @@
 
 #import pbr/lighting
 #import pbr/Common/reconstruction
+#import pbr/Common/triangle_debug
 #if SURFACE_DATA
 #import rendering/Visibility/surface_data
 #endif
@@ -20,7 +21,19 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
     if (any(id.xy >= frame.size.xy)) {
         return;
     }
-    if (textureLoad(ids, vec2<i32>(id.xy), 0).x != 0u) {
+    let visible = textureLoad(ids, vec2<i32>(id.xy), 0).x;
+    if (frame.size.w == 4u) {
+        var color = vec3<f32>(0.02);
+        if (visible != 0u) {
+            color = vec3<f32>(1.0, 0.0, 1.0);
+            if (visible <= frame.geometry.z) {
+                color = triangle_debug_color(visible - 1u);
+            }
+        }
+        textureStore(hdr, vec2<i32>(id.xy), vec4<f32>(color, 1.0));
+        return;
+    }
+    if (visible != 0u) {
         return;
     }
     let ndc = (vec2<f32>(id.xy) + .5) / vec2<f32>(frame.size.xy) * vec2<f32>(2, -2) + vec2<f32>(-1, 1);
@@ -34,16 +47,7 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
 #endif
 }
 
-@compute @workgroup_size(8, 8)
-fn resolve(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) local: vec3<u32>) {
-    let tiles = (frame.size.xy + 7u) / 8u;
-    let base = batch.x * (tiles.x * tiles.y + 4u);
-    let index = group.x + group.y * 65535u;
-    if (index >= tile_data[base + 3u]) {
-        return;
-    }
-    let packed = tile_data[base + 4u + index];
-    let pixel = vec2<u32>(packed & 65535u, packed >> 16u) * 8u + local.xy;
+fn resolve_pixel(pixel: vec2<u32>) {
     if (any(pixel >= frame.size.xy)) {
         return;
     }
@@ -66,20 +70,35 @@ fn resolve(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id
 #endif
     var color = vec3<f32>(0.0);
     if (surface.valid) {
-        color = shade(surface, vec2<f32>(pixel) + .5);
-        if (frame.size.w == 1u) {
-            color = surface.normal * .5 + .5;
-        }
-        if (frame.size.w == 2u) {
-            color = vec3<f32>(fract(surface.uv), 0);
-        }
-        if (frame.size.w == 3u) {
-            color = surface.base;
-        }
-        if (frame.size.w == 4u) {
-            let hash = ((id - 1u) + 1u) * 2654435761u;
-            color = vec3<f32>(f32(hash & 255u), f32((hash >> 8u) & 255u), f32(hash >> 24u)) / 255.0;
+        switch frame.size.w {
+            case 1u: { color = surface.normal * .5 + .5; }
+            case 2u: { color = vec3<f32>(fract(surface.uv), 0); }
+            case 3u: { color = surface.base; }
+            case 4u: { color = triangle_debug_color(id - 1u); }
+            default: { color = shade(surface, vec2<f32>(pixel) + .5); }
         }
     }
     textureStore(hdr, vec2<i32>(pixel), vec4<f32>(min(color, vec3<f32>(65504)), 1));
+}
+
+@compute @workgroup_size(8, 8)
+fn resolve_direct(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (frame.size.w != 4u) {
+        resolve_pixel(id.xy);
+    }
+}
+
+@compute @workgroup_size(8, 8)
+fn resolve(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) local: vec3<u32>) {
+    if (frame.size.w == 4u) {
+        return;
+    }
+    let tiles = (frame.size.xy + 7u) / 8u;
+    let base = batch.x * (tiles.x * tiles.y + 4u);
+    let index = group.x + group.y * 65535u;
+    if (index >= tile_data[base + 3u]) {
+        return;
+    }
+    let packed = tile_data[base + 4u + index];
+    resolve_pixel(vec2<u32>(packed & 65535u, packed >> 16u) * 8u + local.xy);
 }

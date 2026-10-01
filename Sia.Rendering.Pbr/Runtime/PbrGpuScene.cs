@@ -33,6 +33,7 @@ internal sealed partial class PbrGpuScene : IDisposable
 
     public Entity Vertices { get; }
     public Entity Topology { get; }
+    public Entity Instances { get; }
     public Entity Group { get; }
 
     public uint VertexCount { get; }
@@ -47,7 +48,7 @@ internal sealed partial class PbrGpuScene : IDisposable
 
     public ulong Bytes => _gpu.Bytes + (_arena?.Bytes ?? 0) + (Streaming?.Hierarchy?.Bytes ?? 0);
 
-    public PbrGpuScene(in GpuFrame frame, PbrSceneAsset source, Entity layout, ulong budget, int[] materialBatches)
+    public PbrGpuScene(in GpuFrame frame, PbrSceneAsset source, Entity layout, ulong budget, int[] materialBatches, Entity instances = default)
     {
         _gpu = new(frame, budget);
         try {
@@ -136,10 +137,12 @@ internal sealed partial class PbrGpuScene : IDisposable
             Bounds = totalTriangles == 0 ? new(float3.zero, float3.zero) : new(minimum, maximum);
             Transparent = [.. transparent];
             Opaque = [.. opaque];
-            Group = GpuBinding.Group(_gpu, layout, [
+            var entries = new List<WGPUBindGroupEntry> {
                 GpuBinding.Buffer(0, Vertices),
                 GpuBinding.Buffer(1, Topology)
-            ]);
+            };
+            if (instances != default) entries.Add(GpuBinding.Buffer(2, instances));
+            Group = GpuBinding.Group(_gpu, layout, CollectionsMarshal.AsSpan(entries));
         }
         catch {
             _gpu.Dispose();

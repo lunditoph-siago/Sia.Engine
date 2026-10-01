@@ -75,16 +75,25 @@ internal sealed unsafe partial class PbrView
                     entries.Add(GpuBinding.Texture(4, ViewOf(normalRoughness).GetWgpu<WGPUTextureView>()));
                     entries.Add(GpuBinding.Texture(5, ViewOf(baseMetallic).GetWgpu<WGPUTextureView>()));
                 }
+                if (_selection is not null) entries.Add(GpuBinding.Buffer(6, _selection.Work));
                 resolve = GpuBinding.Group(next, _owner.Pipelines.ResolveLayout,
                     CollectionsMarshal.AsSpan(entries));
             }
-            var tile = UseForward ? default : GpuBinding.Group(next, _owner.Pipelines.TileLayout, [GpuBinding.Texture(0, idView.GetWgpu<WGPUTextureView>()), GpuBinding.Buffer(2, tiles)]);
+            Entity tile = default;
+            if (!UseForward) {
+                var entries = new List<WGPUBindGroupEntry> {
+                    GpuBinding.Texture(0, idView.GetWgpu<WGPUTextureView>()), GpuBinding.Buffer(2, tiles)
+                };
+                if (_selection is not null) entries.Add(GpuBinding.Buffer(6, _selection.Work));
+                tile = GpuBinding.Group(next, _owner.Pipelines.TileLayout, CollectionsMarshal.AsSpan(entries));
+            }
             var background = !UseForward ? default : GpuBinding.Group(next, _owner.Pipelines.BackgroundLayout, [
                 GpuBinding.Buffer(0, _uniform),
                 GpuBinding.Texture(1, _owner.Environment.CubeView.GetWgpu<WGPUTextureView>()),
                 GpuBinding.Sampler(2, _owner.Environment.Sampler),
                 GpuBinding.Texture(3, hdrView.GetWgpu<WGPUTextureView>()),
-                GpuBinding.Texture(4, depthView.GetWgpu<WGPUTextureView>())
+                GpuBinding.Texture(4, depthView.GetWgpu<WGPUTextureView>()),
+                GpuBinding.Sampler(5, _depthSampler)
             ]);
             var glass = GpuBinding.Group(next, _owner.Pipelines.GlassLayout, [
                 GpuBinding.Texture(0, snapshotView.GetWgpu<WGPUTextureView>()),

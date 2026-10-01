@@ -101,6 +101,7 @@ internal sealed unsafe partial class PbrView
 
     private void Tiles(WgpuReactiveRenderGraphPassContext context)
     {
+        if (_owner.Materials.Groups.Length == 1) return;
         var pass = Wgpu.BeginComputePass(context.CommandEncoder, WGPUComputePassDescriptor.Default);
         try {
             BindShading(pass, _tileGroup);
@@ -119,6 +120,11 @@ internal sealed unsafe partial class PbrView
             BindShading(pass, _resolveGroup);
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.Background.GetWgpu<WGPUComputePipeline>());
             Wgpu.DispatchWorkgroups(pass, (_width + 7) / 8, (_height + 7) / 8);
+            if (_owner.Materials.Groups.Length == 1) {
+                Wgpu.SetComputePipeline(pass, _owner.Pipelines.ResolveDirect.GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroups(pass, (_width + 7) / 8, (_height + 7) / 8);
+                return;
+            }
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.Resolve.GetWgpu<WGPUComputePipeline>());
             for (var batch = 0; batch < _owner.Materials.Groups.Length; batch++) {
                 Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[batch].GetWgpu<WGPUBindGroup>());

@@ -36,6 +36,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly Entity _frameGroup, _rasterGroup, _clusterGroup;
     private readonly Entity _outputUniform;
     private readonly Entity _sampler;
+    private readonly Entity _depthSampler;
     private readonly Entity[] _shadowViews = new Entity[k_ShadowLayers];
     private readonly bool[] _shadowValid = new bool[k_ShadowLayers];
     private readonly bool[] _shadowDirty = new bool[k_ShadowLayers];
@@ -114,6 +115,7 @@ internal sealed unsafe partial class PbrView : IDisposable
         Buffer(owner.Materials.Table, RenderGraphBufferUsage.Storage);
         Buffer(owner.Scene.Vertices, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Vertex);
         Buffer(owner.Scene.Topology, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
+        if (owner.Scene.Instances != default) Buffer(owner.Scene.Instances, RenderGraphBufferUsage.Storage);
         foreach (var entity in owner.Materials.Uniforms)
             Buffer(entity, RenderGraphBufferUsage.Uniform);
         Buffer(owner.Environment.Sh, RenderGraphBufferUsage.Uniform);
@@ -138,6 +140,9 @@ internal sealed unsafe partial class PbrView : IDisposable
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;
             _sampler = _gpu.Own(Wgpu.CreateSampler(_gpu.Device, sampler));
+            sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Nearest;
+            sampler.Compare = WGPUCompareFunction.LessEqual;
+            _depthSampler = _gpu.Own(Wgpu.CreateSampler(_gpu.Device, sampler));
             var desc = WGPUTextureDescriptor.Default;
             desc.Dimension = WGPUTextureDimension._2D;
             desc.Format = WGPUTextureFormat.Depth32Float;
@@ -167,6 +172,7 @@ internal sealed unsafe partial class PbrView : IDisposable
                 GpuBinding.Texture(5, owner.Environment.LutView.GetWgpu<WGPUTextureView>()),
                 GpuBinding.Sampler(6, owner.Environment.Sampler),
                 GpuBinding.Sampler(7, owner.Environment.Sampler),
+                GpuBinding.Sampler(11, _depthSampler),
                 GpuBinding.Buffer(8, owner.Environment.Sh)
             };
             if (owner.Probes is { } probes) {

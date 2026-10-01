@@ -1,10 +1,11 @@
 #define_import_path pbr/stream_traversal
 #import rendering/Geometry/projected_error
+#import pbr/instance_types
 
 struct Node {
     lo: vec4<f32>, hi: vec4<f32>,
     links: vec4<u32>, // first child, child count, first part, part count
-    owner: vec4<u32>  // parent, sidedness, unused, unused
+    owner: vec4<u32>  // parent, unused, unused, unused
 }
 struct Selection {
     vp: mat4x4<f32>,
@@ -16,9 +17,10 @@ struct Selection {
 @group(0) @binding(1) var<storage, read> nodes: array<Node>;
 @group(0) @binding(2) var<storage, read> parts: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> residency: array<vec4<u32>>;
-@group(0) @binding(4) var<storage, read_write> work: array<u32>;
+@group(0) @binding(4) var<storage, read_write> work: array<vec2<u32>>;
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> feedback: array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read> instances: array<Instance>;
 
 @compute @workgroup_size(64)
 fn reset_feedback(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -53,10 +55,9 @@ fn children_ready(n: Node, priority: f32) -> bool {
     }
     return ready;
 }
-fn emit(n: Node) {
+fn emit(n: Node, instance: u32, side: u32) {
     var count = 0u;
     for (var p = 0u; p < n.links.w; p++) { count += parts[n.links.z + p].z; }
-    let side = n.owner.y;
     let first = atomicAdd(&args[side * 4u], count * 3u) / 3u;
     let capacity = select(selection.output.x, selection.output.y, side != 0u);
     if (first > capacity || count > capacity - first) { atomicAdd(&args[10], 1u); return; }
@@ -65,18 +66,27 @@ fn emit(n: Node) {
     for (var p = 0u; p < n.links.w; p++) {
         let part = parts[n.links.z + p];
         let page = residency[part.x];
-        for (var t = 0u; t < part.z; t++) { work[at + t] = page.x + part.y + t; }
+        for (var t = 0u; t < part.z; t++) { work[at + t] = vec2<u32>(page.x + part.y + t, instance); }
         at += part.z;
     }
 }
 @compute @workgroup_size(64)
 fn traverse(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= selection.table.y) { return; }
-    let root = parts[selection.table.x + id.x].x;
+    let entry = parts[selection.table.x + id.x];
+    let root = entry.x;
+    let instance = instances[entry.y];
     var current = root;
     loop {
         let n = nodes[current];
-        let error = bounds_pixel_error(n.lo.xyz, n.hi.xyz, n.lo.w, selection.vp, selection.screen.xy);
+        let local_center = (n.lo.xyz + n.hi.xyz) * 0.5;
+        let local_extent = (n.hi.xyz - n.lo.xyz) * 0.5;
+        let center = (instance.transform * vec4<f32>(local_center, 1.0)).xyz;
+        let extent = abs(instance.transform[0].xyz) * local_extent.x
+            + abs(instance.transform[1].xyz) * local_extent.y
+            + abs(instance.transform[2].xyz) * local_extent.z;
+        let spatial_error = min(n.lo.w * bitcast<f32>(instance.material.y), 1.0e30);
+        let error = bounds_pixel_error(center - extent, center + extent, spatial_error, selection.vp, selection.screen.xy);
         if (error >= 0.0) {
             touch(n);
             if (n.links.y > 0u && (selection.screen.z == 0.0 || error > selection.screen.z)) {
@@ -90,7 +100,7 @@ fn traverse(@builtin(global_invocation_id) id: vec3<u32>) {
                 }
                 else { atomicAdd(&args[11], 1u); }
             }
-            emit(n);
+            emit(n, entry.y, entry.z);
         }
         // Stack-free depth-first walk. Parent links are validated at asset load.
         var done = false;

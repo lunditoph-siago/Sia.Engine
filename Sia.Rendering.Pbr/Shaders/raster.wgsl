@@ -6,12 +6,12 @@ struct StreamSelection {
     vp: mat4x4<f32>, table: vec4<u32>, screen: vec4<f32>, output: vec4<u32>
 }
 
-@group(2) @binding(12) var<storage, read> stream_work: array<u32>;
+@group(2) @binding(12) var<storage, read> stream_work: array<vec2<u32>>;
 @group(2) @binding(13) var<uniform> stream_selection: StreamSelection;
 
 struct RasterVertex {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) ordinal: u32
+    @location(0) @interpolate(flat, either) ordinal: u32
 }
 
 @vertex
@@ -27,14 +27,25 @@ fn raster_fragment(input: RasterVertex) -> @location(0) u32 {
 
 @vertex
 fn stream_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
-    let ordinal = stream_work[index / 3u];
-    return RasterVertex(frame.vp * world_corner(ordinal, index % 3u), ordinal);
+#if STREAM_INSTANCES
+    let ordinal = index / 3u;
+    let work = stream_work[ordinal];
+    let position = instances[work.y].transform * world_corner(work.x, index % 3u);
+    return RasterVertex(frame.vp * position, ordinal);
+#else
+    return RasterVertex(vec4<f32>(0.0), 0u);
+#endif
 }
 
 @vertex
 fn stream_shadow_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let ordinal = stream_work[index / 3u];
-    return shadow_matrix(stream_selection.output.z) * world_corner(ordinal, index % 3u);
+#if STREAM_INSTANCES
+    let work = stream_work[index / 3u];
+    let position = instances[work.y].transform * world_corner(work.x, index % 3u);
+    return shadow_matrix(stream_selection.output.z) * position;
+#else
+    return vec4<f32>(0.0);
+#endif
 }
 
 @vertex

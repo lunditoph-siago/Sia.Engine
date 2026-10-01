@@ -61,7 +61,7 @@ internal sealed class PbrGpuSelection : IDisposable
         _hierarchy = hierarchy;
         _latest = new uint[checked(((int)hierarchy.PageCount * 2) + 12)];
         try {
-            Work = _gpu.Buffer(checked(((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * 4), WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
+            Work = _gpu.Buffer(checked(((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * 8), WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
             Arguments = _gpu.Buffer(48, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             Feedback = _gpu.Buffer(FeedbackBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
             for (var i = 0; i < _groups.Length; i++) {
@@ -72,7 +72,8 @@ internal sealed class PbrGpuSelection : IDisposable
                 _groups[i] = GpuBinding.Group(_gpu, hierarchy.Layout, [
                     GpuBinding.Buffer(0, _configuration[i]), GpuBinding.Buffer(1, hierarchy.Nodes),
                     GpuBinding.Buffer(2, hierarchy.Parts), GpuBinding.Buffer(3, hierarchy.Residency),
-                    GpuBinding.Buffer(4, Work), GpuBinding.Buffer(5, Arguments), GpuBinding.Buffer(6, Feedback)
+                    GpuBinding.Buffer(4, Work), GpuBinding.Buffer(5, Arguments), GpuBinding.Buffer(6, Feedback),
+                    GpuBinding.Buffer(7, hierarchy.Instances)
                 ]);
             }
             for (var i = 0; i < _slots.Length; i++)

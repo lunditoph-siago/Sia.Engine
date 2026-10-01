@@ -46,6 +46,14 @@ public sealed record PbrRendererSettings
     public Aabb? ProbeBounds { get; init; }
     public ulong SceneGiBytes { get; init; } = 160ul * 1024 * 1024;
 
+    public PbrRendererSettings Resolve(RenderCapabilities capabilities)
+    {
+        if (capabilities.MaxBufferBytes < 1024 * 1024 || capabilities.MaxStorageBufferBytes < 1024 * 1024
+            || capabilities.MaxTextureDimension2D == 0 || capabilities.MaxTextureArrayLayers == 0)
+            throw new NotSupportedException("The device cannot provide the minimum rendering resources.");
+        return this with { ShadowResolution = System.Math.Min(ShadowResolution, capabilities.MaxTextureDimension2D) };
+    }
+
     public static PbrRendererSettings ForQuality(RenderQuality quality) => quality switch {
         RenderQuality.Low => new() {
             OpaquePath = PbrOpaquePath.Visibility,

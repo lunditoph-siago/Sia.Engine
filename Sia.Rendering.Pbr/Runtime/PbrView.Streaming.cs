@@ -35,10 +35,11 @@ internal sealed unsafe partial class PbrView
 
     private RenderGraphPassDeclarationBuilder ReadStreamInputs(RenderGraphPassDeclarationBuilder pass)
     {
-        foreach (var (bufferKey, _, usage) in _sceneBuffers) {
+        foreach (var (bufferKey, buffer, usage) in _sceneBuffers) {
             var key = bufferKey.Value;
             if (key.StartsWith(_prefix + "stream-config/", StringComparison.Ordinal)
-                || key == _prefix + "stream-nodes" || key == _prefix + "stream-parts" || key == _prefix + "stream-residency")
+                || key == _prefix + "stream-nodes" || key == _prefix + "stream-parts" || key == _prefix + "stream-residency"
+                || buffer == _owner.Scene.Instances)
                 pass.Read(bufferKey, usage);
         }
         return pass;

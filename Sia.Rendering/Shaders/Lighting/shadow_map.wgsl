@@ -3,6 +3,7 @@
 // Resource and projection are supplied by the caller; no pipeline bindings.
 fn rendering_shadow_visibility(
     atlas: texture_depth_2d_array,
+    depth_sampler: sampler_comparison,
     layer: u32,
     matrix: mat4x4<f32>,
     position: vec3<f32>,
@@ -19,7 +20,8 @@ fn rendering_shadow_visibility(
     for (var y = -1; y <= 1; y++) {
         for (var x = -1; x <= 1; x++) {
             let at = clamp(pixel + vec2<i32>(x, y), vec2<i32>(0), size - 1);
-            visible += select(0.0, 1.0, ndc.z - bias <= textureLoad(atlas, at, i32(layer), 0));
+            visible += textureSampleCompareLevel(atlas, depth_sampler,
+                (vec2<f32>(at) + 0.5) / vec2<f32>(size), i32(layer), ndc.z - bias);
         }
     }
     return visible / 9.0;

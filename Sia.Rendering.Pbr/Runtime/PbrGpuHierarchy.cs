@@ -23,6 +23,7 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public Entity Nodes { get; }
     public Entity Parts { get; }
     public Entity Residency { get; }
+    public Entity Instances { get; }
     public Entity Layout { get; }
     public Entity ResetFeedback { get; }
     public Entity ResetDraws { get; }
@@ -37,9 +38,10 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public ulong Bytes => _gpu.Bytes;
 
     public PbrGpuHierarchy(in GpuFrame frame, ulong budget, ReadOnlySpan<Node> nodes, ReadOnlySpan<uint4> parts,
-        ReadOnlySpan<uint4> mapping, uint rootBase, uint rootCount, uint singleCapacity, uint doubleCapacity)
+        ReadOnlySpan<uint4> mapping, uint rootBase, uint rootCount, uint singleCapacity, uint doubleCapacity, Entity instances)
     {
         _gpu = new(frame, budget);
+        Instances = instances;
         (RootBase, RootCount, PageCount, SingleCapacity, DoubleCapacity) =
             (rootBase, rootCount, (uint)mapping.Length, singleCapacity, doubleCapacity);
         try {
@@ -53,7 +55,8 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
                 GpuBinding.Buffer(3, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(4, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(5, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
-                GpuBinding.Buffer(6, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute)
+                GpuBinding.Buffer(6, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
+                GpuBinding.Buffer(7, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
             ]);
             var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile("stream_traversal.wgsl"), "pbr-stream-traversal"));
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, Layout);
