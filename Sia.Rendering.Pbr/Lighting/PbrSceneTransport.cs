@@ -13,13 +13,14 @@ public static partial class PbrSceneTransport
         foreach (var instance in scene.Instances.Span) {
             if (scene.Materials.Span[instance.Material].AlphaBlend) continue;
             var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
-            foreach (var node in tree.Nodes.Span) {
+            foreach (var node in tree.Nodes.Span[..(finest ? tree.Nodes.Length : tree.RootCount)]) {
                 if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
                 capacity = checked(capacity + node.TriangleCount);
             }
         }
         if (capacity == 0 || capacity > 4_000_000 || ((ulong)capacity * 16) + 32 > maximumBytes)
             throw new InvalidOperationException("Scene transport exceeds its configured build budget or triangle limit.");
+        var identity = Identity(scene, finest);
         var triangles = GC.AllocateUninitializedArray<SceneTraceTriangle>((int)capacity);
         var count = 0;
         foreach (var instance in scene.Instances.Span) {
@@ -30,7 +31,7 @@ public static partial class PbrSceneTransport
             var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
             albedo *= 1 - MathF.Min(1, MathF.Max(0, metal));
             var emission = material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive);
-            foreach (var node in tree.Nodes.Span) {
+            foreach (var node in tree.Nodes.Span[..(finest ? tree.Nodes.Length : tree.RootCount)]) {
                 if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
                 var indices = tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3);
                 for (var i = 0; i < indices.Length; i += 3) {
@@ -42,32 +43,37 @@ public static partial class PbrSceneTransport
                 }
             }
         }
-        return new(triangles.AsSpan(0, count), maximumBytes, Identity(scene, finest));
+        return new(triangles.AsSpan(0, count), maximumBytes, identity);
     }
 
     public static byte[] Identity(PbrSceneAsset scene, bool finest = false)
     {
-        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        ArgumentNullException.ThrowIfNull(scene);
+        var hash = new SceneIdentityHash();
         void Record(float4 v)
         {
             Span<float4> one = [v];
             hash.AppendData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(one));
         }
         Record(new(scene.Geometry.Length, scene.Materials.Length, scene.Instances.Length, finest ? 1 : 0));
+        Span<float4> positions = stackalloc float4[256];
         foreach (var mesh in scene.Geometry.Span) {
             var tree = mesh.Build.Tree;
-            // Preserve the cooked finest identity's compact vertex ordering for bake files.
-            MeshData? compact = finest ? tree.CopyFinestGeometry().Geometry : null;
-            var vertices = compact is null ? tree.Vertices : compact.Vertices.AsSpan();
-            var indices = compact is null ? tree.Indices : compact.Indices.AsSpan();
+            if (finest) {
+                AppendFinestIdentity(hash, tree, positions);
+                continue;
+            }
+            var vertices = tree.Vertices;
+            var indices = tree.Indices;
             Record(new(vertices.Length, indices.Length, tree.RootCount, 0));
-            foreach (var vertex in vertices)
-                Record(new(vertex.Position, 0));
-            if (finest)
-                hash.AppendData(MemoryMarshal.AsBytes(indices));
-            else
-                foreach (var node in tree.Nodes.Span[..tree.RootCount])
-                    hash.AppendData(MemoryMarshal.AsBytes(indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3)));
+            for (var offset = 0; offset < vertices.Length; offset += positions.Length) {
+                var count = System.Math.Min(positions.Length, vertices.Length - offset);
+                for (var i = 0; i < count; i++)
+                    positions[i] = new(vertices[offset + i].Position, 0);
+                hash.AppendData(MemoryMarshal.AsBytes(positions[..count]));
+            }
+            foreach (var node in tree.Nodes.Span[..tree.RootCount])
+                hash.AppendData(MemoryMarshal.AsBytes(indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3)));
         }
         foreach (var material in scene.Materials.Span) {
             var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
@@ -81,7 +87,7 @@ public static partial class PbrSceneTransport
             Record(instance.Transform.c2);
             Record(instance.Transform.c3);
         }
-        return hash.GetHashAndReset();
+        return hash.Finish();
     }
 
     private static float3 Average(PbrTextureData? texture)
