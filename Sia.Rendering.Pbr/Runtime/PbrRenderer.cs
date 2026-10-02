@@ -177,9 +177,17 @@ public sealed class PbrRenderer :
                 : new(frame, stream, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             Environment = new(frame, Settings.BakedEnvironment);
             if (sceneGi) {
+                var dimensions = Settings.BakedProbes?.Dimensions ?? Settings.ProbeDimensions;
+                var probeBytes = DiffuseProbeGpu.FieldBytes(dimensions, Settings.DynamicSceneGi);
+                if (Settings.DynamicSceneGi && probeBytes >= Settings.SceneGiBytes)
+                    throw new ArgumentException("The GI budget cannot hold the probe field.", nameof(settings));
+                var limits = Wgpu.GetLimits(frame.Device.GetWgpu<WGPUDevice>());
+                var traceBudget = Settings.DynamicSceneGi
+                    ? System.Math.Min(Settings.SceneGiBytes - probeBytes,
+                        System.Math.Min(limits.MaxStorageBufferBindingSize, limits.MaxBufferSize)) : 0;
                 var tracing = Settings.DynamicSceneGi
-                    ? stream is null ? PbrSceneTransport.Build(scene, System.Math.Min(Settings.SceneGiBytes, 128ul * 1024 * 1024))
-                        : PbrSceneTransport.Build(stream, System.Math.Min(Settings.SceneGiBytes, 128ul * 1024 * 1024)) : null;
+                    ? stream is null ? PbrSceneTransport.Build(scene, traceBudget)
+                        : PbrSceneTransport.Build(stream, traceBudget) : null;
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
                 var identity = tracing is null ? stream is null ? PbrSceneTransport.Identity(scene) : stream.Identity.ToArray() : tracing.Identity.ToArray();

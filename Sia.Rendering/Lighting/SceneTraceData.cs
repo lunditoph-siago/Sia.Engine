@@ -5,13 +5,49 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering;
 
-public readonly record struct SceneTraceTriangle(
-    float3 A,
-    float3 B,
-    float3 C,
-    float3 Albedo,
-    float3 Emission,
-    bool DoubleSided);
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct SceneTraceTriangle
+{
+    private readonly Components _a;
+    private readonly Components _b;
+    private readonly Components _c;
+    private readonly Components _albedo;
+    private readonly Components _emission;
+
+    public float3 A { get => _a.Vector; init => _a = new(value); }
+    public float3 B { get => _b.Vector; init => _b = new(value); }
+    public float3 C { get => _c.Vector; init => _c = new(value); }
+    public float3 Albedo { get => _albedo.Vector; init => _albedo = new(value); }
+    public float3 Emission { get => _emission.Vector; init => _emission = new(value); }
+    public bool DoubleSided { get; init; }
+
+    public SceneTraceTriangle(float3 A, float3 B, float3 C, float3 Albedo, float3 Emission, bool DoubleSided)
+    {
+        _a = new(A);
+        _b = new(B);
+        _c = new(C);
+        _albedo = new(Albedo);
+        _emission = new(Emission);
+        this.DoubleSided = DoubleSided;
+    }
+
+    public void Deconstruct(out float3 A, out float3 B, out float3 C,
+        out float3 Albedo, out float3 Emission, out bool DoubleSided)
+    {
+        A = this.A;
+        B = this.B;
+        C = this.C;
+        Albedo = this.Albedo;
+        Emission = this.Emission;
+        DoubleSided = this.DoubleSided;
+    }
+
+    private readonly record struct Components(float X, float Y, float Z)
+    {
+        public Components(float3 value) : this(value.x, value.y, value.z) { }
+        public float3 Vector => new(X, Y, Z);
+    }
+}
 
 public sealed class SceneTraceData
 {
@@ -37,7 +73,7 @@ public sealed class SceneTraceData
             throw new ArgumentException("Transport cannot fit its configured packed budget.", nameof(maximumBytes));
         var centroids = GC.AllocateUninitializedArray<Centroid>(triangles.Length);
         var surfaces = new Dictionary<(float3 Albedo, float3 Emission, bool DoubleSided), int>();
-        var vertices = new Dictionary<float3, int>();
+        var vertices = new Dictionary<(float X, float Y, float Z), int>();
         var triangleIndex = 0;
         foreach (ref readonly var t in triangles) {
             var ab = t.B - t.A;
@@ -56,9 +92,9 @@ public sealed class SceneTraceData
             centroids[triangleIndex++] = new((double)t.A.x + t.B.x + t.C.x,
                 (double)t.A.y + t.B.y + t.C.y, (double)t.A.z + t.B.z + t.C.z);
             surfaces.TryAdd((t.Albedo, t.Emission, t.DoubleSided), surfaces.Count);
-            vertices.TryAdd(t.A, vertices.Count);
-            vertices.TryAdd(t.B, vertices.Count);
-            vertices.TryAdd(t.C, vertices.Count);
+            vertices.TryAdd((t.A.x, t.A.y, t.A.z), vertices.Count);
+            vertices.TryAdd((t.B.x, t.B.y, t.B.z), vertices.Count);
+            vertices.TryAdd((t.C.x, t.C.y, t.C.z), vertices.Count);
         }
         var indices = new int[triangles.Length];
         for (var i = 0; i < indices.Length; i++) indices[i] = i;
@@ -100,13 +136,13 @@ public sealed class SceneTraceData
         for (var i = 0; i < ordered.Count; i++) {
             ref readonly var t = ref triangles[ordered[i]];
             packed[triangleOffset + i] = new(
-                vertices[t.A],
-                vertices[t.B],
-                vertices[t.C],
+                vertices[(t.A.x, t.A.y, t.A.z)],
+                vertices[(t.B.x, t.B.y, t.B.z)],
+                vertices[(t.C.x, t.C.y, t.C.z)],
                 surfaces[(t.Albedo, t.Emission, t.DoubleSided)]);
         }
         foreach (var pair in vertices)
-            packed[vertexOffset + pair.Value] = new(pair.Key, 0);
+            packed[vertexOffset + pair.Value] = new(pair.Key.X, pair.Key.Y, pair.Key.Z, 0);
         foreach (var pair in surfaces) {
             var offset = surfaceOffset + (pair.Value * 2);
             var (Albedo, Emission, DoubleSided) = pair.Key;

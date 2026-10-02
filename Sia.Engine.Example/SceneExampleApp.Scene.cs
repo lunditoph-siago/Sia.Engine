@@ -27,18 +27,20 @@ internal sealed unsafe partial class SceneExampleApp
     private RenderWorld? _renderWorld;
     private RenderFeaturePipeline<RenderFrameContext>? _renderPipeline;
     private Entity _camera;
-    private RenderProfile _renderProfile = RenderProfile.For(RenderQuality.Medium);
+    private PbrRendererSettings _qualitySettings = PbrRendererSettings.ForQuality(RenderQuality.Low);
 
     private void InitializeScene()
     {
-        _renderProfile = RenderProfile.For(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
-        Console.WriteLine($"Render profile: {_renderProfile}");
+        if (_pipeline == ScenePipeline.Pbr) {
+            _qualitySettings = PbrRendererSettings.ForQuality(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
+            Console.WriteLine($"Render quality: {Program.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
+        }
         _sceneWorld = new World();
         _renderWorld = new RenderWorld();
 
         var meshRegistry = _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
-        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(_initialWidth, _initialHeight);
+        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(Program.Width, Program.Height);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
         _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
@@ -72,13 +74,7 @@ internal sealed unsafe partial class SceneExampleApp
         }
 
         InitializeMaterialRendering();
-        _sceneRenderer = new PbrRenderer(
-            ClusterLightCullingPipeline.Create(_renderGraphWorld!, _renderDevice),
-            PbrIblPrecomputePipelines.Create(_renderGraphWorld!, _renderDevice),
-            PbrOutputPipelines.Create(_renderGraphWorld!, _renderDevice, _surfaceFormat));
-        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-            .Add(new PbrRenderFeature(_sceneRenderer, _visibilityLod!, PbrRenderFeatureOptions.FromProfile(_renderProfile), transparency: _transparency))
-            .Build();
+        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer!).Build();
     }
 
     private void BuildScene(MeshRegistry meshRegistry)
@@ -169,7 +165,8 @@ internal sealed unsafe partial class SceneExampleApp
             target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = PatchEye(aspect, target);
-        } else if (_pipeline == ScenePipeline.Pbr) {
+        }
+        else if (_pipeline == ScenePipeline.Pbr) {
             UpdatePatchInspection(deltaTime);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             var size = _materialBounds.Max - _materialBounds.Min;
@@ -207,6 +204,7 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneStage = null;
         _sceneWorld?.Dispose();
         _sceneWorld = null;
+        _sceneRenderer?.Dispose();
         _renderWorld?.Dispose();
         _renderWorld = null;
         _sceneRenderer = null;

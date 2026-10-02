@@ -31,6 +31,16 @@ public sealed class DiffuseProbeGpu : IDisposable
 
     public int Count => _shape.Count;
 
+    public static ulong FieldBytes(uint3 dimensions, bool dynamic)
+    {
+        var count = checked((ulong)dimensions.x * dimensions.y * dimensions.z);
+        if (dimensions.x < 2 || dimensions.y < 2 || dimensions.z < 2
+            || count > DiffuseProbeAsset.MaximumProbes)
+            throw new ArgumentOutOfRangeException(nameof(dimensions));
+        return checked((3 + count * 9) * 16 + 48 + count * k_TextureBands * 8
+            + (dynamic ? 176ul : 0));
+    }
+
     public DiffuseProbeGpu(in GpuFrame frame, DiffuseProbeAsset asset,
         SceneTraceData? tracing = null, ulong maximumBytes = 160ul * 1024 * 1024)
     {

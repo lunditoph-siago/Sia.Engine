@@ -1,4 +1,6 @@
 using Sia.Math;
+using System.Runtime.InteropServices;
+using Sia.Engine.Mesh;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -7,36 +9,40 @@ public static partial class PbrSceneTransport
     public static SceneTraceData Build(PbrSceneAsset scene, ulong maximumBytes = 128ul * 1024 * 1024, bool finest = false)
     {
         ArgumentNullException.ThrowIfNull(scene);
-        var triangles = new List<SceneTraceTriangle>();
-        var meshes = scene.Geometry.ToArray().Select(g => {
-            var tree = g.Build.Tree;
-            if (finest) return tree.CopyFinestGeometry().Geometry;
-            var geometry = tree.CopyGeometry().Geometry;
-            var indices = new List<uint>();
-            foreach (var root in tree.Nodes.Span[..tree.RootCount])
-                indices.AddRange(geometry.Indices.AsSpan(root.TriangleOffset * 3, root.TriangleCount * 3));
-            return geometry with { Indices = [.. indices] };
-        }).ToArray();
+        long capacity = 0;
+        foreach (var instance in scene.Instances.Span) {
+            if (scene.Materials.Span[instance.Material].AlphaBlend) continue;
+            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
+            foreach (var node in tree.Nodes.Span) {
+                if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
+                capacity = checked(capacity + node.TriangleCount);
+            }
+        }
+        if (capacity == 0 || capacity > 4_000_000 || ((ulong)capacity * 16) + 32 > maximumBytes)
+            throw new InvalidOperationException("Scene transport exceeds its configured build budget or triangle limit.");
+        var triangles = GC.AllocateUninitializedArray<SceneTraceTriangle>((int)capacity);
+        var count = 0;
         foreach (var instance in scene.Instances.Span) {
             var material = scene.Materials.Span[instance.Material];
             if (material.AlphaBlend) continue; // no alpha-mask representation exists yet
-            var mesh = meshes[instance.Geometry];
+            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
             var albedo = material.Parameters.BaseColor * Average(material.BaseColor);
             var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
             albedo *= 1 - MathF.Min(1, MathF.Max(0, metal));
             var emission = material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive);
-            for (var i = 0; i < mesh.Indices.Length; i += 3) {
-                float3 Position(uint index) => math.mul(instance.Transform, new float4(mesh.Vertices[index].Position, 1)).xyz;
-                var a = Position(mesh.Indices[i]);
-                var b = Position(mesh.Indices[i + 1]);
-                var c = Position(mesh.Indices[i + 2]);
-                if (math.lengthsq(math.cross(b - a, c - a)) < 1e-16f) continue;
-                if (checked(((ulong)(triangles.Count + 1) * 16) + 32) > maximumBytes)
-                    throw new InvalidOperationException("Scene transport exceeds its configured build budget.");
-                triangles.Add(new(a, b, c, albedo, emission, material.DoubleSided));
+            foreach (var node in tree.Nodes.Span) {
+                if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
+                var indices = tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3);
+                for (var i = 0; i < indices.Length; i += 3) {
+                    var a = math.mul(instance.Transform, new float4(tree.Vertices[(int)indices[i]].Position, 1)).xyz;
+                    var b = math.mul(instance.Transform, new float4(tree.Vertices[(int)indices[i + 1]].Position, 1)).xyz;
+                    var c = math.mul(instance.Transform, new float4(tree.Vertices[(int)indices[i + 2]].Position, 1)).xyz;
+                    if (math.lengthsq(math.cross(b - a, c - a)) < 1e-16f) continue;
+                    triangles[count++] = new(a, b, c, albedo, emission, material.DoubleSided);
+                }
             }
         }
-        return new(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(triangles), maximumBytes, Identity(scene, finest));
+        return new(triangles.AsSpan(0, count), maximumBytes, Identity(scene, finest));
     }
 
     public static byte[] Identity(PbrSceneAsset scene, bool finest = false)
@@ -50,15 +56,18 @@ public static partial class PbrSceneTransport
         Record(new(scene.Geometry.Length, scene.Materials.Length, scene.Instances.Length, finest ? 1 : 0));
         foreach (var mesh in scene.Geometry.Span) {
             var tree = mesh.Build.Tree;
-            var geometry = finest ? tree.CopyFinestGeometry().Geometry : tree.CopyGeometry().Geometry;
-            Record(new(geometry.Vertices.Length, geometry.Indices.Length, tree.RootCount, 0));
-            foreach (var vertex in geometry.Vertices)
+            // Preserve the cooked finest identity's compact vertex ordering for bake files.
+            MeshData? compact = finest ? tree.CopyFinestGeometry().Geometry : null;
+            var vertices = compact is null ? tree.Vertices : compact.Vertices.AsSpan();
+            var indices = compact is null ? tree.Indices : compact.Indices.AsSpan();
+            Record(new(vertices.Length, indices.Length, tree.RootCount, 0));
+            foreach (var vertex in vertices)
                 Record(new(vertex.Position, 0));
             if (finest)
-                hash.AppendData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(geometry.Indices.AsSpan()));
+                hash.AppendData(MemoryMarshal.AsBytes(indices));
             else
                 foreach (var node in tree.Nodes.Span[..tree.RootCount])
-                    hash.AppendData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(geometry.Indices.AsSpan(node.TriangleOffset * 3, node.TriangleCount * 3)));
+                    hash.AppendData(MemoryMarshal.AsBytes(indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3)));
         }
         foreach (var material in scene.Materials.Span) {
             var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
