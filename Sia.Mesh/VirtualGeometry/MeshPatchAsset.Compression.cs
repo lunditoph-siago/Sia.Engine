@@ -51,10 +51,11 @@ public sealed partial class MeshPatchAsset
 
     private static byte[] Shuffle(ReadOnlySpan<byte> bytes, bool restore, CancellationToken cancellationToken)
     {
-        Require(bytes.Length >= HeaderSize, "Truncated patch sections.");
+        var headerSize = bytes.StartsWith("SIAPATC2"u8) ? QuadricHeaderSize : HeaderSize;
+        Require(bytes.Length >= headerSize, "Truncated patch sections.");
         var output = new byte[bytes.Length];
-        bytes[..HeaderSize].CopyTo(output);
-        var offset = HeaderSize;
+        bytes[..headerSize].CopyTo(output);
+        var offset = headerSize;
         for (var section = 0; section < Strides.Length; section++) {
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = bytes[(152 + section * 16)..];

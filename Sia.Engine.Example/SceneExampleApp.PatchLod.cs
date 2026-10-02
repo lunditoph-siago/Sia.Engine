@@ -60,6 +60,7 @@ internal sealed partial class SceneExampleApp
         var settings = new PbrRendererSettings {
             TargetPixelError = BunnyPixelError,
             ShadowTexelError = BunnyPixelError,
+            GpuTiming = _gpuTimingEnabled,
             Streaming = new() {
                 GpuTraversal = Program.GpuTraversal,
                 DetailBytes = 8ul * 1024 * 1024,

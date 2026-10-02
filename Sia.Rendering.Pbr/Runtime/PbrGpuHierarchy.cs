@@ -16,7 +16,9 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
         float4x4 Projection,
         uint4 Table,
         float4 Screen,
-        uint4 Output);
+        uint4 Output,
+        float4 EyeNear,
+        float4 ForwardPixels);
 
     private readonly GpuResources _gpu;
 
@@ -49,7 +51,8 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
             Parts = _gpu.Upload(parts);
             Residency = _gpu.Upload(mapping);
             Layout = GpuBinding.Layout(_gpu, [
-                GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 112),
+                GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute,
+                    (ulong)Marshal.SizeOf<Configuration>()),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(3, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),

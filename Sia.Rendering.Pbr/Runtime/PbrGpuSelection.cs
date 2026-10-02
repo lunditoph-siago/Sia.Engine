@@ -65,7 +65,8 @@ internal sealed class PbrGpuSelection : IDisposable
             Arguments = _gpu.Buffer(48, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             Feedback = _gpu.Buffer(FeedbackBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
             for (var i = 0; i < _groups.Length; i++) {
-                _configuration[i] = _gpu.Buffer(112, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
+                _configuration[i] = _gpu.Buffer((ulong)Marshal.SizeOf<PbrGpuHierarchy.Configuration>(),
+                    WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
                 _rasterGroups[i] = GpuBinding.Group(_gpu, rasterLayout, [
                     GpuBinding.Buffer(12, Work), GpuBinding.Buffer(13, _configuration[i])
                 ]);
@@ -130,10 +131,12 @@ internal sealed class PbrGpuSelection : IDisposable
 
     public void Configure(int view, float4x4 projection, uint width, uint height, float error, uint refinementLimit)
     {
+        var lod = ProjectedGeometryError.PrepareLodProjection(projection, width, height);
         var value = new PbrGpuHierarchy.Configuration(projection,
             new(_hierarchy.RootBase, _hierarchy.RootCount, _hierarchy.PageCount, refinementLimit),
             new(width, height, error, 0),
-            new(_hierarchy.SingleCapacity, _hierarchy.DoubleCapacity, view == 7 ? 0u : (uint)view, 0));
+            new(_hierarchy.SingleCapacity, _hierarchy.DoubleCapacity, view == 7 ? 0u : (uint)view, 0),
+            lod.EyeNear, lod.ForwardPixels);
         Wgpu.WriteBuffer<PbrGpuHierarchy.Configuration>(_gpu.Queue, _configuration[view].GetWgpu<WGPUBuffer>(), 0, [value]);
     }
 

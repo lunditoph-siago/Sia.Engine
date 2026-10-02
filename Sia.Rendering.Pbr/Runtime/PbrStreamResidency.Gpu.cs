@@ -60,9 +60,12 @@ internal sealed partial class PbrStreamResidency
                         }
                         parts.Add(new((uint)slot, (uint)part.First, (uint)part.Count, 0));
                     }
-                    nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, 0),
+                    var radius = tree.ErrorMetric == Sia.Engine.Mesh.MeshPatchErrorMetric.Quadric
+                        ? math.length((bounds.Max - bounds.Min) * .5f) : 0;
+                    nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, radius),
                         new((uint)(first + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
-                        new(node.Parent < 0 ? uint.MaxValue : (uint)(first + node.Parent), 0, 0, 0)));
+                        new(node.Parent < 0 ? uint.MaxValue : (uint)(first + node.Parent),
+                            (uint)tree.ErrorMetric, 0, 0)));
                     if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + rootCount) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
                         throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
                 }

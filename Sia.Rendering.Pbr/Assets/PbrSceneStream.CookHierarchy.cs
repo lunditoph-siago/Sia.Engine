@@ -37,24 +37,23 @@ public sealed partial class PbrSceneStream
         for (var g = 0; g < geometryIds.Length; g++) {
             cancellationToken.ThrowIfCancellationRequested();
             var tree = source.Geometry.Span[geometryIds[g]].Build.Tree;
-            var geometry = tree.CopyGeometry().Geometry;
-            var nodes = tree.Nodes.ToArray();
+            var nodes = tree.Nodes;
             var result = new NodeInfo[nodes.Length];
             var parts = Enumerable.Range(0, nodes.Length).Select(_ => new List<PagePart>()).ToArray();
             var indices = new List<uint>();
             var ranges = new List<(int Node, int First, int Count)>();
             var depths = new int[nodes.Length];
             for (var n = 0; n < nodes.Length; n++)
-                depths[n] = nodes[n].Parent < 0 ? 0 : depths[nodes[n].Parent] + 1;
+                depths[n] = nodes.Span[n].Parent < 0 ? 0 : depths[nodes.Span[n].Parent] + 1;
             foreach (var level in Enumerable.Range(0, nodes.Length).GroupBy(n => depths[n]).OrderBy(g => g.Key)) {
                 foreach (var n in level) {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var node = nodes[n];
+                    var node = nodes.Span[n];
                     for (var t = 0; t < node.TriangleCount;) {
                         var count = System.Math.Min(trianglesPerPage - (indices.Count / 3), node.TriangleCount - t);
                         ranges.Add((n, indices.Count / 3, count));
                         for (var j = 0; j < count * 3; j++)
-                            indices.Add(geometry.Indices[((node.TriangleOffset + t) * 3) + j]);
+                            indices.Add(tree.Indices[((node.TriangleOffset + t) * 3) + j]);
                         t += count;
                         if (indices.Count / 3 == trianglesPerPage) await Flush();
                     }
@@ -62,7 +61,7 @@ public sealed partial class PbrSceneStream
                 await Flush();
             }
             for (var n = 0; n < nodes.Length; n++) {
-                var node = nodes[n];
+                var node = nodes.Span[n];
                 var b = node.Bounds;
                 result[n] = new(node.Parent, node.ChildOffset, node.ChildCount, node.EstimatedSpatialError,
                     [b.Min.x, b.Min.y, b.Min.z, b.Max.x, b.Max.y, b.Max.z], [.. parts[n]], node.TriangleCount);
@@ -70,7 +69,7 @@ public sealed partial class PbrSceneStream
             async Task Flush()
             {
                 if (indices.Count == 0) return;
-                var page = StreamGeometryPage.Cook(geometry.Vertices, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(indices));
+                var page = StreamGeometryPage.Cook(tree.Vertices, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(indices));
                 var id = await WriteChunk(SceneStreamBlock.Encode(page.Bytes.Span));
                 pageInfo.TryAdd(id, new(id, page.Bytes.Length, page.VertexCount, page.TriangleCount));
                 foreach (var (Node, First, Count) in ranges) {
@@ -80,7 +79,7 @@ public sealed partial class PbrSceneStream
                 indices.Clear();
                 ranges.Clear();
             }
-            trees[g] = new(tree.RootCount, result);
+            trees[g] = new(tree.RootCount, result, source.Geometry.Span[geometryIds[g]].Settings.ErrorMetric);
         }
         if (roots.Sum(id => (long)pageInfo[id].Bytes) > 256L * 1024 * 1024)
             throw new ArgumentException("Root bootstrap exceeds its budget.");

@@ -11,7 +11,8 @@ public static partial class MeshPatchBuilder
         if (options.MaxLeafTriangles is < 1 or > 512 || options.MaxChildren is < 2 or > 8
             || !float.IsFinite(options.ParentTriangleRatio) || options.ParentTriangleRatio <= 0 || options.ParentTriangleRatio >= 1
             || !float.IsFinite(options.NormalWeight) || options.NormalWeight < 0
-            || !float.IsFinite(options.UVWeight) || options.UVWeight < 0) {
+            || !float.IsFinite(options.UVWeight) || options.UVWeight < 0
+            || !Enum.IsDefined(options.ErrorMetric)) {
             throw new ArgumentOutOfRangeException(nameof(settings));
         }
         var source = Prepare(mesh, cancellationToken, out var removed);
@@ -50,7 +51,8 @@ public static partial class MeshPatchBuilder
             }
             frontier = next;
         }
-        return new(MeshPatchTree.Create(roots.ToArray(), cancellationToken: cancellationToken),
+        return new(MeshPatchTree.Create(roots.ToArray(), 64, 124, cancellationToken,
+                options.ErrorMetric == MeshPatchErrorMetric.Quadric),
             source.Indices.Length / 3 + removed, removed, simplifications, targetMisses, unreduced);
     }
 

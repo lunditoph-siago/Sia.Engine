@@ -10,12 +10,15 @@ public static partial class MeshPatchBuilder
         var (triangles, incident, locked) = Topology(mesh, cancellationToken);
         var deleted = new bool[triangles.Length];
         var revisions = new int[mesh.Vertices.Length];
-        var radii = new float[mesh.Vertices.Length];
-        var nextMember = new int[mesh.Vertices.Length];
+        var quadricError = settings.ErrorMetric == MeshPatchErrorMetric.Quadric;
+        var radii = quadricError ? [] : new float[mesh.Vertices.Length];
+        var nextMember = quadricError ? [] : new int[mesh.Vertices.Length];
         Array.Fill(nextMember, -1);
-        var lastMember = Enumerable.Range(0, mesh.Vertices.Length).ToArray();
+        var lastMember = quadricError ? [] : Enumerable.Range(0, mesh.Vertices.Length).ToArray();
         var positions = mesh.Vertices.Select(Position).ToArray();
-        var quadrics = BuildQuadrics(mesh, triangles, locked, settings, cancellationToken, out var coordinates);
+        var quadrics = BuildQuadrics(mesh, triangles, locked, settings, cancellationToken,
+            out var coordinates, out var positionScale);
+        var maximumCost = 0d;
         var candidates = new PriorityQueue<Collapse, (double Cost, double Length, int From, int To)>();
         var edges = new HashSet<(int, int)>();
         foreach (var face in triangles) {
@@ -23,12 +26,13 @@ public static partial class MeshPatchBuilder
         }
         foreach (var (a, b) in edges) { Enqueue(a, b); Enqueue(b, a); }
         var remaining = triangles.Length;
-        while (remaining - 2 >= target && candidates.TryDequeue(out var collapse, out _)) {
+        while (remaining - 2 >= target && candidates.TryDequeue(out var collapse, out var priority)) {
             cancellationToken.ThrowIfCancellationRequested();
             var (from, to, fromRevision, toRevision) = collapse;
             if (fromRevision != revisions[from] || toRevision != revisions[to] || incident[from].Count == 0
                 || incident[to].Count == 0 || locked[from]) { continue; }
             if (!CanCollapse(from, to, triangles, incident, locked, positions, mesh.Vertices)) { continue; }
+            maximumCost = System.Math.Max(maximumCost, priority.Cost);
             var affected = new HashSet<int>();
             foreach (var t in incident[from].Concat(incident[to])) {
                 var face = triangles[t];
@@ -45,13 +49,15 @@ public static partial class MeshPatchBuilder
                 }
             }
             for (var i = 0; i < k_QuadricSize; i++) { quadrics[to * k_QuadricSize + i] += quadrics[from * k_QuadricSize + i]; }
-            var radius = (double)radii[to];
-            for (var member = from; member >= 0; member = nextMember[member]) {
-                radius = System.Math.Max(radius, math.length(positions[member] - positions[to]));
+            if (!quadricError) {
+                var radius = (double)radii[to];
+                for (var member = from; member >= 0; member = nextMember[member]) {
+                    radius = System.Math.Max(radius, math.length(positions[member] - positions[to]));
+                }
+                radii[to] = RoundUp(radius);
+                nextMember[lastMember[to]] = from;
+                lastMember[to] = lastMember[from];
             }
-            radii[to] = RoundUp(radius);
-            nextMember[lastMember[to]] = from;
-            lastMember[to] = lastMember[from];
             edges.Clear();
             foreach (var v in affected) {
                 revisions[v]++;
@@ -70,9 +76,12 @@ public static partial class MeshPatchBuilder
             indices[offset++] = (uint)triangles[t].B;
             indices[offset++] = (uint)triangles[t].C;
         }
-        var error = 0f;
-        for (var v = 0; v < incident.Length; v++) {
-            if (incident[v].Count != 0) { error = MathF.Max(error, radii[v]); }
+        // Coordinates are normalized by positionScale; restore mesh-space units.
+        var error = quadricError ? RoundUp(System.Math.Sqrt(maximumCost) * positionScale) : 0f;
+        if (!quadricError) {
+            for (var v = 0; v < incident.Length; v++) {
+                if (incident[v].Count != 0) { error = MathF.Max(error, radii[v]); }
+            }
         }
         return (Compact(mesh.Vertices, indices), error);
 
