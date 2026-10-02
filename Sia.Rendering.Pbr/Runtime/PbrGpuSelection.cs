@@ -55,17 +55,17 @@ internal sealed class PbrGpuSelection : IDisposable
     internal ReadOnlySpan<Entity> Configurations => _configuration;
 
     private ulong FeedbackBytes => (ulong)_hierarchy.PageCount * 8;
-    private ulong ReadbackBytes => FeedbackBytes + 48;
+    private ulong ReadbackBytes => FeedbackBytes + 64;
 
     public PbrGpuSelection(in GpuFrame frame, PbrGpuHierarchy hierarchy, Entity rasterLayout, ulong budget)
     {
         _gpu = new(frame, budget);
         _hierarchy = hierarchy;
-        _latest = new uint[checked(((int)hierarchy.PageCount * 2) + 12)];
+        _latest = new uint[checked(((int)hierarchy.PageCount * 2) + 16)];
         try {
             // Selected nodes and two traversal frontiers occupy disjoint buffer tails.
             // Sharing the binding keeps the compute storage-buffer count unchanged.
-            Work = _gpu.Buffer(checked((((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * 8)
+            Work = _gpu.Buffer(checked((((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * 16)
                 + ((ulong)hierarchy.NodeCapacity * 48)), WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
             Arguments = _gpu.Buffer(80, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             // A writable counter buffer cannot also supply this dispatch's indirect arguments.
@@ -118,7 +118,7 @@ internal sealed class PbrGpuSelection : IDisposable
                             if ((_latest[i * 2] | _latest[(i * 2) + 1]) != 0) _activeFeedback.Add(i);
                         _latestFrame = slot.Frame;
                         var offset = (int)_hierarchy.PageCount * 2;
-                        VisibleTriangles = checked((_latest[offset] + _latest[offset + 4]) / 3);
+                        VisibleTriangles = _latest[offset + 15];
                         DeferredRefinements = checked(_latest[offset + 9] + _latest[offset + 11]);
                     }
                 }
@@ -225,7 +225,7 @@ internal sealed class PbrGpuSelection : IDisposable
         if (_capture < 0) return;
         var slot = _slots[_capture];
         Wgpu.CopyBufferToBuffer(encoder, Feedback.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), 0, FeedbackBytes);
-        Wgpu.CopyBufferToBuffer(encoder, Arguments.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), FeedbackBytes, 48);
+        Wgpu.CopyBufferToBuffer(encoder, Arguments.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), FeedbackBytes, 64);
         slot.Frame = _clock;
         slot.Recorded = true;
     }

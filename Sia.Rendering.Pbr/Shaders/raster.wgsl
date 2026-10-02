@@ -3,7 +3,7 @@
 #import pbr/bindings
 #import pbr/stream_selection_types
 
-@group(2) @binding(12) var<storage, read> stream_work: array<vec2<u32>>;
+@group(2) @binding(12) var<storage, read> stream_work: array<vec4<u32>>;
 @group(2) @binding(13) var<uniform> stream_selection: StreamSelection;
 
 struct RasterVertex {
@@ -33,11 +33,14 @@ fn raster_fragment_depth(input: RasterVertex) -> DepthRasterOutput {
 }
 
 @vertex
-fn stream_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
+fn stream_vertex(@builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> RasterVertex {
 #if STREAM_INSTANCES
-    let ordinal = index / 3u;
-    let work = stream_work[ordinal];
-    let position = instances[work.y].transform * world_corner(work.x, index % 3u);
+    let record = index / (STREAM_WORK_BLOCK_TRIANGLES * 3u) + instance_index;
+    let local = (index % (STREAM_WORK_BLOCK_TRIANGLES * 3u)) / 3u;
+    let work = stream_work[record];
+    if (local >= work.z) { return RasterVertex(vec4<f32>(0.0, 0.0, 0.0, 1.0), 0u); }
+    let ordinal = record * STREAM_WORK_BLOCK_TRIANGLES + local;
+    let position = instances[work.y].transform * world_corner(work.x + local, index % 3u);
     return RasterVertex(frame.vp * position, ordinal);
 #else
     return RasterVertex(vec4<f32>(0.0), 0u);
@@ -45,10 +48,13 @@ fn stream_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
 }
 
 @vertex
-fn stream_shadow_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+fn stream_shadow_vertex(@builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> @builtin(position) vec4<f32> {
 #if STREAM_INSTANCES
-    let work = stream_work[index / 3u];
-    let position = instances[work.y].transform * world_corner(work.x, index % 3u);
+    let record = index / (STREAM_WORK_BLOCK_TRIANGLES * 3u) + instance_index;
+    let local = (index % (STREAM_WORK_BLOCK_TRIANGLES * 3u)) / 3u;
+    let work = stream_work[record];
+    if (local >= work.z) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    let position = instances[work.y].transform * world_corner(work.x + local, index % 3u);
     return shadow_matrix(stream_selection.output.z) * position;
 #else
     return vec4<f32>(0.0);

@@ -37,14 +37,15 @@ internal sealed partial class PbrStreamResidency
         var roots = new List<uint4>(rootCount);
         var offsets = new Dictionary<int, int>(assets.Count);
         var capacities = _source.Hierarchies.Select(PbrGpuHierarchy.MaximumCut).ToArray();
-        ulong single = 0, twice = 0, selectedNodes = 0;
+        ulong single = 0, twice = 0, selectedNodes = 0, triangles = 0;
         for (var instance = 0; instance < _source.Instances.Length; instance++) {
             var info = _source.Instances.Span[instance];
             var tree = _source.Hierarchies[info.AssetIndex];
             var side = _source.Bootstrap.Materials.Span[info.MaterialIndex].DoubleSided ? 1u : 0u;
             var capacity = capacities[info.AssetIndex];
-            if (side == 0) single = checked(single + capacity.Triangles);
-            else twice = checked(twice + capacity.Triangles);
+            if (side == 0) single = checked(single + capacity.Records);
+            else twice = checked(twice + capacity.Records);
+            triangles = checked(triangles + capacity.Triangles);
             selectedNodes = checked(selectedNodes + capacity.Nodes);
             if (!offsets.TryGetValue(info.AssetIndex, out var first)) {
                 first = nodes.Count;
@@ -81,7 +82,8 @@ internal sealed partial class PbrStreamResidency
             if (!_resident.TryGetValue(keys[i], out var page)) continue;
             mapping[i] = new(page.Allocation.Triangles.Offset, page.Allocation.Triangles.Count, page.Root ? 1u : 0u, 1);
         }
-        if (single > uint.MaxValue / 3 || twice > uint.MaxValue / 3 || single + twice > uint.MaxValue / 3)
+        if (single + twice > uint.MaxValue / (3ul * PbrGpuHierarchy.WorkBlockTriangles)
+            || triangles > uint.MaxValue || single + twice + selectedNodes * 3 > uint.MaxValue)
             throw new NotSupportedException("GPU logical cut exceeds indirect vertex addressing capacity.");
         var hierarchy = new PbrGpuHierarchy(frame, _settings.HierarchyBytes, CollectionsMarshal.AsSpan(nodes),
             CollectionsMarshal.AsSpan(parts), mapping, (uint)rootBase, (uint)roots.Count,
