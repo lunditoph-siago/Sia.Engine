@@ -16,6 +16,7 @@ public sealed partial class MeshPatchTree
     public int TriangleCount => _geometry.Indices.Length / 3;
     public int MeshletCount => _meshlets.Meshlets.Length;
     public int MeshletVertexCount => _meshlets.VertexIndices.Length;
+    public Aabb Bounds => _geometry.Bounds;
 
     // Validated, allocation-free views; callers cannot mutate the tree storage.
     public ReadOnlySpan<MeshVertex> Vertices => _geometry.Vertices;
