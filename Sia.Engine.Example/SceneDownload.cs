@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 
@@ -19,7 +18,8 @@ internal static class SceneDownload
         report("Loading scene", double.NaN);
         while (true) {
             cancellationToken.ThrowIfCancellationRequested();
-            if (failures > 0) report($"Reconnecting · {bytes.Length / 1048576.0:F1} MiB saved",
+            if (failures > 0)
+                report($"Reconnecting · {bytes.Length / 1048576.0:F1} MiB saved",
                 length is > 0 ? (double)bytes.Length / length.Value : double.NaN);
             var retryDelay = TimeSpan.FromSeconds(System.Math.Min(30, 1 << System.Math.Min(failures, 5)));
             try {
@@ -39,9 +39,11 @@ internal static class SceneDownload
                 }
                 if (response.Headers.RetryAfter is { } after) {
                     var wait = after.Delta ?? (after.Date - DateTimeOffset.UtcNow);
-                    if (wait > retryDelay) retryDelay = wait.Value;
+                    if (wait > retryDelay)
+                        retryDelay = wait.Value;
                 }
-                if (!response.IsSuccessStatusCode) throw new HttpRequestException(
+                if (!response.IsSuccessStatusCode)
+                    throw new HttpRequestException(
                     $"Unable to download scene (HTTP {(int)response.StatusCode}: {response.ReasonPhrase}).", null, response.StatusCode);
                 var encoded = response.Content.Headers.ContentEncoding.Count != 0;
                 long? responseEnd;
@@ -63,39 +65,45 @@ internal static class SceneDownload
                     if (response.Content.Headers.ContentLength is { } size && size != responseEnd - bytes.Length) {
                         throw new InvalidDataException("The scene server returned an inconsistent download range size.");
                     }
-                } else {
+                }
+                else {
                     // A server may ignore Range or return 200 when If-Range no longer matches.
                     bytes.SetLength(0);
                     length = encoded ? null : response.Content.Headers.ContentLength;
                     validator = !encoded && response.Headers.ETag is { IsWeak: false } etag ? etag : null;
                     responseEnd = length;
                 }
-                if (length > maximumBytes) throw new InvalidDataException("The scene download exceeds the supported size.");
-                if (length > bytes.Capacity) bytes.Capacity = (int)length.Value;
+                if (length > maximumBytes)
+                    throw new InvalidDataException("The scene download exceeds the supported size.");
+                if (length > bytes.Capacity)
+                    bytes.Capacity = (int)length.Value;
                 var stage = response.Headers.TryGetValues("X-Sia-Asset-Cache", out var cache) && cache.Contains("hit")
                     ? "Loading cached scene" : "Loading scene";
-                var timer = Stopwatch.StartNew();
+                var startedAtMilliseconds = Environment.TickCount64;
                 var startedAt = bytes.Length;
-                var lastReport = TimeSpan.Zero;
+                var lastReport = startedAtMilliseconds;
                 using var stream = await response.Content.ReadAsStreamAsync(stalled.Token);
                 while (true) {
                     // Activity extends the deadline; a slow transfer has no total time limit.
                     stalled.CancelAfter(timeout);
                     var count = await stream.ReadAsync(buffer, stalled.Token);
-                    if (count == 0) break;
+                    if (count == 0)
+                        break;
                     if (bytes.Length + count > maximumBytes || (responseEnd.HasValue && bytes.Length + count > responseEnd)) {
                         throw new InvalidDataException("The scene download exceeds the expected size.");
                     }
                     bytes.Write(buffer, 0, count);
                     failures = 0;
-                    if (timer.Elapsed - lastReport >= TimeSpan.FromMilliseconds(250)) {
-                        lastReport = timer.Elapsed;
-                        var speed = (bytes.Length - startedAt) / timer.Elapsed.TotalSeconds / 1024;
+                    var now = Environment.TickCount64;
+                    if (now - lastReport >= 250) {
+                        lastReport = now;
+                        var speed = (bytes.Length - startedAt) / ((now - startedAtMilliseconds) / 1000.0) / 1024;
                         report($"{stage} · {bytes.Length / 1048576.0:F1} MiB · {speed:F0} KiB/s",
                             length is > 0 ? (double)bytes.Length / length.Value : double.NaN);
                     }
                 }
-                if (length.HasValue && bytes.Length != length) throw new EndOfStreamException("The scene download was interrupted.");
+                if (length.HasValue && bytes.Length != length)
+                    throw new EndOfStreamException("The scene download was interrupted.");
                 report(stage, 1);
                 return bytes.GetBuffer().AsMemory(0, checked((int)bytes.Length));
             }

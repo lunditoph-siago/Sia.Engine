@@ -19,6 +19,7 @@ public sealed partial class MeshPatchTree
 
     // Validated, allocation-free views; callers cannot mutate the tree storage.
     public ReadOnlySpan<MeshVertex> Vertices => _geometry.Vertices;
+    public ReadOnlySpan<uint> Indices => _geometry.Indices;
     public ReadOnlySpan<Meshlet> Meshlets => _meshlets.Meshlets;
     public ReadOnlySpan<uint> MeshletVertexIndices => _meshlets.VertexIndices;
     public ReadOnlySpan<byte> MeshletTriangleIndices => _meshlets.TriangleIndices;

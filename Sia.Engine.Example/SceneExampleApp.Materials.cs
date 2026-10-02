@@ -11,8 +11,6 @@ internal sealed partial class SceneExampleApp
 {
     private PbrSceneAsset? _materialScene;
     private readonly PbrSceneStream? _materialStream;
-    private PbrSceneAsset? _opaqueScene;
-    private PbrTransparentScene? _transparency;
     private readonly int _materialInstanceCount;
     private readonly bool _finest;
     private Aabb _materialBounds;
@@ -20,12 +18,10 @@ internal sealed partial class SceneExampleApp
     private void BuildMaterialScene()
     {
         var scene = _materialScene ?? throw new InvalidOperationException("A cooked PBR scene is required.");
-        _opaqueScene = OpaqueScene(scene);
         var world = _sceneWorld!;
         _materialBounds = new(new float3(float.PositiveInfinity), new float3(float.NegativeInfinity));
-        foreach (var instance in _opaqueScene.Instances.Span) {
-            world.Create(HList.From(new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }));
-            var tree = _opaqueScene.Geometry.Span[instance.Geometry].Build.Tree;
+        foreach (var instance in scene.Instances.Span) {
+            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
             foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
                 for (var corner = 0; corner < 8; corner++) {
                     var p = math.mul(instance.Transform, new float4(new float3(
@@ -36,10 +32,15 @@ internal sealed partial class SceneExampleApp
                 }
             }
         }
-        if (_materialStream is { } stream) { _materialBounds = stream.Bounds; }
+        if (_materialStream is { } stream) {
+            _materialBounds = new(math.min(_materialBounds.Min, stream.Bounds.Min), math.max(_materialBounds.Max, stream.Bounds.Max));
+        }
         var shadows = world.AcquireAddon<ShadowAtlasConfig>();
-        shadows.TileResolution = _renderProfile.ShadowResolution; shadows.CascadeCount = 3; shadows.MaxShadowedSpotLights = 1; shadows.ShadowDistance = 30;
-        world.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky { Intensity = .75f };
+        shadows.TileResolution = _qualitySettings.ShadowResolution;
+        shadows.CascadeCount = 3;
+        shadows.MaxShadowedSpotLights = 1;
+        shadows.ShadowDistance = 30;
+        world.AcquireAddon<EnvironmentLighting>().Sky = Program.BakedEnvironment?.Sky ?? new ProceduralSky { Intensity = .75f };
         var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
         world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
             new GlobalTransform(new AffineTransform(float3.zero, sun))));
@@ -53,48 +54,30 @@ internal sealed partial class SceneExampleApp
     private void InitializeMaterialRendering()
     {
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
-        var source = _materialScene!;
-        if (source.Instances.ToArray().Any(instance => source.Materials.Span[instance.Material].AlphaBlend)) {
-            _transparency = new(in frame, source);
-        }
-        var scene = _opaqueScene!;
-        var roots = 0; var meshlets = 0; var triangles = 0;
-        foreach (var instance in scene.Instances.Span) {
-            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
-            roots = checked(roots + tree.RootCount);
-            foreach (var root in tree.Nodes.Span[..tree.RootCount]) {
-                meshlets = checked(meshlets + root.MeshletCount);
-                triangles = checked(triangles + root.TriangleCount);
-            }
-        }
-        var settings = new VisibilityLodSettings(4, new(checked(roots + 8192), checked(meshlets + 16384), checked(triangles + 1048576)) {
-            MaxRefinementCandidates = 4096, MaxRefinementNodes = 16384
-        }) {
-            Shadows = new(8, new(checked(roots + 512), checked(meshlets + 2048), checked(triangles + 131072)) {
-                MaxRefinementCandidates = 512, MaxRefinementNodes = 2048
-            })
+        var preset = _qualitySettings;
+        var settings = preset with {
+            Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
+            BakedEnvironment = Program.BakedEnvironment,
+            ExportSurfaceData = Program.ExportSurfaceData,
+            BakedProbes = Program.BakedProbes,
+            DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
+            OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
+            TargetPixelError = _finest ? 0 : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
+            ShadowTexelError = _finest ? 0 : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
+            GpuTiming = _gpuTimingEnabled
         };
-        _visibilityLod = _materialStream is { } stream ? VisibilityPbrFeature.CreateStreamScene(in frame, stream, _surfaceFormat, _renderProfile.DetailGeometryBytes, _renderProfile.UploadBytesPerFrame, mode: _patchDebugMode)
-            : _finest
-            ? VisibilityPbrFeature.CreateFixedScene(in frame, scene, scene.Instances.Span.ToArray().Select(instance =>
-                new VisibilityInstance(instance.Transform, instance.Material) { AssetIndex = instance.Geometry }).ToArray(), _surfaceFormat, _patchDebugMode, enableGpuTiming: _gpuTimingEnabled)
-            : VisibilityPbrFeature.CreateGpuScene(in frame, scene, System.Math.Max(32, scene.Instances.Length), settings, _surfaceFormat, _patchDebugMode, enableGpuTiming: _gpuTimingEnabled);
+        _sceneRenderer = _materialStream is { } stream
+            ? new PbrRenderer(in frame, stream, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
+            : new PbrRenderer(in frame, _materialScene!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
+        _workflow = new(settings.OpaquePath.ToString(), settings.BakedEnvironment is not null, _finest,
+            settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData,
+            settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
+            settings.DynamicSceneGi ? settings.ProbeSamples : 0);
         InitializeInspectionControls();
-        Console.WriteLine($"PBR: {_visibilityLod.InstanceCount} static instances, {(_materialStream is not null ? "streamed detail" : _finest ? "fixed finest" : "automatic LOD")}, {_visibilityLod.TriangleCapacity} work triangles.");
+        Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
+        Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
         _materialScene = null;
-        _opaqueScene = null;
     }
 
-    public ValueTask StopSceneStreamingAsync() => _visibilityLod?.StopStreamingAsync() ?? ValueTask.CompletedTask;
-
-    private static PbrSceneAsset OpaqueScene(PbrSceneAsset source)
-    {
-        var instances = source.Instances.ToArray().Where(instance => !source.Materials.Span[instance.Material].AlphaBlend).ToArray();
-        var geometry = instances.Select(instance => instance.Geometry).Distinct().ToArray();
-        var materials = instances.Select(instance => instance.Material).Distinct().ToArray();
-        return PbrSceneAsset.Create(geometry.Select(index => source.Geometry.Span[index]).ToArray(),
-            materials.Select(index => source.Materials.Span[index]).ToArray(),
-            instances.Select(instance => instance with { Geometry = Array.IndexOf(geometry, instance.Geometry),
-                Material = Array.IndexOf(materials, instance.Material) }).ToArray(), source.Attribution);
-    }
+    public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 }

@@ -48,7 +48,8 @@ internal sealed partial class SceneExampleApp
                 _cameraPitch -= (float)(cursor.Y - previous.Y) * .003f;
             }
             _cameraDrag = cursor;
-        } else { _cameraDrag = null; }
+        }
+        else { _cameraDrag = null; }
         _cameraYaw += ((Down(Key.Right) ? 1 : 0) - (Down(Key.Left) ? 1 : 0)) * deltaTime * 1.5f;
         _cameraPitch += ((Down(Key.Up) ? 1 : 0) - (Down(Key.Down) ? 1 : 0)) * deltaTime * 1.5f;
 #endif
@@ -78,13 +79,6 @@ internal sealed partial class SceneExampleApp
         target = eye + forward;
 #if !BROWSER
         _cameraPressed.Clear();
-#endif
-#if BROWSER
-        if (_compareLodRequested) {
-            _compareLodRequested = false;
-            _browserComparePose = string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                $"{eye.x:F6},{eye.y:F6},{eye.z:F6},{target.x:F6},{target.y:F6},{target.z:F6}");
-        }
 #endif
     }
 }

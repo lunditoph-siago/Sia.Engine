@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sia.Asset;
@@ -9,55 +8,73 @@ namespace Sia.Engine.Example;
 
 internal sealed partial class SceneExampleApp
 {
-    private sealed record Timing(double Mean, double Median, double P95, double P99, double Max);
-    private sealed record CpuStages(double Acquire, double Extract, double PrepareAndQueue, double GraphUpdate, double EncodeAndSubmit, double Present);
-    private sealed record FrameSample(double CpuMilliseconds, double CadenceMilliseconds, CpuStages CpuStages, VisibilityFrameStatistics? Visibility, float RenderScale);
+    private readonly record struct FrameGc(int Gen0, int Gen1, int Gen2, double PauseMilliseconds);
+
+    private sealed record FrameSample(PbrFrameStatistics? Visibility, float RenderScale, PbrStreamingStatistics? Streaming,
+        PbrTextureStreamingStatistics? Textures, PbrGpuTraversalStatistics? GpuTraversal,
+        long RenderThreadAllocatedBytes, FrameGc Gc);
+
+    private sealed record ManagedMemory(long FirstFrameAllocatedBytes, long FirstFrameHeapBytes,
+        long MeasuredAllocatedBytes, int Gen0Collections, int Gen1Collections, int Gen2Collections,
+        double PauseMilliseconds, long CommittedBytes);
+
+    private sealed record Workflow(string OpaquePath, bool BakedEnvironment, bool Finest, float PixelError,
+        float ShadowTexelError, uint ShadowResolution, bool SurfaceData, bool DynamicProbes,
+        bool BakedProbes, uint ProbeUpdates, uint ProbeSamples);
+
+    private Workflow? _workflow;
+
     private sealed record BenchmarkReport(string Mode, string Quality, int Width, int Height, int RenderWidth, int RenderHeight,
-        string Adapter, string PresentMode, string[] Passes, double FirstSubmittedFrameMilliseconds,
-        int WarmupFrames, int SampleFrames, bool Moving, Timing CpuFrameMilliseconds, Timing FrameCadenceMilliseconds,
-        PbrStreamingStatistics? Streaming, AssetChunkCacheStatistics? Chunks, long ManagedHeapBytes, FrameSample[] Frames,
+        string Adapter, string PresentMode, string[] Passes,
+        int WarmupFrames, int SampleFrames, bool Moving,
+        AssetChunkCacheStatistics? Chunks, long ManagedHeapBytes, FrameSample[] Frames,
         bool GpuTimingEnabled, int GpuTimingDropped, int GpuTimingPending, GpuSample[] GpuFrames,
-        int TargetFps, int ResolutionChanges, int GraphCompilationCount);
+        int TargetFps, int ResolutionChanges, int GraphCompilationCount, Workflow? Workflow, ManagedMemory Memory);
+
     [JsonSerializable(typeof(BenchmarkReport))]
     private partial class BenchmarkJsonContext : JsonSerializerContext;
-    private readonly List<double> _submissionSamples = [], _cadenceSamples = [];
+
     private readonly List<FrameSample> _frameSamples = [];
-    private long _previousBenchmarkFrame;
-    private double _firstFrameMilliseconds;
+    private long _firstFrameAllocatedBytes, _firstFrameHeapBytes, _measuredAllocatedStart;
+    private int _gen0Start, _gen1Start, _gen2Start;
+    private TimeSpan _pauseStart;
     private int _benchmarkFrames;
-    private double _acquireMilliseconds, _extractMilliseconds, _prepareMilliseconds, _graphMilliseconds, _encodeMilliseconds, _presentMilliseconds;
-    private void RecordBenchmark(long start)
+
+    private void RecordBenchmark(long allocatedStart)
     {
         if (_benchmarkFrames++ == 0) {
-            _firstFrameMilliseconds = Program.StartupClock.Elapsed.TotalMilliseconds;
-            Console.WriteLine($"PBR first submitted frame: {_firstFrameMilliseconds:F2} ms from managed entry.");
+            _firstFrameAllocatedBytes = GC.GetTotalAllocatedBytes(false);
+            _firstFrameHeapBytes = GC.GetTotalMemory(false);
         }
-        if (Program.BenchmarkFrames == 0) return;
+        if (Program.BenchmarkFrames == 0)
+            return;
+        if (_benchmarkFrames == 120) {
+            _measuredAllocatedStart = GC.GetTotalAllocatedBytes(false);
+            _gen0Start = GC.CollectionCount(0);
+            _gen1Start = GC.CollectionCount(1);
+            _gen2Start = GC.CollectionCount(2);
+            _pauseStart = GC.GetTotalPauseDuration();
+        }
         if (_benchmarkFrames > 120) {
-            _submissionSamples.Add(Stopwatch.GetElapsedTime(start).TotalMilliseconds);
-            _cadenceSamples.Add(Stopwatch.GetElapsedTime(_previousBenchmarkFrame, start).TotalMilliseconds);
-            _frameSamples.Add(new(_submissionSamples[^1], _cadenceSamples[^1],
-                new(_acquireMilliseconds, _extractMilliseconds, _prepareMilliseconds, _graphMilliseconds, _encodeMilliseconds, _presentMilliseconds),
-                _visibilityLod?.FrameStatistics, _renderScale));
+            _frameSamples.Add(new(_sceneRenderer?.FrameStatistics, _renderScale, _sceneRenderer?.StreamingStatistics, _sceneRenderer?.TextureStreamingStatistics,
+                _sceneRenderer?.GpuTraversalStatistics, GC.GetAllocatedBytesForCurrentThread() - allocatedStart,
+                new(GC.CollectionCount(0) - _gen0Start, GC.CollectionCount(1) - _gen1Start, GC.CollectionCount(2) - _gen2Start,
+                    (GC.GetTotalPauseDuration() - _pauseStart).TotalMilliseconds)));
         }
-        _previousBenchmarkFrame = start;
-        if (_benchmarkFrames != Program.BenchmarkFrames + 120) return;
+        if (_benchmarkFrames != Program.BenchmarkFrames + 120)
+            return;
         Console.WriteLine("BISTRO_BENCHMARK " + JsonSerializer.Serialize(new BenchmarkReport(
-            _materialStream is null ? (_finest ? "finest" : "auto") : "streaming", Program.Quality.ToString(),
+            _pipeline == ScenePipeline.Unlit ? "unlit" : _materialStream is not null ? "hierarchical-stream" : _finest ? "resident-finest" : "resident-two-level", Program.Quality.ToString(),
             _framebufferWidth, _framebufferHeight, RenderWidth, RenderHeight, _adapterDescription,
             _presentMode.ToString(),
             _renderGraph!.PreparePlan().Graph.Passes.Select(pass => pass.Name).ToArray(),
-            _firstFrameMilliseconds, 120, Program.BenchmarkFrames, Program.BenchmarkMotion,
-            Summarize(_submissionSamples), Summarize(_cadenceSamples), _visibilityLod?.StreamingStatistics,
+            120, Program.BenchmarkFrames, Program.BenchmarkMotion,
             _materialStream?.Statistics, GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
             _timingDropped, _timingSlots.Count(s => s.Mapping is not null), _gpuSamples.ToArray(),
-            Program.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount), BenchmarkJsonContext.Default.BenchmarkReport));
+            Program.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount, _workflow,
+            new(_firstFrameAllocatedBytes, _firstFrameHeapBytes, GC.GetTotalAllocatedBytes(false) - _measuredAllocatedStart,
+                GC.CollectionCount(0) - _gen0Start, GC.CollectionCount(1) - _gen1Start, GC.CollectionCount(2) - _gen2Start,
+                (GC.GetTotalPauseDuration() - _pauseStart).TotalMilliseconds, GC.GetGCMemoryInfo().TotalCommittedBytes)), BenchmarkJsonContext.Default.BenchmarkReport));
         Glfw.RequestClose(_window);
-    }
-    private static Timing Summarize(List<double> samples)
-    {
-        var sorted = samples.Order().ToArray();
-        return new(samples.Average(), sorted[sorted.Length / 2], sorted[(int)System.Math.Ceiling(sorted.Length * .95) - 1],
-            sorted[(int)System.Math.Ceiling(sorted.Length * .99) - 1], sorted[^1]);
     }
 }

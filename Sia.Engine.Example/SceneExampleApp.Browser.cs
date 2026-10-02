@@ -11,7 +11,6 @@ internal sealed partial class SceneExampleApp
 {
     private double? _previousAnimationFrameTime;
     private bool _cameraFocused;
-    private bool _compareLodRequested;
     private WindowSize _browserSize;
     private WindowSize _appliedBrowserSize;
     private int _browserCommands;
@@ -21,13 +20,14 @@ internal sealed partial class SceneExampleApp
     private float2 _browserTurn;
     private float _browserSpeed = 4;
     private string _browserFeatureLevel = "core";
-    private string? _browserComparePose;
-    private (double Distance, bool Touring, bool Triangles, bool Atmosphere)? _browserInspection;
+    private (double Distance, bool Touring, bool Triangles, string Description)? _browserInspection;
     private Task? _browserPublish;
 
     public async Task RunAsync()
     {
         _browserFeatureLevel = GetBrowserFeatureLevel();
+        if (_browserFeatureLevel is not ("core" or "compatibility" or "auto"))
+            throw new ArgumentException("Expected feature-level core|compatibility|auto.");
         if (_materialScene is { } scene) SetSceneAttribution(scene.Attribution);
         await Program.BrowserOwner.RunGraphicsAsync(async () => {
             CaptureBrowserState();
@@ -123,8 +123,7 @@ internal sealed partial class SceneExampleApp
             _browserLook += input.Look;
             _browserTurn = input.Turn;
             _browserSpeed = input.Speed;
-            var atmosphere = (_browserCommands ^ input.Commands) & 32;
-            _browserCommands = ((_browserCommands | input.Commands) & ~(128 | 32)) | (input.Commands & 128) | atmosphere;
+            _browserCommands = ((_browserCommands | input.Commands) & ~128) | (input.Commands & 128);
             if ((input.Commands & 256) != 0) { _browserDistance = input.Distance; }
         }
     }
@@ -134,27 +133,21 @@ internal sealed partial class SceneExampleApp
         Program.BrowserOwner.VerifyGraphicsAccess();
         if (_browserPublish is { IsCompleted: false }) { return; }
         if (_browserPublish?.Exception is { } error) { throw new InvalidOperationException("Browser status update failed.", error); }
-        if (_browserInspection is null && _browserComparePose is null) { return; }
+        if (_browserInspection is null) { return; }
         var inspection = _browserInspection;
-        var pose = _browserComparePose;
         _browserInspection = null;
-        _browserComparePose = null;
         // Never await a deputy import inside the UI frame callback. Keep the
         // latest status while an earlier update is still in flight.
         _browserPublish = Program.BrowserOwner.RunImportsAsync(() => {
-            if (inspection is { } state) { PublishFrame(state.Distance, (state.Touring ? 1 : 0) | (state.Triangles ? 2 : 0) | (state.Atmosphere ? 4 : 0)); }
-            if (pose is not null) { CompareLodAtCamera(pose); }
+            if (inspection is { } state) { PublishFrame(state.Distance, (state.Touring ? 1 : 0) | (state.Triangles ? 2 : 0), state.Description); }
         });
     }
 
     [JSImport("setInspectionStatus", "main.js")]
-    private static partial void PublishFrame(double distance, int flags);
+    private static partial void PublishFrame(double distance, int flags, string description);
 
     [JSImport("setSceneAttribution", "main.js")]
     private static partial void SetSceneAttribution(string attribution);
-
-    [JSImport("compareLodAtCamera", "main.js")]
-    private static partial void CompareLodAtCamera(string pose);
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
@@ -163,15 +156,20 @@ internal sealed partial class SceneExampleApp
                 BuildAdapterOptions(WGPUFeatureLevel.Compatibility, WGPUPowerPreference.Undefined));
         }
         try {
-            return await Wgpu.RequestAdapterAsync(_instance, BuildAdapterOptions());
+            var adapter = await Wgpu.RequestAdapterAsync(_instance, BuildAdapterOptions());
+            _browserFeatureLevel = "core";
+            return adapter;
         }
         catch (WgpuException coreError) {
+            if (_browserFeatureLevel == "core") throw;
             try {
-                return await Wgpu.RequestAdapterAsync(
+                var adapter = await Wgpu.RequestAdapterAsync(
                     _instance,
                     BuildAdapterOptions(
                         WGPUFeatureLevel.Compatibility,
                         WGPUPowerPreference.Undefined));
+                _browserFeatureLevel = "compatibility";
+                return adapter;
             }
             catch (WgpuException compatibilityError) {
                 throw new WgpuException(
@@ -186,20 +184,21 @@ internal sealed partial class SceneExampleApp
 
     private unsafe Task<WgpuHandle<WGPUDevice>> RequestBrowserDeviceAsync()
     {
+        Console.WriteLine($"Browser feature level: {_browserFeatureLevel}.");
         var supportedStages = WGPUCompatibilityModeLimits.Default;
         var supported = WGPULimits.Default;
         supported.NextInChain = &supportedStages.Chain;
         if (WgpuUnsafe.wgpuAdapterGetLimits((WGPUAdapter*)_adapter.DangerousGetHandle(), &supported) != WGPUStatus.Success) {
             throw new WgpuException("The browser adapter did not report its device limits.");
         }
-        var vertexStorage = _pipeline != ScenePipeline.Unlit ? 6u : 1u;
-        var fragmentStorage = _pipeline == ScenePipeline.Pbr ? 5u : 4u;
-        var workgroupSize = _pipeline != ScenePipeline.Unlit ? 256u : 128u;
+        var vertexStorage = _pipeline != ScenePipeline.Unlit ? 5u : 1u;
+        var fragmentStorage = _pipeline != ScenePipeline.Unlit ? 3u : 0u;
+        var workgroupSize = _pipeline != ScenePipeline.Unlit ? 64u : 128u;
         if (supportedStages.MaxStorageBuffersInVertexStage == uint.MaxValue
             || supportedStages.MaxStorageBuffersInVertexStage < vertexStorage
             || supportedStages.MaxStorageBuffersInFragmentStage == uint.MaxValue
             || supportedStages.MaxStorageBuffersInFragmentStage < fragmentStorage
-            || supported.MaxStorageBuffersPerShaderStage < System.Math.Max(vertexStorage, fragmentStorage)
+            || supported.MaxStorageBuffersPerShaderStage < (_pipeline != ScenePipeline.Unlit ? 8u : 1u)
             || supported.MaxComputeWorkgroupSizeX < workgroupSize
             || supported.MaxComputeInvocationsPerWorkgroup < workgroupSize) {
             throw new WgpuException($"{_pipeline} requires {vertexStorage} vertex storage buffers, " +
@@ -212,6 +211,7 @@ internal sealed partial class SceneExampleApp
         var required = WGPULimits.Default;
         ConfigureSceneLimits(ref required);
         required.NextInChain = &requiredStages.Chain;
+        required.MaxStorageBuffersPerShaderStage = _pipeline != ScenePipeline.Unlit ? 8u : 1u;
         required.MaxComputeWorkgroupSizeX = workgroupSize;
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
         var descriptor = CreateDeviceDescriptor();

@@ -5,7 +5,8 @@ internal sealed class RenderResolutionController
 {
     private readonly double targetMilliseconds;
     private readonly float maximumScale;
-    public RenderResolutionController(double targetMilliseconds, float maximumScale) {
+    public RenderResolutionController(double targetMilliseconds, float maximumScale)
+    {
         if (!double.IsFinite(targetMilliseconds) || targetMilliseconds <= 0 || !float.IsFinite(maximumScale) || maximumScale is < .0625f or > 1)
             throw new ArgumentOutOfRangeException(nameof(maximumScale));
         this.targetMilliseconds = targetMilliseconds; this.maximumScale = maximumScale; Scale = maximumScale;
@@ -26,7 +27,8 @@ internal sealed class RenderResolutionController
         if (_over >= 2) {
             var proposed = Scale * System.Math.Sqrt(targetMilliseconds * .9 / milliseconds);
             next = (float)(System.Math.Floor(proposed / maximumScale * 16) / 16 * maximumScale);
-        } else if (_under >= 32) next = Scale + maximumScale / 16;
+        }
+        else if (_under >= 32) next = Scale + maximumScale / 16;
         next = System.Math.Clamp(next, System.Math.Min(.0625f, maximumScale), maximumScale);
         if (next == Scale) return;
         Scale = next; _changedAt = submittedSequence; _over = _under = 0; Changes++;

@@ -21,9 +21,7 @@ public sealed class RenderResourceCollection
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(factory);
-        if (_resources.TryGetValue(typeof(T), out var resource)) {
-            return (T)resource;
-        }
+        if (_resources.TryGetValue(typeof(T), out var resource)) return (T)resource;
 
         var created = factory();
         _resources.Add(typeof(T), created);
@@ -47,4 +45,11 @@ public sealed class RenderResourceCollection
         _resources.Remove(typeof(T));
 
     public void Clear() => _resources.Clear();
+
+    public void DisposeOwned()
+    {
+        foreach (var resource in _resources.Values)
+            if (resource is IDisposable owned) owned.Dispose();
+        _resources.Clear();
+    }
 }

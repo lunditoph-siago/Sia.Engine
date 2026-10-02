@@ -30,6 +30,9 @@
     .panel-title { margin: 0 0 16px; font-size: 17px; font-weight: 600; }
     #inspection-status { margin: 0 0 16px; color: #aab9c7; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
     .controls { display: grid; gap: 8px; }
+    #quality-controls { display: grid; gap: 8px; margin-bottom: 16px; }
+    #quality-select, #quality-apply { min-height: 44px; padding: 10px; color: inherit; font: inherit; background: #202a35; border: 1px solid #ffffff24; border-radius: 8px; }
+    .setting-note { margin: 0; font-size: 12px; line-height: 1.6; color: #aab9c7; }
     .controls button, #retry { min-height: 44px; padding: 10px 14px; background: #ffffff0a; border: 1px solid #ffffff24; border-radius: 8px; text-align: left; }
     .controls button:hover, #retry:hover { background: #ffffff18; }
     .distance { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: #b5c1cc; }
@@ -81,14 +84,18 @@
   <fieldset id="inspection" class="glass" hidden disabled aria-label="Scene settings">
     <div class="panel-title">Scene settings</div>
     <p id="inspection-status"></p>
+    <div id="quality-controls" hidden>
+      <label for="quality-select">Rendering quality</label>
+      <select id="quality-select"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+      <button id="quality-apply" type="button" disabled>Apply and restart</button>
+      <p class="setting-note">Changing quality restarts the scene. High uses full geometry detail.</p>
+    </div>
     <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
     <label id="camera-speed-row" class="distance" hidden>Slow <input id="camera-speed" type="range" min="1" max="16" value="4" aria-label="Move speed" /> Fast</label>
     <div class="controls">
       <button id="inspection-tour" type="button">Pause tour</button>
       <button id="inspection-reset" type="button">Return near</button>
       <button id="inspection-material" type="button">Show triangles</button>
-      <button id="inspection-atmosphere" type="button" hidden>Enable atmosphere</button>
-      <button id="inspection-lod" type="button" hidden>Compare automatic LOD</button>
       <button id="scene-stop" type="button">Stop scene</button>
     </div>
     <details class="help">

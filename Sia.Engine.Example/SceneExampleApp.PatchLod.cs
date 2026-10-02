@@ -10,7 +10,10 @@ namespace Sia.Engine.Example;
 
 internal sealed partial class SceneExampleApp
 {
-    private VisibilityPbrFeature? _visibilityLod;
+    private const int BunnyColumns = 15;
+    private const int BunnyRows = 9;
+    private const int BunnyInstanceCount = BunnyColumns * BunnyRows;
+    private const float BunnyPixelError = 4;
     private readonly MeshPatchAsset? _patchAsset;
     private Aabb _patchBounds;
     private Aabb _patchSceneBounds;
@@ -21,11 +24,26 @@ internal sealed partial class SceneExampleApp
 #if !BROWSER
     private uint _patchKeys;
 #endif
-    private (int Distance, bool Touring, VisibilityDebugMode Mode, bool Atmosphere)? _patchStatus;
+    private (int Distance, bool Touring, VisibilityDebugMode Mode, uint Triangles)? _patchStatus;
+
+    internal static PbrSceneAsset CreateBunnyScene(MeshPatchAsset asset)
+    {
+        var bounds = asset.Build.Tree.CopyGeometry().Geometry.Bounds;
+        var spacing = math.max(bounds.Max - bounds.Min, new float3(.1f)) * 1.2f;
+        var instances = new PbrSceneInstance[BunnyInstanceCount];
+        var index = 0;
+        for (var row = -(BunnyRows / 2); row <= BunnyRows / 2; row++) {
+            for (var column = -(BunnyColumns / 2); column <= BunnyColumns / 2; column++) {
+                instances[index++] = new(0, 0, float4x4.Translate(new float3(column * spacing.x, row * spacing.y, 0)));
+            }
+        }
+        return PbrSceneAsset.Create([asset],
+            [new(PbrMaterial.Default with { BaseColor = new float3(.8f, .75f, .65f), Roughness = .8f })],
+            instances, "Stanford Bunny · Stanford University Computer Graphics Laboratory; https://graphics.stanford.edu/data/3Dscanrep/");
+    }
 
     private unsafe void InitializePatchLod()
     {
-        var started = System.Diagnostics.Stopwatch.StartNew();
         var build = (_patchAsset ?? throw new InvalidOperationException("A cooked patch asset is required.")).Build;
         var tree = build.Tree;
         var rootTriangles = tree.Nodes.Span[..tree.RootCount].ToArray().Sum(node => node.TriangleCount);
@@ -36,31 +54,23 @@ internal sealed partial class SceneExampleApp
         foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
             _patchBounds = new(math.min(_patchBounds.Min, node.Bounds.Min), math.max(_patchBounds.Max, node.Bounds.Max));
         }
-        var instances = new List<VisibilityInstance>();
-        _patchSceneBounds = _patchBounds;
-        var spacing = math.max(_patchBounds.Max - _patchBounds.Min, new float3(0.1f)) * 1.2f;
-        for (var row = -4; row <= 4; row++) {
-            for (var column = -7; column <= 7; column++) {
-                var offset = new float3(column * spacing.x, row * spacing.y, 0);
-                _patchSceneBounds = new(math.min(_patchSceneBounds.Min, _patchBounds.Min + offset),
-                    math.max(_patchSceneBounds.Max, _patchBounds.Max + offset));
-                instances.Add(new(float4x4.Translate(offset),
-                    PbrMaterial.Default with { BaseColor = new float3(0.8f, 0.75f, 0.65f), Roughness = 0.8f }));
-            }
-        }
+        var stream = _materialStream ?? throw new InvalidOperationException("Bunny requires its complete LOD stream.");
+        _patchSceneBounds = stream.Bounds;
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
-        var albedo = new VisibilityAlbedo(1, 1, [new byte[] { 255, 255, 255, 255 }]);
-        var settings = new VisibilityLodSettings(4,
-            new MeshPatchBudget(4096, 8192, 262144) { MaxRefinementCandidates = 8192, MaxRefinementNodes = 32768 });
-        foreach (var instance in instances) { _sceneWorld!.Create(HList.From(instance)); }
-        _visibilityLod = VisibilityPbrFeature.CreateGpuScene(in frame, [tree], instances.Count, albedo,
-            settings, _surfaceFormat, _patchDebugMode);
-        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_visibilityLod).Build();
-        Console.WriteLine($"GPU Patch LOD: {tree.Nodes.Length} resident patches, {instances.Count} instances, "
-            + $"{_visibilityLod.TriangleCapacity} work triangles; target {settings.TargetPixelError} px, "
-            + $"triangle budget {settings.Budget.MaxTriangles}; setup/upload {started.Elapsed.TotalMilliseconds:F2} ms.");
+        var settings = new PbrRendererSettings {
+            TargetPixelError = BunnyPixelError,
+            ShadowTexelError = BunnyPixelError,
+            Streaming = new() {
+                GpuTraversal = Program.GpuTraversal,
+                DetailBytes = 8ul * 1024 * 1024,
+                MaximumSelectionNodesPerView = 32768
+            }
+        };
+        _sceneRenderer = new PbrRenderer(in frame, stream, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
+        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer).Build();
+        Console.WriteLine($"{(Program.GpuTraversal ? "GPU" : "CPU")} Bunny LOD: {BunnyInstanceCount} instances; target {BunnyPixelError} px; detail budget {settings.Streaming.DetailBytes} bytes.");
         InitializeInspectionControls();
-        Console.WriteLine($"Bunny wall: 15 x 9 bunnies, {(long)build.SourceTriangleCount * 135:N0} source triangles, one shared geometry asset.");
+        Console.WriteLine($"Bunny wall: {BunnyColumns} x {BunnyRows} bunnies, {(long)build.SourceTriangleCount * BunnyInstanceCount:N0} source triangles, one shared geometry asset.");
     }
 
     private unsafe void InitializeInspectionControls()
@@ -68,17 +78,21 @@ internal sealed partial class SceneExampleApp
 #if !BROWSER
         GlfwUnsafe.SetKeyCallback((WindowHandle*)_window.Handle, (_, key, _, action, _) => {
             if (action == InputAction.Press) {
-                if (_pipeline == ScenePipeline.Pbr) { _cameraPressed.Add(key); }
+                if (_pipeline == ScenePipeline.Pbr) {
+                    _cameraPressed.Add(key);
+                }
                 _patchKeys |= key switch {
-                    Key.Space when _pipeline == ScenePipeline.Bunny => 1u, Key.M => 2u, Key.R => 4u,
+                    Key.Space when _pipeline == ScenePipeline.Bunny => 1u,
+                    Key.M => 2u,
+                    Key.R => 4u,
                     Key.S or Key.Down when _pipeline == ScenePipeline.Bunny => 8u,
                     Key.W or Key.Up when _pipeline == ScenePipeline.Bunny => 16u,
-                    Key.B => 32u, _ => 0u
+                    _ => 0u
                 };
             }
         });
         Console.WriteLine(_pipeline == ScenePipeline.Pbr
-            ? "WASD: move. Q/E: down/up. Right drag or arrows: look. Shift: fast. C: slow. R: reset. M: material. B: atmosphere."
+            ? "WASD: move. Q/E: down/up. Right drag or arrows: look. Shift: fast. C: slow. R: reset. M: material."
             : "W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
 #endif
     }
@@ -88,7 +102,6 @@ internal sealed partial class SceneExampleApp
 #if BROWSER
         var pressed = (uint)_browserCommands;
         _cameraFocused = (pressed & 128) != 0;
-        _compareLodRequested = (pressed & 64) != 0;
         if ((pressed & 256) != 0) {
             var distance = _browserDistance;
             if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
@@ -106,17 +119,17 @@ internal sealed partial class SceneExampleApp
             _patchTourPhase = MathF.Acos(1 - 2 * _patchDistance);
         }
         if ((pressed & 2) != 0) {
-            _visibilityLod!.DebugMode = _visibilityLod.DebugMode == VisibilityDebugMode.Triangles
+            _sceneRenderer!.DebugMode = _sceneRenderer.DebugMode == VisibilityDebugMode.Triangles
                 ? VisibilityDebugMode.Shaded : VisibilityDebugMode.Triangles;
         }
         if ((pressed & 4) != 0) {
-            if (_pipeline == ScenePipeline.Pbr) { _cameraEye = null; }
-            else { _patchDistance = 0; }
+            if (_pipeline == ScenePipeline.Pbr) {
+                _cameraEye = null;
+            }
+            else {
+                _patchDistance = 0;
+            }
             _patchTour = false;
-        }
-        if (_pipeline == ScenePipeline.Pbr && (pressed & 32) != 0) {
-            var environment = _sceneWorld!.AcquireAddon<EnvironmentLighting>();
-            environment.Atmosphere = environment.Atmosphere is null ? new SkyAtmosphere() : null;
         }
 #if !BROWSER
         if (_pipeline == ScenePipeline.Bunny) {
@@ -132,18 +145,17 @@ internal sealed partial class SceneExampleApp
             _patchTourPhase = (_patchTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;
             _patchDistance = (1 - MathF.Cos(_patchTourPhase)) * 0.5f;
         }
-        var atmosphere = _pipeline == ScenePipeline.Pbr && _sceneWorld!.AcquireAddon<EnvironmentLighting>().Atmosphere is not null;
-        var status = ((int)(_patchDistance * 100), _patchTour, _visibilityLod!.DebugMode, atmosphere);
+        var triangles = _pipeline == ScenePipeline.Bunny ? _sceneRenderer!.FrameStatistics.Triangles : 0;
+        var status = ((int)(_patchDistance * 100), _patchTour, _sceneRenderer!.DebugMode, triangles);
         if (_patchStatus != status) {
             _patchStatus = status;
-            var scene = _pipeline == ScenePipeline.Bunny ? "135 bunnies"
-                : $"{_materialInstanceCount} instances | {(_materialStream is not null ? "Streamed detail" : _finest ? "Fixed finest" : "Auto LOD")}";
-            var lighting = _pipeline == ScenePipeline.Pbr ? $" | Atmosphere {(atmosphere ? "on" : "off")}" : "";
+            var scene = _pipeline == ScenePipeline.Bunny ? $"{BunnyInstanceCount} bunnies | {(Program.GpuTraversal ? "GPU" : "CPU")} LOD | {triangles:N0} triangles | target {BunnyPixelError} px"
+                : $"{_materialInstanceCount} instances | {(_finest ? "Finest geometry" : "Automatic LOD")}";
             var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
                 : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
-            Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_visibilityLod.DebugMode} | {camera}{lighting}");
+            Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_sceneRenderer.DebugMode} | {camera}");
 #if BROWSER
-            _browserInspection = (_patchDistance, _patchTour, _visibilityLod.DebugMode == VisibilityDebugMode.Triangles, atmosphere);
+            _browserInspection = (_patchDistance, _patchTour, _sceneRenderer.DebugMode == VisibilityDebugMode.Triangles, scene);
 #endif
         }
     }

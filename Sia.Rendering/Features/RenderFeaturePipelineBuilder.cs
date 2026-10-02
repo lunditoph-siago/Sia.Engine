@@ -2,6 +2,12 @@ namespace Sia.Engine.Rendering;
 
 public sealed class RenderFeaturePipelineBuilder<TContext>
 {
+    private sealed record Entry(
+        IRenderFeature Feature,
+        HashSet<RenderFeatureKey> RunsAfter,
+        HashSet<RenderFeatureKey> RunsBefore,
+        int InsertionIndex);
+
     private readonly List<Entry> _entries = [];
     private readonly Dictionary<RenderFeatureKey, Entry> _entriesByKey = [];
 
@@ -28,9 +34,7 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
 
     public bool Remove(RenderFeatureKey key)
     {
-        if (!_entriesByKey.Remove(key, out var entry)) {
-            return false;
-        }
+        if (!_entriesByKey.Remove(key, out var entry)) return false;
         _entries.Remove(entry);
         return true;
     }
@@ -99,10 +103,4 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
             incomingCounts[to]++;
         }
     }
-
-    private sealed record Entry(
-        IRenderFeature Feature,
-        HashSet<RenderFeatureKey> RunsAfter,
-        HashSet<RenderFeatureKey> RunsBefore,
-        int InsertionIndex);
 }

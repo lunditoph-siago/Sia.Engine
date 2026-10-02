@@ -3,19 +3,32 @@ import { createBrowserInput } from './browser-input.js';
 const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
 const pipeline = parameters.get('pipeline') ?? 'pbr';
-const finest = parameters.get('lod') === 'finest';
-const streaming = (parameters.get('scene') ?? '').split('?')[0].endsWith('.siastream');
+const finest = parameters.has('lod') ? parameters.get('lod') !== 'auto' : parameters.get('quality') === 'high';
 const inspection = document.getElementById('inspection');
 const settingsToggle = document.getElementById('settings-toggle');
 const distanceControl = document.getElementById('inspection-distance');
 const tourControl = document.getElementById('inspection-tour');
 const materialControl = document.getElementById('inspection-material');
 const resetControl = document.getElementById('inspection-reset');
-const atmosphereControl = document.getElementById('inspection-atmosphere');
+const qualityControl = document.getElementById('quality-select');
+const qualityApply = document.getElementById('quality-apply');
+const quality = parameters.get('quality') ?? 'low';
+qualityControl.value = quality;
+qualityControl.addEventListener('change', () => {
+  qualityApply.disabled = qualityControl.value === quality;
+});
+qualityApply.addEventListener('click', () => {
+  const url = new URL(location.href);
+  url.searchParams.set('quality', qualityControl.value);
+  // Quality selects geometry detail as well; discard an explicit old LOD override.
+  url.searchParams.delete('lod');
+  qualityApply.disabled = true;
+  input.reset();
+  location.href = url.href;
+});
 const loading = document.getElementById('loading');
 const loadingProgress = document.getElementById('loading-progress');
-let atmosphereEnabled = parameters.get('atmosphere') === 'on';
-let inspectionCommands = atmosphereEnabled ? 32 : 0;
+let inspectionCommands = 0;
 let inspectionDistance = NaN;
 let failed = false;
 let updateBrowserInput;
@@ -43,19 +56,26 @@ async function sendBrowserInput() {
   finally { inputPending = false; }
 }
 
-function closeSettings() {
-  inspection.hidden = true;
-  settingsToggle.setAttribute('aria-expanded', 'false');
-  controller.hidden = pipeline !== 'pbr' || !loading.hidden || failed;
+function setSettingsOpen(open) {
+  inspection.hidden = !open;
+  settingsToggle.setAttribute('aria-expanded', String(open));
+  const ready = loading.hidden && !failed;
+  document.getElementById('credits').hidden = open || !ready || pipeline === 'unlit';
+  controller.hidden = open || !ready || pipeline !== 'pbr';
+  if (open) input.reset();
   sendBrowserInput();
 }
 
-settingsToggle.addEventListener('click', () => {
-  inspection.hidden = !inspection.hidden;
-  settingsToggle.setAttribute('aria-expanded', String(!inspection.hidden));
-  if (!inspection.hidden) input.reset();
-  controller.hidden = pipeline !== 'pbr' || !inspection.hidden;
-  sendBrowserInput();
+function closeSettings() {
+  setSettingsOpen(false);
+}
+
+settingsToggle.addEventListener('click', () => setSettingsOpen(inspection.hidden));
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !inspection.hidden) {
+    closeSettings();
+    settingsToggle.focus();
+  }
 });
 canvas.addEventListener('pointerdown', () => { closeSettings(); canvas.focus(); });
 document.getElementById('retry').addEventListener('click', () => location.reload());
@@ -78,6 +98,7 @@ function setSceneReady() {
   loading.setAttribute('aria-busy', 'false');
   inspection.disabled = false;
   settingsToggle.disabled = false;
+  document.getElementById('credits').hidden = pipeline === 'unlit';
   controller.hidden = pipeline !== 'pbr';
   canvas.focus();
 }
@@ -93,10 +114,6 @@ tourControl.addEventListener('click', () => { inspectionCommands |= 1; sendBrows
 materialControl.addEventListener('click', () => { inspectionCommands |= 2; sendBrowserInput(); });
 resetControl.addEventListener('click', () => { inspectionCommands |= 4; sendBrowserInput(); });
 document.getElementById('scene-stop').addEventListener('click', () => { input.reset(); inspectionCommands |= 512; sendBrowserInput(); });
-atmosphereControl.addEventListener('click', () => {
-  inspectionCommands ^= 32;
-  sendBrowserInput();
-});
 
 function takeInspectionCommands() {
   const commands = inspectionCommands
@@ -112,26 +129,13 @@ function takeInspectionDistance() {
   return distance;
 }
 
-function compareLodAtCamera(pose) {
-  const url = new URL(location.href);
-  url.searchParams.set('lod', finest ? 'auto' : 'finest');
-  url.searchParams.set('debug', materialControl.textContent === 'Show shaded' ? 'triangles' : 'shaded');
-  url.searchParams.set('atmosphere', atmosphereEnabled ? 'on' : 'off');
-  url.searchParams.set('camera', pose);
-  location.href = url.href;
-}
-
-function setInspectionStatus(distance, flags) {
-  const touring = (flags & 1) !== 0, triangles = (flags & 2) !== 0, atmosphere = (flags & 4) !== 0;
-  atmosphereEnabled = atmosphere;
-  document.getElementById('inspection-status').textContent = pipeline === 'pbr'
-    ? (streaming ? 'Geometry · Streamed detail' : finest ? 'Geometry · Full detail' : 'Geometry · Automatic LOD') : '135 bunnies · Automatic LOD';
+function setInspectionStatus(distance, flags, description) {
+  const touring = (flags & 1) !== 0, triangles = (flags & 2) !== 0;
+  document.getElementById('inspection-status').textContent = description;
   distanceControl.value = Math.round(distance * 1000);
   tourControl.textContent = touring ? 'Pause tour' : 'Resume tour';
   materialControl.textContent = triangles ? 'Show shaded' : 'Show triangles';
   materialControl.setAttribute('aria-pressed', String(triangles));
-  atmosphereControl.textContent = atmosphereEnabled ? 'Disable atmosphere' : 'Enable atmosphere';
-  atmosphereControl.setAttribute('aria-pressed', String(atmosphereEnabled));
 }
 
 // Keep benchmark work fixed even when the browser panel is resized during a run.
@@ -143,7 +147,7 @@ function outputSize(name, fallback) {
 }
 function getCanvasWidth() { return outputSize('width', parameters.has('benchmark-frames') ? 1280 : Math.max(1, Math.round(window.innerWidth))); }
 function getCanvasHeight() { return outputSize('height', parameters.has('benchmark-frames') ? 720 : Math.max(1, Math.round(window.innerHeight))); }
-function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'core'; }
+function getBrowserFeatureLevel() { return parameters.get('feature-level') ?? 'auto'; }
 function setSceneAttribution(attribution) {
   const credit = document.getElementById('pbr-credit');
   credit.textContent = attribution;
@@ -176,26 +180,21 @@ if (pipeline === 'bunny') {
   document.getElementById('credits').hidden = false;
 }
 if (pipeline === 'pbr') {
+  document.getElementById('quality-controls').hidden = false;
   document.getElementById('inspection-distance-row').hidden = true;
   document.getElementById('camera-speed-row').hidden = false;
   tourControl.hidden = true;
   resetControl.textContent = 'Reset view';
-  atmosphereControl.hidden = false;
   document.getElementById('inspection-help').textContent = 'Touch: left stick to move, drag the right half to look, hold ↑ / ↓ to change height. Keyboard: WASD to move, Q / E down / up, arrows or right mouse drag to look, Shift to move faster, R to reset.';
-  const lodControl = document.getElementById('inspection-lod');
-  lodControl.hidden = streaming;
-  lodControl.textContent = finest ? 'Compare automatic LOD' : 'Use full detail';
-  lodControl.addEventListener('click', () => {
-    lodControl.disabled = true;
-    inspectionCommands |= 64;
-    sendBrowserInput();
-  });
 }
 for (const link of document.querySelectorAll('nav a')) {
   if (new URL(link.href).searchParams.get('pipeline') === pipeline) link.setAttribute('aria-current', 'page');
 }
 
 try {
+  for (const name of ['atmosphere', 'skybox']) {
+    if (parameters.has(name)) throw new Error(`${name} is no longer supported. Remove it from the URL.`);
+  }
   const isolationKey = 'sia.engine.isolation-reload';
   if ('serviceWorker' in navigator) {
     try {
@@ -235,16 +234,14 @@ try {
   setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
-  if (parameters.has('quality')) args.push('--quality', parameters.get('quality'));
-  for (const name of ['render-scale', 'width', 'height', 'gpu-timing', 'target-fps']) {
+  const forwardedOptions = [
+    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'environment',
+    'render-scale', 'width', 'height', 'gpu-timing', 'gpu-traversal', 'target-fps',
+    'benchmark-frames', 'benchmark-motion', 'debug', 'distance', 'lod', 'camera',
+  ];
+  for (const name of forwardedOptions) {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
   }
-  if (parameters.has('benchmark-frames')) args.push('--benchmark-frames', parameters.get('benchmark-frames'));
-  if (parameters.has('benchmark-motion')) args.push('--benchmark-motion', parameters.get('benchmark-motion'));
-  if (parameters.has('debug')) args.push('--debug', parameters.get('debug'));
-  if (parameters.has('distance')) args.push('--distance', parameters.get('distance'));
-  if (parameters.has('lod')) args.push('--lod', parameters.get('lod'));
-  if (parameters.has('camera')) args.push('--camera', parameters.get('camera'));
   if (pipeline === 'pbr') {
     const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
     if (!parameters.has('scene')) {
@@ -263,7 +260,7 @@ try {
   Module.canvas = canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getBrowserFeatureLevel, setSceneAttribution, setLoadingState, setSceneReady, showError, setInspectionStatus, compareLodAtCamera });
+  setModuleImports('main.js', { getBrowserFeatureLevel, setSceneAttribution, setLoadingState, setSceneReady, showError, setInspectionStatus });
   const exports = await getAssemblyExports(getConfig().mainAssemblyName);
   updateBrowserInput = exports.Sia.Engine.Example.Program.UpdateBrowserInput;
   await sendBrowserInput();
@@ -274,6 +271,21 @@ try {
   inspection.disabled = true;
   settingsToggle.disabled = true;
   if (exitCode !== 0) showError(`The engine stopped with exit code ${exitCode}.`);
+  else {
+    closeSettings();
+    loading.hidden = false;
+    loading.setAttribute('aria-busy', 'false');
+    document.getElementById('loading-title').textContent = 'Scene stopped';
+    document.getElementById('loading-stage').textContent = 'Restart to explore the scene again.';
+    document.getElementById('loading-percent').textContent = '';
+    loadingProgress.hidden = true;
+    document.getElementById('loading-note').hidden = true;
+    const restart = document.getElementById('retry');
+    restart.textContent = 'Restart scene';
+    restart.hidden = false;
+    controller.hidden = true;
+    document.getElementById('credits').hidden = true;
+  }
 } catch (error) {
   console.error('[startup]', error);
   showError(error instanceof Error ? error.message : String(error));

@@ -7,14 +7,28 @@ namespace Sia.Engine.Rendering;
 
 public static class SceneStreamBlock
 {
+    public static int MaximumEncodedLength(int decodedLength)
+    {
+        if (decodedLength is < 1 or > AssetChunk.MaximumLength)
+            throw new ArgumentOutOfRangeException(nameof(decodedLength));
+        return (int)System.Math.Min(AssetChunk.MaximumLength, ((long)decodedLength * 2) + 64);
+    }
+
     public static byte[] Encode(ReadOnlySpan<byte> bytes)
+        => Encode(bytes, CompressionLevel.Fastest);
+
+    public static byte[] Encode(ReadOnlySpan<byte> bytes, CompressionLevel compression)
     {
         if (bytes.Length is < 1 or > AssetChunk.MaximumLength) throw new ArgumentOutOfRangeException(nameof(bytes));
-        using var output = new MemoryStream(); output.Write(new byte[16]);
-        using (var compressor = new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true)) compressor.Write(bytes);
+        using var output = new MemoryStream();
+        output.Write(new byte[16]);
+        using (var compressor = new GZipStream(output, compression, leaveOpen: true))
+            compressor.Write(bytes);
         var encoded = output.ToArray();
-        if (encoded.Length > AssetChunk.MaximumLength) throw new ArgumentException("Compressed chunk exceeds its transport limit.");
-        "SIAGZIP1"u8.CopyTo(encoded); BinaryPrimitives.WriteInt32LittleEndian(encoded.AsSpan(8), bytes.Length);
+        if (encoded.Length > AssetChunk.MaximumLength)
+            throw new ArgumentException("Compressed chunk exceeds its transport limit.");
+        "SIAGZIP1"u8.CopyTo(encoded);
+        BinaryPrimitives.WriteInt32LittleEndian(encoded.AsSpan(8), bytes.Length);
         BinaryPrimitives.WriteInt32LittleEndian(encoded.AsSpan(12), encoded.Length - 16);
         return encoded;
     }
@@ -40,7 +54,8 @@ public static class SceneStreamBlock
             || BinaryPrimitives.ReadInt32LittleEndian(bytes[12..]) != bytes.Length - 16)
             throw new InvalidDataException("Invalid compressed scene block.");
         var length = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
-        if (length <= 0 || length > maximumLength || length > AssetChunk.MaximumLength) throw new InvalidDataException("Decoded scene block exceeds its limit.");
+        if (length <= 0 || length > maximumLength || length > AssetChunk.MaximumLength)
+            throw new InvalidDataException("Decoded scene block exceeds its limit.");
         if (BinaryPrimitives.ReadUInt32LittleEndian(bytes[^4..]) != (uint)length)
             throw new InvalidDataException("Invalid scene block size trailer.");
         return length;
@@ -53,8 +68,12 @@ public static class SceneStreamBlock
             ? new MemoryStream(segment.Array!, segment.Offset, segment.Count, false)
             : new MemoryStream(compressed.ToArray(), false);
         using var decoder = new GZipStream(input, CompressionMode.Decompress);
-        try { decoder.ReadExactly(destination); }
-        catch (EndOfStreamException error) { throw new InvalidDataException("Truncated scene block.", error); }
+        try {
+            decoder.ReadExactly(destination);
+        }
+        catch (EndOfStreamException error) {
+            throw new InvalidDataException("Truncated scene block.", error);
+        }
         if (decoder.ReadByte() != -1) throw new InvalidDataException("Incorrect decoded scene block length.");
     }
 }

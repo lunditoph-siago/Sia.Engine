@@ -12,9 +12,7 @@ public sealed class MeshGpuStore : IAddon
 
     public GpuMesh GetOrUpload(in GpuFrame frame, MeshRegistry registry, MeshHandle handle)
     {
-        if (_meshes.TryGetValue(handle, out var mesh)) {
-            return mesh;
-        }
+        if (_meshes.TryGetValue(handle, out var mesh)) return mesh;
 
         var data = registry.Get(handle);
         var vertexBuffer = frame.ResourceWorld.CreateWgpuBuffer(frame.Device, new WGPUBufferDescriptor {

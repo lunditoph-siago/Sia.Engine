@@ -8,8 +8,7 @@ namespace Sia.Engine.Rendering;
 public static class IrradianceSh
 {
     public const int CoefficientCount = 9;
-
-    private static readonly double _goldenAngle = System.Math.PI * (3.0 - System.Math.Sqrt(5.0));
+    private static readonly double s_GoldenAngle = System.Math.PI * (3.0 - System.Math.Sqrt(5.0));
 
     public static float4[] Project(Func<float3, float3> radiance, int sampleCount = 4096)
     {
@@ -52,18 +51,18 @@ public static class IrradianceSh
         result += coefficients[3].xyz * (a1 * y1 * normal.x);
         result += coefficients[4].xyz * (a2 * y2mn * normal.x * normal.y);
         result += coefficients[5].xyz * (a2 * y2mn * normal.y * normal.z);
-        result += coefficients[6].xyz * (a2 * y20 * (3.0f * normal.z * normal.z - 1.0f));
+        result += coefficients[6].xyz * (a2 * y20 * ((3.0f * normal.z * normal.z) - 1.0f));
         result += coefficients[7].xyz * (a2 * y2mn * normal.x * normal.z);
-        result += coefficients[8].xyz * (a2 * y22 * (normal.x * normal.x - normal.y * normal.y));
+        result += coefficients[8].xyz * (a2 * y22 * ((normal.x * normal.x) - (normal.y * normal.y)));
         return result;
     }
 
     private static float3 FibonacciSphereDirection(int index, int count)
     {
         var t = (index + 0.5) / count;
-        var y = 1.0 - 2.0 * t;
-        var radius = System.Math.Sqrt(System.Math.Max(0.0, 1.0 - y * y));
-        var theta = _goldenAngle * index;
+        var y = 1.0 - (2.0 * t);
+        var radius = System.Math.Sqrt(System.Math.Max(0.0, 1.0 - (y * y)));
+        var theta = s_GoldenAngle * index;
         var x = System.Math.Cos(theta) * radius;
         var z = System.Math.Sin(theta) * radius;
         return new float3((float)x, (float)y, (float)z);
@@ -84,9 +83,9 @@ public static class IrradianceSh
             y1 * d.x,
             y2mn * d.x * d.y,
             y2mn * d.y * d.z,
-            y20 * (3.0f * d.z * d.z - 1.0f),
+            y20 * ((3.0f * d.z * d.z) - 1.0f),
             y2mn * d.x * d.z,
-            y22 * (d.x * d.x - d.y * d.y),
+            y22 * ((d.x * d.x) - (d.y * d.y)),
         ];
     }
 }

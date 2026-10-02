@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,12 +25,12 @@
     <ProjectReference Include="..\Sia.Rendering\Sia.Rendering.csproj" />
     <ProjectReference Include="..\Sia.Rendering.Pbr\Sia.Rendering.Pbr.csproj" />
     <ProjectReference Include="..\Sia.Rendering.Unlit\Sia.Rendering.Unlit.csproj" />
-    <PackageReference Include="Sia.Graphics" Version="0.0.20" />
-    <PackageReference Include="Sia.RenderGraph" Version="0.0.20" />
-    <PackageReference Include="Sia.WebGPU" Version="0.0.20" />
-    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.20" />
-    <PackageReference Include="Sia.GLFW" Version="0.0.4" />
-    <PackageReference Include="Sia.GLFW.Native" Version="0.0.4" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.22" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.22" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.22" />
+    <PackageReference Include="Sia.WebGPU.Native" Version="0.0.22" />
+    <PackageReference Include="Sia.GLFW" Version="0.0.8" />
+    <PackageReference Include="Sia.GLFW.Native" Version="0.0.8" />
   </ItemGroup>
   <Import Project="Bistro.targets" />
 </Project>
