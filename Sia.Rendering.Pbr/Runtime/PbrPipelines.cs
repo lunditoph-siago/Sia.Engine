@@ -164,7 +164,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
             if (gpuStream) {
                 StreamWorkLayout = GpuBinding.Layout(_gpu, [
                     GpuBinding.Buffer(12, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Vertex),
-                    GpuBinding.Buffer(13, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex, 112)
+                    GpuBinding.Buffer(13, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex,
+                        (ulong)System.Runtime.InteropServices.Marshal.SizeOf<PbrGpuHierarchy.Configuration>())
                 ]);
                 var streamLayout = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout, StreamWorkLayout);
                 StreamRaster = Render(rasterShader, streamLayout, "stream_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);

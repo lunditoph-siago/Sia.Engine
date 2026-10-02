@@ -166,11 +166,14 @@ public static partial class Program
         if (pipeline != ScenePipeline.Pbr) {
             for (var i = 0; i < args.Length; i += 2) {
                 if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes"
-                    or "--scene-gi" or "--surface-data" or "--gpu-timing"
+                    or "--scene-gi" or "--surface-data"
                     or "--render-scale" or "--target-fps") {
                     throw new ArgumentException($"{args[i]} requires --pipeline pbr.");
                 }
             }
+        }
+        if (pipeline == ScenePipeline.Unlit && args.Contains("--gpu-timing")) {
+            throw new ArgumentException("--gpu-timing requires --pipeline bunny|pbr.");
         }
         if (pipeline == ScenePipeline.Unlit && args.Contains("--gpu-traversal")) {
             throw new ArgumentException("--gpu-traversal requires --pipeline bunny|pbr.");
@@ -187,7 +190,7 @@ public static partial class Program
         if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
             throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
         }
-        return (pipeline, debugMode, distance, scenePath, finest ?? Quality == RenderQuality.High, camera);
+        return (pipeline, debugMode, distance, scenePath, finest ?? false, camera);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {

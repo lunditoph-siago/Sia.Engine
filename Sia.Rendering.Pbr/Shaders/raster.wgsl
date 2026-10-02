@@ -1,10 +1,7 @@
 #define_import_path pbr/raster
 
 #import pbr/bindings
-
-struct StreamSelection {
-    vp: mat4x4<f32>, table: vec4<u32>, screen: vec4<f32>, output: vec4<u32>
-}
+#import pbr/stream_selection_types
 
 @group(2) @binding(12) var<storage, read> stream_work: array<vec2<u32>>;
 @group(2) @binding(13) var<uniform> stream_selection: StreamSelection;

@@ -103,12 +103,14 @@ internal sealed unsafe partial class PbrView
                 CompactStreamDraws(_opaque, UseForward);
             }
         }
-        else foreach (var draw in _owner.Scene.Opaque)
-            if (culler.Intersects(draw.Bounds)) {
-                if (UseForward)
-                    AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, _width, _height, _owner.Settings.TargetPixelError), true);
-                else AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, _width, _height, _owner.Settings.TargetPixelError));
+        else {
+            var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
+            foreach (var draw in _owner.Scene.Opaque) {
+                if (culler.Intersects(draw.Bounds))
+                    AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, projection,
+                        _width, _height, _owner.Settings.TargetPixelError), UseForward);
             }
+        }
         foreach (var draw in _owner.Scene.Transparent)
             if (culler.Intersects(draw.Bounds)) _transparent.Add(draw);
 

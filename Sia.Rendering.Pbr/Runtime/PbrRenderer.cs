@@ -90,7 +90,10 @@ public sealed class PbrRenderer :
     IRenderGraphContributor<RenderFrameContext>,
     IDisposable
 {
-    private static readonly string[] s_TimingStages = ["pbr-frame", "clusters", "shadows", "opaque", "probe-update", "material-lighting", "transparency", "output"];
+    private static readonly string[] s_TimingStages = [
+        "pbr-frame", "clusters", "shadows", "hierarchy", "triangle-expansion", "opaque",
+        "probe-update", "material-lighting", "transparency", "output"
+    ];
 
     public static ReadOnlySpan<string> GpuTimingStages => s_TimingStages;
 

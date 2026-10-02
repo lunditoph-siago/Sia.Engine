@@ -8,7 +8,8 @@ public static partial class MeshPatchBuilder
     private const int k_QuadricSize = k_CoordinateCount * (k_CoordinateCount + 1) / 2;
 
     private static double[] BuildQuadrics(MeshData mesh, Triangle[] triangles, bool[] locked,
-        MeshPatchBuildSettings settings, CancellationToken cancellationToken, out double[] coordinates)
+        MeshPatchBuildSettings settings, CancellationToken cancellationToken, out double[] coordinates,
+        out double positionScale)
     {
         var quadrics = new double[checked(mesh.Vertices.Length * k_QuadricSize)];
         coordinates = new double[checked(mesh.Vertices.Length * k_CoordinateCount)];
@@ -16,6 +17,7 @@ public static partial class MeshPatchBuilder
         var extent = new double3(mesh.Bounds.Max.x, mesh.Bounds.Max.y, mesh.Bounds.Max.z) - origin;
         var scale = System.Math.Max(extent.x, System.Math.Max(extent.y, extent.z));
         if (scale == 0) { scale = 1; }
+        positionScale = scale;
         for (var v = 0; v < mesh.Vertices.Length; v++) {
             var vertex = mesh.Vertices[v];
             var p = (Position(vertex) - origin) / scale;

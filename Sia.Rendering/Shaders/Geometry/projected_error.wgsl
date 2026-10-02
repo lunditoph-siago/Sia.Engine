@@ -1,5 +1,25 @@
 #define_import_path rendering/Geometry/projected_error
 
+fn sphere_pixel_error(center: vec3<f32>, radius: f32, spatial: f32,
+    eye_near: vec4<f32>, forward_pixels: vec4<f32>) -> f32 {
+    if (spatial == 0.0) { return 0.0; }
+    if (dot(forward_pixels.xyz, forward_pixels.xyz) == 0.0) { return spatial * forward_pixels.w; }
+    let relative = center - eye_near.xyz;
+    let distance_squared = dot(relative, relative);
+    let z = dot(relative, forward_pixels.xyz);
+    let radial = sqrt(max(0.0, distance_squared - z * z));
+    let tangent = sqrt(max(0.0, distance_squared - radius * radius));
+    var cosine = (z * tangent - radial * radius) / max(distance_squared, 1.0e-20);
+    let near = eye_near.w;
+    if (distance_squared <= radius * radius || cosine * tangent < near) {
+        let h = near - z;
+        let far_intersection = radial + sqrt(max(0.0, radius * radius - h * h));
+        cosine = near / sqrt(far_intersection * far_intersection + near * near);
+    }
+    let edge_scale = max(z - radius, near) * max(cosine, 1.0e-6);
+    return min(spatial * forward_pixels.w / edge_scale, 1.0e30);
+}
+
 fn bounds_plane_visible(center: vec3<f32>, extent: vec3<f32>, plane: vec4<f32>) -> bool {
     let distance = dot(center, plane.xyz) + plane.w + dot(extent, abs(plane.xyz));
     let tolerance = 1.0e-5 * (1.0 + dot(abs(center) + extent, abs(plane.xyz)) + abs(plane.w));

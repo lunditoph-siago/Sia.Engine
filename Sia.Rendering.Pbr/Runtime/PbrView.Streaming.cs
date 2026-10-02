@@ -9,7 +9,7 @@ namespace Sia.Engine.Rendering.Pbr;
 internal sealed unsafe partial class PbrView
 {
     private PbrGpuSelection? _selection;
-    private RenderGraphBufferKey _streamWorkKey, _streamArgsKey, _streamFeedbackKey;
+    private RenderGraphBufferKey _streamWorkKey, _streamArgsKey, _streamDispatchKey, _streamFeedbackKey;
 
     internal PbrGpuSelection? Selection => _selection;
 
@@ -19,6 +19,7 @@ internal sealed unsafe partial class PbrView
         _selection = new(_gpuFrame, hierarchy, _owner.Pipelines.StreamWorkLayout, _owner.Settings.ViewBytes - _gpu.Bytes);
         _streamWorkKey = new(_prefix + "stream-work");
         _streamArgsKey = new(_prefix + "stream-args");
+        _streamDispatchKey = new(_prefix + "stream-dispatch");
         _streamFeedbackKey = new(_prefix + "stream-feedback");
         _sceneBuffers.Add((_streamWorkKey, _selection.Work, RenderGraphBufferUsage.Storage));
         _sceneBuffers.Add((_streamArgsKey, _selection.Arguments, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource));
@@ -48,6 +49,7 @@ internal sealed unsafe partial class PbrView
     private RenderGraphPassDeclarationBuilder WriteStreamWork(RenderGraphPassDeclarationBuilder pass)
         => ReadStreamInputs(pass).ReadWrite(_streamWorkKey, RenderGraphBufferUsage.Storage)
             .ReadWrite(_streamArgsKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect)
+            .ReadWrite(_streamDispatchKey, RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination)
             .ReadWrite(_streamFeedbackKey, RenderGraphBufferUsage.Storage);
 
     private RenderGraphPassDeclarationBuilder ReadStreamWork(RenderGraphPassDeclarationBuilder pass)
@@ -65,10 +67,18 @@ internal sealed unsafe partial class PbrView
 
     private void BuildStreamSelection(ref RenderGraphBuildContext graph, Dependencies dependency)
     {
-        if (_selection is null) return;
-        graph.UsePass(new(_prefix + "stream-select"), "pbr-stream-hierarchy", dependency,
-            static (in d, p) => d.View.WriteStreamWork(p),
-            context => _selection.Select(context.CommandEncoder, 7), RenderGraphPassKind.Compute);
+        if (_selection is not null)
+            graph.UsePass(new(_prefix + "stream-select"), "pbr-stream-hierarchy", dependency,
+                static (in d, p) => d.View.WriteStreamWork(d.View.ReadTiming(p)),
+                context => _selection.SelectNodes(context.CommandEncoder, 7), RenderGraphPassKind.Compute);
+        TimingMarker(ref graph, dependency, 3);
+        if (_selection is not null)
+            graph.UsePass(new(_prefix + "stream-expand"), "pbr-stream-expand", dependency,
+                static (in d, p) => d.View.ReadStreamInputs(d.View.ReadTiming(p))
+                    .ReadWrite(d.View._streamWorkKey, RenderGraphBufferUsage.Storage)
+                    .Read(d.View._streamArgsKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect),
+                context => _selection.ExpandTriangles(context.CommandEncoder, 7), RenderGraphPassKind.Compute);
+        TimingMarker(ref graph, dependency, 4);
     }
 
     private void BuildStreamFeedback(ref RenderGraphBuildContext graph, Dependencies dependency)

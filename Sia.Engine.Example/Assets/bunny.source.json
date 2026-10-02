@@ -13,11 +13,11 @@
     "Remove 1113 unreferenced vertices and confidence/intensity scan fields.",
     "Center referenced bounds and uniformly scale the longest axis to 1.6. Preserve all triangles and winding.",
     "Generate area-weighted smooth normals; use a uniform material with zero UVs.",
-    "Cook patch hierarchy and meshlets with builder 2 default settings; share identical vertex attributes across LODs, byte-shuffle section fields and losslessly compress with GZip SmallestSize."
+    "Recook the finest geometry with Quadric area-weighted collapse error and maximum child/local propagation. Preserve oriented finest triangles and all vertex attributes; byte-shuffle section fields and losslessly compress with GZip SmallestSize."
   ],
   "asset": "bunny.siapatch",
-  "assetSha256": "af2cea20309e9d5194a5b624f92bdee0de9d3d85ee8f1096ff84f9cd55cc51c0",
-  "assetBytes": 1860790,
-  "decodedBytes": 4917434,
+  "assetSha256": "80b85c8ee1ea872a54ac4d8224c0c830f2451726c61e78aced40a9a0a94d6ef9",
+  "assetBytes": 1855140,
+  "decodedBytes": 4918624,
   "usage": "Research and free redistribution with source acknowledgment. Commercial use requires Stanford permission; see the repository terms."
 }

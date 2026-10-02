@@ -7,7 +7,8 @@ namespace Sia.Engine.Mesh;
 
 public sealed partial class MeshPatchAsset
 {
-    private const int HeaderSize = 264;
+    private const int HeaderSize = 268;
+    private const int QuadricErrorMetric = 1;
     private const int HashOffset = 48;
     private const int HashSize = 32;
     private static ReadOnlySpan<int> Strides => [56, 48, 4, 72, 4, 1, 4];
@@ -16,14 +17,15 @@ public sealed partial class MeshPatchAsset
     {
         cancellationToken.ThrowIfCancellationRequested();
         var tree = Build.Tree;
+        const int headerSize = HeaderSize;
         var (geometry, meshlets) = tree.CopyGeometry();
         int[] counts = [tree.Nodes.Length, geometry.Vertices.Length, geometry.Indices.Length,
             meshlets.Meshlets.Length, meshlets.VertexIndices.Length, meshlets.TriangleIndices.Length,
             meshlets.SourceTriangleIndices.Length];
-        var length = HeaderSize;
+        var length = headerSize;
         for (var i = 0; i < counts.Length; i++) { length = checked(length + counts[i] * Strides[i]); }
         var bytes = new byte[length];
-        "SIAPATCH"u8.CopyTo(bytes);
+        "SIAPATC2"u8.CopyTo(bytes);
         var writer = new Writer(bytes.AsSpan(8));
         writer.Long(length);
         Convert.FromHexString(SourceHash).CopyTo(bytes, 16);
@@ -41,14 +43,15 @@ public sealed partial class MeshPatchAsset
         writer.Int(tree.RootCount);
         writer.Int(tree.FinestTriangleCount);
         writer.Box(geometry.Bounds);
-        long offset = HeaderSize;
+        long offset = headerSize;
         for (var i = 0; i < counts.Length; i++) {
             writer.Long(offset);
             writer.Int(counts[i]);
             writer.Int(Strides[i]);
             offset += (long)counts[i] * Strides[i];
         }
-        writer = new(bytes.AsSpan(HeaderSize));
+        writer.Int(QuadricErrorMetric);
+        writer = new(bytes.AsSpan(headerSize));
         foreach (var node in tree.Nodes.Span) {
             cancellationToken.ThrowIfCancellationRequested();
             writer.Box(node.Bounds);
@@ -101,7 +104,9 @@ public sealed partial class MeshPatchAsset
     private static MeshPatchAsset DecodeRaw(ReadOnlySpan<byte> bytes, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Require(bytes.Length >= HeaderSize && bytes[..8].SequenceEqual("SIAPATCH"u8), "Invalid patch asset header.");
+        const int headerSize = HeaderSize;
+        Require(bytes.Length >= headerSize && bytes.StartsWith("SIAPATC2"u8),
+            "Unsupported patch asset format; recook with the current Quadric cooker.");
         var reader = new Reader(bytes[8..]);
         Require(reader.Long() == bytes.Length, "Invalid patch asset length.");
         Require(CryptographicOperations.FixedTimeEquals(Hash(bytes), bytes.Slice(HashOffset, HashSize)), "Patch asset checksum mismatch.");
@@ -121,7 +126,7 @@ public sealed partial class MeshPatchAsset
         var finest = reader.Int();
         var bounds = reader.Box();
         Span<int> counts = stackalloc int[7];
-        long offset = HeaderSize;
+        long offset = headerSize;
         for (var i = 0; i < counts.Length; i++) {
             Require(reader.Long() == offset, "Patch sections must form a contiguous ordered stream.");
             counts[i] = reader.Int();
@@ -131,12 +136,13 @@ public sealed partial class MeshPatchAsset
             Require(offset <= bytes.Length, "Patch section exceeds the asset length.");
         }
         Require(offset == bytes.Length, "Unexpected data after patch sections.");
+        Require(reader.Int() == QuadricErrorMetric, "Unsupported patch error metric.");
         Require(sourceTriangles >= 0 && removed >= 0 && removed <= sourceTriangles && finest == sourceTriangles - removed
             && simplified >= 0 && simplified <= counts[0] && targetMisses >= 0 && unreduced >= 0,
             "Invalid patch build diagnostics.");
         Require(counts[2] % 3 == 0 && counts[5] == counts[2] && counts[6] == counts[2] / 3,
             "Meshlet streams must cover the geometry triangles.");
-        reader = new(bytes[HeaderSize..]);
+        reader = new(bytes[headerSize..]);
         var nodes = new MeshPatchNode[counts[0]];
         for (var i = 0; i < nodes.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
