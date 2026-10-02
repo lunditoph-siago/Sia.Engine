@@ -51,8 +51,9 @@ public sealed partial class MeshPatchAsset
 
     private static byte[] Shuffle(ReadOnlySpan<byte> bytes, bool restore, CancellationToken cancellationToken)
     {
-        var headerSize = bytes.StartsWith("SIAPATC2"u8) ? QuadricHeaderSize : HeaderSize;
-        Require(bytes.Length >= headerSize, "Truncated patch sections.");
+        const int headerSize = HeaderSize;
+        Require(bytes.Length >= headerSize && bytes.StartsWith("SIAPATC2"u8),
+            "Unsupported patch asset format; recook with the current Quadric cooker.");
         var output = new byte[bytes.Length];
         bytes[..headerSize].CopyTo(output);
         var offset = headerSize;

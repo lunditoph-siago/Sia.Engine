@@ -320,12 +320,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 return;
             }
             var raw = node.ChildCount == 0 ? 0
-                : tree.ErrorMetric == MeshPatchErrorMetric.Quadric
-                    ? ProjectedGeometryError.ProjectLodError(bounds, node.Error * _norms[instanceIndex],
-                        lodProjection, vp, width, height,
-                        math.length(PbrSceneStream.NodeBounds(node).Max - PbrSceneStream.NodeBounds(node).Min)
-                            * .5f * _norms[instanceIndex])
-                    : ProjectedGeometryError.ProjectError(bounds, node.Error * _norms[instanceIndex], vp, width, height);
+                : ProjectedGeometryError.ProjectLodError(bounds, node.Error * _norms[instanceIndex],
+                    lodProjection, vp, width, height,
+                    math.length(PbrSceneStream.NodeBounds(node).Max - PbrSceneStream.NodeBounds(node).Min)
+                        * .5f * _norms[instanceIndex]);
             var projected = float.IsFinite(raw) ? raw : float.MaxValue;
             if (node.ChildCount > 0 && (error == 0 || projected > error)) {
                 var complete = true;

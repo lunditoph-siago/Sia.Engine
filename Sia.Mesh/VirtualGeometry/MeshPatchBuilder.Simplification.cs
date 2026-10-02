@@ -10,11 +10,6 @@ public static partial class MeshPatchBuilder
         var (triangles, incident, locked) = Topology(mesh, cancellationToken);
         var deleted = new bool[triangles.Length];
         var revisions = new int[mesh.Vertices.Length];
-        var quadricError = settings.ErrorMetric == MeshPatchErrorMetric.Quadric;
-        var radii = quadricError ? [] : new float[mesh.Vertices.Length];
-        var nextMember = quadricError ? [] : new int[mesh.Vertices.Length];
-        Array.Fill(nextMember, -1);
-        var lastMember = quadricError ? [] : Enumerable.Range(0, mesh.Vertices.Length).ToArray();
         var positions = mesh.Vertices.Select(Position).ToArray();
         var quadrics = BuildQuadrics(mesh, triangles, locked, settings, cancellationToken,
             out var coordinates, out var positionScale);
@@ -49,15 +44,6 @@ public static partial class MeshPatchBuilder
                 }
             }
             for (var i = 0; i < k_QuadricSize; i++) { quadrics[to * k_QuadricSize + i] += quadrics[from * k_QuadricSize + i]; }
-            if (!quadricError) {
-                var radius = (double)radii[to];
-                for (var member = from; member >= 0; member = nextMember[member]) {
-                    radius = System.Math.Max(radius, math.length(positions[member] - positions[to]));
-                }
-                radii[to] = RoundUp(radius);
-                nextMember[lastMember[to]] = from;
-                lastMember[to] = lastMember[from];
-            }
             edges.Clear();
             foreach (var v in affected) {
                 revisions[v]++;
@@ -77,12 +63,7 @@ public static partial class MeshPatchBuilder
             indices[offset++] = (uint)triangles[t].C;
         }
         // Coordinates are normalized by positionScale; restore mesh-space units.
-        var error = quadricError ? RoundUp(System.Math.Sqrt(maximumCost) * positionScale) : 0f;
-        if (!quadricError) {
-            for (var v = 0; v < incident.Length; v++) {
-                if (incident[v].Count != 0) { error = MathF.Max(error, radii[v]); }
-            }
-        }
+        var error = RoundUp(System.Math.Sqrt(maximumCost) * positionScale);
         return (Compact(mesh.Vertices, indices), error);
 
         void Enqueue(int from, int to)

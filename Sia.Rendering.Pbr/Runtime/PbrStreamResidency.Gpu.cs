@@ -36,14 +36,16 @@ internal sealed partial class PbrStreamResidency
         var parts = new List<uint4>(checked(partCount + rootCount));
         var roots = new List<uint4>(rootCount);
         var offsets = new Dictionary<int, int>(assets.Count);
-        var capacities = _source.Hierarchies.Select(PbrGpuHierarchy.MaximumCutTriangles).ToArray();
-        ulong single = 0, twice = 0;
+        var capacities = _source.Hierarchies.Select(PbrGpuHierarchy.MaximumCut).ToArray();
+        ulong single = 0, twice = 0, selectedNodes = 0;
         for (var instance = 0; instance < _source.Instances.Length; instance++) {
             var info = _source.Instances.Span[instance];
             var tree = _source.Hierarchies[info.AssetIndex];
             var side = _source.Bootstrap.Materials.Span[info.MaterialIndex].DoubleSided ? 1u : 0u;
-            if (side == 0) single = checked(single + capacities[info.AssetIndex]);
-            else twice = checked(twice + capacities[info.AssetIndex]);
+            var capacity = capacities[info.AssetIndex];
+            if (side == 0) single = checked(single + capacity.Triangles);
+            else twice = checked(twice + capacity.Triangles);
+            selectedNodes = checked(selectedNodes + capacity.Nodes);
             if (!offsets.TryGetValue(info.AssetIndex, out var first)) {
                 first = nodes.Count;
                 offsets.Add(info.AssetIndex, first);
@@ -60,12 +62,11 @@ internal sealed partial class PbrStreamResidency
                         }
                         parts.Add(new((uint)slot, (uint)part.First, (uint)part.Count, 0));
                     }
-                    var radius = tree.ErrorMetric == Sia.Engine.Mesh.MeshPatchErrorMetric.Quadric
-                        ? math.length((bounds.Max - bounds.Min) * .5f) : 0;
+                    var radius = math.length((bounds.Max - bounds.Min) * .5f);
                     nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, radius),
                         new((uint)(first + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
                         new(node.Parent < 0 ? uint.MaxValue : (uint)(first + node.Parent),
-                            (uint)tree.ErrorMetric, 0, 0)));
+                            0, 0, 0)));
                     if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + rootCount) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
                         throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
                 }
@@ -84,7 +85,7 @@ internal sealed partial class PbrStreamResidency
             throw new NotSupportedException("GPU logical cut exceeds indirect vertex addressing capacity.");
         var hierarchy = new PbrGpuHierarchy(frame, _settings.HierarchyBytes, CollectionsMarshal.AsSpan(nodes),
             CollectionsMarshal.AsSpan(parts), mapping, (uint)rootBase, (uint)roots.Count,
-            checked((uint)single), checked((uint)twice), instances);
+            checked((uint)single), checked((uint)twice), checked((uint)selectedNodes), instances);
         _gpuKeys = [.. keys];
         _gpuSlots = slots;
         return Hierarchy = hierarchy;

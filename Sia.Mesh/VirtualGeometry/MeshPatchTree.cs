@@ -41,10 +41,6 @@ public sealed partial class MeshPatchTree
 
     public static MeshPatchTree Create(ReadOnlySpan<MeshPatch> roots, int maxVertices = 64, int maxTriangles = 124,
         CancellationToken cancellationToken = default)
-        => Create(roots, maxVertices, maxTriangles, cancellationToken, maximumError: false);
-
-    internal static MeshPatchTree Create(ReadOnlySpan<MeshPatch> roots, int maxVertices, int maxTriangles,
-        CancellationToken cancellationToken, bool maximumError)
     {
         var patches = new List<(MeshPatch Patch, int Parent)>();
         var seen = new HashSet<MeshPatch>(ReferenceEqualityComparer.Instance);
@@ -130,16 +126,7 @@ public sealed partial class MeshPatchTree
             if (node.TriangleCount > triangles || !EqualBoundary(boundaries[i], combined)) {
                 throw new ArgumentException("Parent geometry must preserve the children's oriented boundary attributes and must not increase triangle count.", nameof(roots));
             }
-            var accumulatedError = maximumError
-                ? System.Math.Max(error, node.EstimatedSpatialError)
-                : (double)error + node.EstimatedSpatialError;
-            var roundedError = (float)accumulatedError;
-            if (roundedError < accumulatedError || (!maximumError && error > 0 && node.EstimatedSpatialError > 0
-                && roundedError == MathF.Max(error, node.EstimatedSpatialError))) {
-                roundedError = MathF.BitIncrement(roundedError);
-            }
-            error = roundedError;
-            if (!float.IsFinite(error)) { throw new ArgumentException("Accumulated patch error overflows.", nameof(roots)); }
+            error = MathF.Max(error, node.EstimatedSpatialError);
             nodes[i] = node with { Bounds = new(min, max), EstimatedSpatialError = error };
         }
         var bounds = nodes.Length == 0 ? default : nodes[0].Bounds;

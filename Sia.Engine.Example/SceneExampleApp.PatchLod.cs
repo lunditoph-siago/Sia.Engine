@@ -13,7 +13,7 @@ internal sealed partial class SceneExampleApp
     private const int BunnyColumns = 15;
     private const int BunnyRows = 9;
     private const int BunnyInstanceCount = BunnyColumns * BunnyRows;
-    private const float BunnyPixelError = 4;
+    private const float BunnyPixelError = .125f;
     private readonly MeshPatchAsset? _patchAsset;
     private Aabb _patchBounds;
     private Aabb _patchSceneBounds;

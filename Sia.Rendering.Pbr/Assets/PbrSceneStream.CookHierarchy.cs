@@ -79,7 +79,7 @@ public sealed partial class PbrSceneStream
                 indices.Clear();
                 ranges.Clear();
             }
-            trees[g] = new(tree.RootCount, result, source.Geometry.Span[geometryIds[g]].Settings.ErrorMetric);
+            trees[g] = new(tree.RootCount, result, QuadricErrorMetric);
         }
         if (roots.Sum(id => (long)pageInfo[id].Bytes) > 256L * 1024 * 1024)
             throw new ArgumentException("Root bootstrap exceeds its budget.");
