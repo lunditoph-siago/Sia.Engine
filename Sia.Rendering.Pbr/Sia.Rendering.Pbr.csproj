@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="10.0.12" />
     <PackageReference Include="Sia.Prelude" Version="2.1.5" />
     <PackageReference Include="Sia.Math" Version="0.0.3" />
     <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />

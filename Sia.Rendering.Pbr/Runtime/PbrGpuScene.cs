@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using Sia;
 using Sia.Engine.Mesh;
@@ -51,34 +52,18 @@ internal sealed partial class PbrGpuScene : IDisposable
     public PbrGpuScene(in GpuFrame frame, PbrSceneAsset source, Entity layout, ulong budget, int[] materialBatches, Entity instances = default)
     {
         _gpu = new(frame, budget);
+        var geometries = new PbrResidentGeometry?[source.Geometry.Length];
+        float4[]? vertexScratch = null;
+        uint[]? indexScratch = null;
         try {
-            var geometries = source.Geometry.ToArray().Select(asset => {
-                var tree = asset.Build.Tree;
-                if (tree.RootCount == tree.Nodes.Length) {
-                    var finest = tree.CopyFinestGeometry().Geometry;
-                    return (Mesh: finest, Fine: (uint)finest.Indices.Length / 3, Coarse: 0u, Error: 0f);
-                }
-                var geometry = tree.CopyGeometry().Geometry;
-                var indices = new List<uint>();
-                foreach (var node in tree.Nodes.Span)
-                    if (node.ChildCount == 0)
-                        indices.AddRange(geometry.Indices.AsSpan(node.TriangleOffset * 3, node.TriangleCount * 3));
-                var fine = (uint)indices.Count / 3;
-                var error = 0f;
-                foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
-                    indices.AddRange(geometry.Indices.AsSpan(node.TriangleOffset * 3, node.TriangleCount * 3));
-                    error = MathF.Max(error, node.EstimatedSpatialError);
-                }
-                return (Mesh: geometry with {
-                    Indices = [.. indices]
-                }, Fine: fine, Coarse: ((uint)indices.Count / 3) - fine, Error: error);
-            }).ToArray();
-            var meshes = geometries.Select(g => g.Mesh).ToArray();
+            for (var g = 0; g < geometries.Length; g++)
+                geometries[g] = new(source.Geometry.Span[g].Build.Tree);
             var totalVertices = 0;
             var totalTriangles = 0;
             foreach (var instance in source.Instances.Span) {
-                totalVertices = checked(totalVertices + meshes[instance.Geometry].Vertices.Length);
-                totalTriangles = checked(totalTriangles + (meshes[instance.Geometry].Indices.Length / 3));
+                var geometry = geometries[instance.Geometry]!;
+                totalVertices = checked(totalVertices + geometry.VertexCount);
+                totalTriangles = checked(totalTriangles + (int)checked(geometry.Fine + geometry.Coarse));
             }
             var vertexBytes = checked((ulong)totalVertices * 48);
             var indexBytes = checked((ulong)totalTriangles * 12);
@@ -87,8 +72,25 @@ internal sealed partial class PbrGpuScene : IDisposable
                 throw new ArgumentException($"Baked resident geometry needs {vertexBytes + indexBytes} bytes; budget {budget}.");
             VertexCount = (uint)totalVertices;
             TriangleOffset = 0;
-            var packed = new float4[checked(totalVertices * 3)];
-            var topology = new uint[checked(totalTriangles * 3)];
+            Vertices = _gpu.Buffer(vertexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst);
+            Topology = _gpu.Buffer(indexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst);
+            const int vertexBatch = 16384;
+            const int indexBatch = 65536;
+            vertexScratch = ArrayPool<float4>.Shared.Rent(vertexBatch * 3);
+            indexScratch = ArrayPool<uint>.Shared.Rent(indexBatch);
+            void FlushVertices(int count, uint first)
+            {
+                if (count == 0) return;
+                for (var plane = 0; plane < 3; plane++) {
+                    var at = checked((ulong)plane * (uint)totalVertices + first);
+                    Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), at * 16,
+                        vertexScratch.AsSpan(plane * vertexBatch, count));
+                }
+            }
+            var indexWriter = new PbrResidentGeometry.IndexWriter(indexScratch.AsSpan(0, indexBatch),
+                (values, first) => Wgpu.WriteBuffer<uint>(_gpu.Queue, Topology.GetWgpu<WGPUBuffer>(), (ulong)first * 4, values));
+            var bufferedVertices = 0;
+            uint uploadedVertices = 0;
             var transparent = new List<Draw>();
             var opaque = new List<Draw>();
             var minimum = new float3(float.PositiveInfinity);
@@ -104,36 +106,37 @@ internal sealed partial class PbrGpuScene : IDisposable
             foreach (var i in order) {
                 var instance = source.Instances.Span[i];
                 var material = source.Materials.Span[instance.Material];
-                var mesh = meshes[instance.Geometry];
+                var geometry = geometries[instance.Geometry]!;
                 var normal = math.transpose(math.inverse(instance.Transform));
-                for (var v = 0; v < mesh.Vertices.Length; v++) {
-                    var vertex = mesh.Vertices[v];
-                    var position = math.mul(instance.Transform, new float4(vertex.Position, 1)).xyz;
-                    var n = math.mul(normal, new float4(vertex.Normal, 0)).xyz;
-                    var t = math.mul(instance.Transform, new float4(vertex.Tangent.xyz, 0)).xyz;
-                    var at = (int)vertexOffset + v;
-                    packed[at] = new(position, n.x);
-                    packed[totalVertices + at] = new(n.y, n.z, vertex.UV.x, vertex.UV.y);
-                    packed[(totalVertices * 2) + at] = new(t, (vertex.Tangent.w < 0 ? -1 : 1) * (instance.Material + 1));
+                for (var first = 0; first < geometry.VertexCount;) {
+                    var count = System.Math.Min(vertexBatch - bufferedVertices, geometry.VertexCount - first);
+                    geometry.PackVertices(vertexScratch.AsSpan(bufferedVertices), first, count,
+                        instance.Transform, normal, instance.Material, vertexBatch);
+                    first += count;
+                    bufferedVertices += count;
+                    if (bufferedVertices == vertexBatch) {
+                        FlushVertices(bufferedVertices, uploadedVertices);
+                        uploadedVertices += (uint)bufferedVertices;
+                        bufferedVertices = 0;
+                    }
                 }
-                for (var index = 0; index < mesh.Indices.Length; index++)
-                    topology[(triangleOffset * 3) + index] = vertexOffset + mesh.Indices[index];
-                var count = (uint)mesh.Indices.Length / 3;
-                var bounds = BoundsTransform.Apply(mesh.Bounds, instance.Transform);
+                geometry.WriteIndices(ref indexWriter, vertexOffset);
+                var triangles = checked(geometry.Fine + geometry.Coarse);
+                var bounds = BoundsTransform.Apply(geometry.Bounds, instance.Transform);
                 minimum = math.min(minimum, bounds.Min);
                 maximum = math.max(maximum, bounds.Max);
-                if (count != 0)
-                    (material.AlphaBlend ? transparent : opaque).Add(new(triangleOffset, geometries[instance.Geometry].Fine, instance.Material, bounds, material.DoubleSided, triangleOffset * 3, (uint)i,
-                        triangleOffset + geometries[instance.Geometry].Fine, geometries[instance.Geometry].Coarse,
-                        geometries[instance.Geometry].Error * TransformNorm(instance.Transform)));
-                vertexOffset += (uint)mesh.Vertices.Length;
-                triangleOffset += count;
+                if (triangles != 0)
+                    (material.AlphaBlend ? transparent : opaque).Add(new(triangleOffset, geometry.Fine,
+                        instance.Material, bounds, material.DoubleSided, triangleOffset * 3, (uint)i,
+                        triangleOffset + geometry.Fine, geometry.Coarse, geometry.Error * TransformNorm(instance.Transform)));
+                vertexOffset += (uint)geometry.VertexCount;
+                triangleOffset += triangles;
                 if (Bin(i) == 0) SingleSidedTriangles = triangleOffset;
                 if (Bin(i) <= 1) OpaqueTriangles = triangleOffset;
             }
+            FlushVertices(bufferedVertices, uploadedVertices);
+            indexWriter.Flush();
             TriangleCount = triangleOffset;
-            Vertices = _gpu.Upload<float4>(packed, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopySrc);
-            Topology = _gpu.Upload<uint>(topology, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopySrc);
             Bounds = totalTriangles == 0 ? new(float3.zero, float3.zero) : new(minimum, maximum);
             Transparent = [.. transparent];
             Opaque = [.. opaque];
@@ -147,6 +150,11 @@ internal sealed partial class PbrGpuScene : IDisposable
         catch {
             _gpu.Dispose();
             throw;
+        }
+        finally {
+            if (indexScratch is not null) ArrayPool<uint>.Shared.Return(indexScratch);
+            if (vertexScratch is not null) ArrayPool<float4>.Shared.Return(vertexScratch);
+            foreach (var geometry in geometries) geometry?.Dispose();
         }
     }
 
