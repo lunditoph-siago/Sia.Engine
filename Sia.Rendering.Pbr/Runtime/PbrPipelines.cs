@@ -46,6 +46,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public Entity Background { get; }
     public Entity Resolve { get; }
     public Entity ResolveDirect { get; }
+    public bool UseIndirectMaterialDispatch { get; }
 
     public Entity Coverage { get; }
     public Entity CoverageDouble { get; }
@@ -153,6 +154,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             }
             var geometry = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout);
             var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)_gpu.Device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
+            UseIndirectMaterialDispatch = core;
             var rasterFragment = core ? "raster_fragment" : "raster_fragment_depth";
             var rasterShader = Module("raster.wgsl", streamInstances: gpuStream);
             if (!gpuStream) {
