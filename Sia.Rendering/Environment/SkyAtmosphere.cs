@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Rendering;
@@ -23,50 +25,50 @@ public sealed partial record SkyAtmosphere
     public float SunAngularRadiusRadians { get; init; } = 0.004675f;
     public float AerialPerspectiveDistanceKilometers { get; init; } = 32;
 
+    [Conditional("DEBUG")]
     public void Validate()
     {
-        Positive(GroundRadiusKilometers, nameof(GroundRadiusKilometers));
-        Positive(AtmosphereHeightKilometers, nameof(AtmosphereHeightKilometers));
-        Positive(KilometersPerWorldUnit, nameof(KilometersPerWorldUnit));
-        Positive(RayleighScaleHeightKilometers, nameof(RayleighScaleHeightKilometers));
-        Positive(MieScaleHeightKilometers, nameof(MieScaleHeightKilometers));
-        Positive(OzoneHalfWidthKilometers, nameof(OzoneHalfWidthKilometers));
-        Positive(AerialPerspectiveDistanceKilometers, nameof(AerialPerspectiveDistanceKilometers));
-        if (!float.IsFinite(WorldOriginAltitudeKilometers) || !float.IsFinite(OzoneCenterKilometers)
-            || !float.IsFinite(GroundRadiusKilometers + AtmosphereHeightKilometers)
-            || GroundRadiusKilometers + AtmosphereHeightKilometers <= GroundRadiusKilometers) {
-            throw new ArgumentOutOfRangeException(nameof(AtmosphereHeightKilometers));
-        }
-        if (!float.IsFinite(MieAnisotropy) || MathF.Abs(MieAnisotropy) >= 0.99f) {
-            throw new ArgumentOutOfRangeException(nameof(MieAnisotropy));
-        }
-        if (!float.IsFinite(SunAngularRadiusRadians) || SunAngularRadiusRadians is < 0.0001f or > 0.1f) {
-            throw new ArgumentOutOfRangeException(nameof(SunAngularRadiusRadians));
-        }
-        Positive(math.dot(SunDirection, SunDirection), nameof(SunDirection));
-        Color(RayleighScatteringPerKilometer, nameof(RayleighScatteringPerKilometer));
-        Color(MieScatteringPerKilometer, nameof(MieScatteringPerKilometer));
-        Color(MieAbsorptionPerKilometer, nameof(MieAbsorptionPerKilometer));
-        Color(OzoneAbsorptionPerKilometer, nameof(OzoneAbsorptionPerKilometer));
-        Color(SolarIrradiance, nameof(SolarIrradiance));
-        Color(GroundAlbedo, nameof(GroundAlbedo));
-        if (GroundAlbedo.x > 1 || GroundAlbedo.y > 1 || GroundAlbedo.z > 1) {
-            throw new ArgumentOutOfRangeException(nameof(GroundAlbedo));
-        }
+        Require(IsPositive(GroundRadiusKilometers), nameof(GroundRadiusKilometers));
+        Require(IsPositive(AtmosphereHeightKilometers), nameof(AtmosphereHeightKilometers));
+        Require(IsPositive(KilometersPerWorldUnit), nameof(KilometersPerWorldUnit));
+
+        Require(float.IsFinite(WorldOriginAltitudeKilometers), nameof(WorldOriginAltitudeKilometers));
+
+        Require(IsPositive(RayleighScaleHeightKilometers), nameof(RayleighScaleHeightKilometers));
+        Require(IsPositive(MieScaleHeightKilometers), nameof(MieScaleHeightKilometers));
+        Require(float.IsFinite(MieAnisotropy) && MathF.Abs(MieAnisotropy) < 0.99f, nameof(MieAnisotropy));
+
+        Require(float.IsFinite(OzoneCenterKilometers), nameof(OzoneCenterKilometers));
+        Require(IsPositive(OzoneHalfWidthKilometers), nameof(OzoneHalfWidthKilometers));
+
+        Require(float.IsFinite(SunAngularRadiusRadians) && SunAngularRadiusRadians is >= 0.0001f and <= 0.1f, nameof(SunAngularRadiusRadians));
+
+        Require(IsPositive(math.dot(SunDirection, SunDirection)), nameof(SunDirection));
+        Require(IsPositive(AerialPerspectiveDistanceKilometers), nameof(AerialPerspectiveDistanceKilometers));
+
+        var atmosphereRadius = GroundRadiusKilometers + AtmosphereHeightKilometers;
+        Require(float.IsFinite(atmosphereRadius) && atmosphereRadius > GroundRadiusKilometers, nameof(AtmosphereHeightKilometers));
+
+        Require(IsColor(RayleighScatteringPerKilometer), nameof(RayleighScatteringPerKilometer));
+        Require(IsColor(MieScatteringPerKilometer), nameof(MieScatteringPerKilometer));
+        Require(IsColor(MieAbsorptionPerKilometer), nameof(MieAbsorptionPerKilometer));
+        Require(IsColor(OzoneAbsorptionPerKilometer), nameof(OzoneAbsorptionPerKilometer));
+        Require(IsColor(SolarIrradiance), nameof(SolarIrradiance));
+
+        Require(IsColor(GroundAlbedo) && GroundAlbedo.x <= 1 && GroundAlbedo.y <= 1 && GroundAlbedo.z <= 1, nameof(GroundAlbedo));
     }
 
-    private static void Positive(float value, string name)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Require(bool condition, string name)
     {
-        if (!float.IsFinite(value) || value <= 0) {
-            throw new ArgumentOutOfRangeException(name);
-        }
+        if (!condition) throw new ArgumentOutOfRangeException(name);
     }
 
-    private static void Color(float3 value, string name)
-    {
-        if (!float.IsFinite(value.x) || !float.IsFinite(value.y) || !float.IsFinite(value.z)
-            || value.x < 0 || value.y < 0 || value.z < 0) {
-            throw new ArgumentOutOfRangeException(name);
-        }
-    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsPositive(float value)
+        => value > 0 && float.IsFinite(value);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsColor(float3 value)
+        => math.all(math.isfinite(value) & (value >= 0));
 }

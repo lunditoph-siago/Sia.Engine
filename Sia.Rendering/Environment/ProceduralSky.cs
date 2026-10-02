@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Rendering;
@@ -12,22 +14,17 @@ public sealed record ProceduralSky
     public float SunExponent { get; init; } = 256.0f;
     public float Intensity { get; init; } = 1.0f;
 
+    [Conditional("DEBUG")]
     public void Validate()
     {
-        ValidateColor(Horizon, nameof(Horizon));
-        ValidateColor(Zenith, nameof(Zenith));
-        ValidateColor(Ground, nameof(Ground));
-        ValidateColor(SunRadiance, nameof(SunRadiance));
-        var length = math.dot(SunDirection, SunDirection);
-        if (!float.IsFinite(length) || length < 1e-8f) {
-            throw new ArgumentOutOfRangeException(nameof(SunDirection));
-        }
-        if (!float.IsFinite(Intensity) || Intensity < 0) {
-            throw new ArgumentOutOfRangeException(nameof(Intensity));
-        }
-        if (!float.IsFinite(SunExponent) || SunExponent < 1) {
-            throw new ArgumentOutOfRangeException(nameof(SunExponent));
-        }
+        Require(IsColor(Horizon), nameof(Horizon));
+        Require(IsColor(Zenith), nameof(Zenith));
+        Require(IsColor(Ground), nameof(Ground));
+        Require(IsColor(SunRadiance), nameof(SunRadiance));
+        var sunLength = math.dot(SunDirection, SunDirection);
+        Require(float.IsFinite(sunLength) && sunLength >= 1e-8f, nameof(SunDirection));
+        Require(float.IsFinite(Intensity) && Intensity >= 0, nameof(Intensity));
+        Require(float.IsFinite(SunExponent) && SunExponent >= 1, nameof(SunExponent));
     }
 
     public float3 Evaluate(float3 direction)
@@ -35,16 +32,18 @@ public sealed record ProceduralSky
         var up = System.Math.Clamp(direction.y, -1.0f, 1.0f);
         var sky = math.lerp(Horizon, Zenith, System.Math.Clamp(up, 0.0f, 1.0f));
         var blend = System.Math.Clamp((up + 0.15f) / 0.2f, 0.0f, 1.0f);
-        var radiance = math.lerp(Ground, sky, blend * blend * (3.0f - 2.0f * blend));
+        var radiance = math.lerp(Ground, sky, blend * blend * (3.0f - (2.0f * blend)));
         var sun = MathF.Max(math.dot(direction, math.normalize(SunDirection)), 0.0f);
-        return (radiance + SunRadiance * MathF.Pow(sun, SunExponent)) * Intensity;
+        return (radiance + (SunRadiance * MathF.Pow(sun, SunExponent))) * Intensity;
     }
 
-    private static void ValidateColor(float3 value, string name)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Require(bool condition, string name)
     {
-        if (!float.IsFinite(value.x) || !float.IsFinite(value.y) || !float.IsFinite(value.z)
-            || value.x < 0 || value.y < 0 || value.z < 0) {
-            throw new ArgumentOutOfRangeException(name);
-        }
+        if (!condition) throw new ArgumentOutOfRangeException(name);
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsColor(float3 value)
+        => math.all(math.isfinite(value) & (value >= 0));
 }

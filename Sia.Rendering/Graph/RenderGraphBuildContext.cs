@@ -5,10 +5,19 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering;
 
+public delegate void RenderGraphBranchBuilder<T>(in T dependencies, ref RenderGraphBuildContext graph)
+    where T : struct;
+
 public ref struct RenderGraphBuildContext
 {
+    private readonly record struct BranchProps<T>(
+        WgpuRenderGraphRegistry Registry,
+        T Dependencies,
+        RenderGraphBranchBuilder<T> Build) where T : struct;
+
     private Hooks _hooks;
     private readonly WgpuRenderGraphRegistry _registry;
+    private List<(string Key, ReactiveNode Value)>? _branches;
 
     public RenderGraphBuildContext(
         ref Hooks hooks,
@@ -17,6 +26,29 @@ public ref struct RenderGraphBuildContext
         ArgumentNullException.ThrowIfNull(registry);
         _hooks = hooks;
         _registry = registry;
+        _branches = null;
+    }
+
+    public void UseBranch<T>(string key, bool first, in T dependencies, RenderGraphBranchBuilder<T> build)
+        where T : struct
+    {
+        ArgumentNullException.ThrowIfNull(build);
+        var props = new BranchProps<T>(_registry, dependencies, build);
+        var component = Reactive.Reactive.Component<BranchProps<T>>(BuildBranch, props);
+        (_branches ??= []).Add((key, Reactive.Reactive.Either(first, component, component)));
+    }
+
+    public ReactiveNode Complete() => Reactive.Reactive.ForEach<string, ReactiveNode, ComponentTerm<ReactiveNode>>(
+        static (in node) => Reactive.Reactive.Component<ReactiveNode>(
+            static (in child, ref _) => child, node),
+        System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_branches ?? []));
+
+    private static ReactiveNode BuildBranch<T>(in BranchProps<T> props, ref Hooks hooks)
+        where T : struct
+    {
+        var graph = new RenderGraphBuildContext(ref hooks, props.Registry);
+        props.Build(props.Dependencies, ref graph);
+        return graph.Complete();
     }
 
     public T UseState<T>(Func<T> factory)
@@ -77,10 +109,32 @@ public ref struct RenderGraphBuildContext
         _hooks.UseWgpuRenderGraphPassHandler(_registry, key, handler);
     }
 
+    public void UsePass<TDependencies>(
+        RenderGraphPassKey key,
+        string name,
+        in TDependencies dependencies,
+        RenderGraphPassDeclaration<TDependencies> declaration,
+        WgpuReactiveRenderGraphPassHandler handler,
+        RenderGraphPassKind kind = RenderGraphPassKind.Render)
+        where TDependencies : struct, IEquatable<TDependencies>
+    {
+        _hooks.UseRenderGraphPass(_registry, key, name, in dependencies, declaration, kind);
+        _hooks.UseWgpuRenderGraphPassHandler(_registry, key, handler);
+    }
+
     public void UseComputePass(
         RenderGraphPassKey key,
         string name,
         RenderGraphPassDeclaration declaration,
         WgpuReactiveRenderGraphPassHandler handler) =>
         UsePass(key, name, declaration, handler, RenderGraphPassKind.Compute);
+
+    public void UseComputePass<TDependencies>(
+        RenderGraphPassKey key,
+        string name,
+        in TDependencies dependencies,
+        RenderGraphPassDeclaration<TDependencies> declaration,
+        WgpuReactiveRenderGraphPassHandler handler)
+        where TDependencies : struct, IEquatable<TDependencies> =>
+        UsePass(key, name, in dependencies, declaration, handler, RenderGraphPassKind.Compute);
 }

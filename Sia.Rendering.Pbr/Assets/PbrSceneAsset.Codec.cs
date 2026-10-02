@@ -9,7 +9,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class PbrSceneAsset
 {
-    private const int HeaderSize = 52;
+    private const int k_HeaderSize = 52;
 
     public byte[] Encode(CancellationToken cancellationToken = default)
     {
@@ -17,7 +17,9 @@ public sealed partial class PbrSceneAsset
         var textureIndices = new Dictionary<PbrTextureData, int>(ReferenceEqualityComparer.Instance);
         foreach (var material in Materials.Span) {
             foreach (var texture in Maps(material)) {
-                if (texture is not null && textureIndices.TryAdd(texture, textures.Count)) { textures.Add(texture); }
+                if (texture is not null && textureIndices.TryAdd(texture, textures.Count)) {
+                    textures.Add(texture);
+                }
             }
         }
         using var payload = new MemoryStream();
@@ -31,35 +33,57 @@ public sealed partial class PbrSceneAsset
             writer.Write(textures.Count);
             foreach (var texture in textures) {
                 cancellationToken.ThrowIfCancellationRequested();
-                writer.Write(texture.Width); writer.Write(texture.Height); writer.Write(texture.Srgb);
+                writer.Write(texture.Width);
+                writer.Write(texture.Height);
+                writer.Write(texture.Srgb);
                 var sampler = texture.Sampler;
-                writer.Write((uint)sampler.AddressU); writer.Write((uint)sampler.AddressV);
-                writer.Write((uint)sampler.MinFilter); writer.Write((uint)sampler.MagFilter); writer.Write((uint)sampler.MipFilter);
-                writer.Write(sampler.UseMipmaps); writer.Write(texture.MipLevels.Length);
-                foreach (var level in texture.MipLevels.Span) { Blob(writer, level.Span); }
+                writer.Write((uint)sampler.AddressU);
+                writer.Write((uint)sampler.AddressV);
+                writer.Write((uint)sampler.MinFilter);
+                writer.Write((uint)sampler.MagFilter);
+                writer.Write((uint)sampler.MipFilter);
+                writer.Write(sampler.UseMipmaps);
+                writer.Write(texture.MipLevels.Length);
+                foreach (var level in texture.MipLevels.Span) {
+                    Blob(writer, level.Span);
+                }
             }
             writer.Write(Materials.Length);
             foreach (var material in Materials.Span) {
                 var p = material.Parameters;
-                Vector(writer, p.BaseColor); writer.Write(p.Metallic); writer.Write(p.Roughness);
-                Vector(writer, p.EmissiveColor); writer.Write(p.EmissiveStrength);
-                writer.Write(material.NormalScale); writer.Write(material.OcclusionStrength);
-                writer.Write(material.DoubleSided); writer.Write(material.AlphaBlend); writer.Write(material.Opacity);
-                writer.Write(material.Transmission); writer.Write(material.Thickness);
-                foreach (var map in Maps(material)) { writer.Write(map is null ? -1 : textureIndices[map]); }
+                Vector(writer, p.BaseColor);
+                writer.Write(p.Metallic);
+                writer.Write(p.Roughness);
+                Vector(writer, p.EmissiveColor);
+                writer.Write(p.EmissiveStrength);
+                writer.Write(material.NormalScale);
+                writer.Write(material.OcclusionStrength);
+                writer.Write(material.DoubleSided);
+                writer.Write(material.AlphaBlend);
+                writer.Write(material.Opacity);
+                writer.Write(material.Transmission);
+                writer.Write(material.Thickness);
+                foreach (var map in Maps(material)) {
+                    writer.Write(map is null ? -1 : textureIndices[map]);
+                }
             }
             writer.Write(Instances.Length);
             foreach (var instance in Instances.Span) {
-                writer.Write(instance.Geometry); writer.Write(instance.Material);
-                Column(writer, instance.Transform.c0); Column(writer, instance.Transform.c1);
-                Column(writer, instance.Transform.c2); Column(writer, instance.Transform.c3);
+                writer.Write(instance.Geometry);
+                writer.Write(instance.Material);
+                Column(writer, instance.Transform.c0);
+                Column(writer, instance.Transform.c1);
+                Column(writer, instance.Transform.c2);
+                Column(writer, instance.Transform.c3);
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
         var raw = payload.ToArray();
         using var output = new MemoryStream();
-        output.Write(new byte[HeaderSize]);
-        using (var compressed = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true)) { compressed.Write(raw); }
+        output.Write(new byte[k_HeaderSize]);
+        using (var compressed = new GZipStream(output, CompressionLevel.SmallestSize, leaveOpen: true)) {
+            compressed.Write(raw);
+        }
         var result = output.ToArray();
         "SIAPBR\0\0"u8.CopyTo(result);
         BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(8), raw.Length);
@@ -74,15 +98,17 @@ public sealed partial class PbrSceneAsset
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
-        Require(bytes.Length > HeaderSize && bytes[..8].SequenceEqual("SIAPBR\0\0"u8), "Invalid PBR scene header.");
+        Require(bytes.Length > k_HeaderSize && bytes[..8].SequenceEqual("SIAPBR\0\0"u8), "Invalid PBR scene header.");
         var length = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
         Require(length >= 13 && length <= maximumDecodedBytes && BinaryPrimitives.ReadInt64LittleEndian(bytes[12..]) == bytes.Length,
             "Invalid PBR scene length or decoded byte budget.");
         var raw = new byte[length];
         fixed (byte* pointer = bytes) {
-            using var input = new UnmanagedMemoryStream(pointer + HeaderSize, bytes.Length - HeaderSize);
+            using var input = new UnmanagedMemoryStream(pointer + k_HeaderSize, bytes.Length - k_HeaderSize);
             using var compressed = new GZipStream(input, CompressionMode.Decompress);
-            try { compressed.ReadExactly(raw); }
+            try {
+                compressed.ReadExactly(raw);
+            }
             catch (EndOfStreamException error) { throw new InvalidDataException("Truncated PBR scene payload.", error); }
             Require(compressed.ReadByte() == -1, "PBR scene exceeds its declared decoded length.");
         }
@@ -111,8 +137,8 @@ public sealed partial class PbrSceneAsset
                     CancellationToken = cancellationToken,
                     MaxDegreeOfParallelism = System.Math.Min(4, Environment.ProcessorCount)
                 }, i => {
-                    var blob = blobs[i];
-                    geometry[i] = MeshPatchAsset.Decode(raw.AsSpan(blob.Offset, blob.Length), cancellationToken, blob.Budget);
+                    var (Offset, Length, Budget) = blobs[i];
+                    geometry[i] = MeshPatchAsset.Decode(raw.AsSpan(Offset, Length), cancellationToken, Budget);
                 });
             }
             catch (AggregateException error) when (error.InnerExceptions.All(exception => exception is InvalidDataException or ArgumentException)) {
@@ -121,7 +147,9 @@ public sealed partial class PbrSceneAsset
             var textures = new PbrTextureData[Count(reader, 34, 4096)];
             for (var i = 0; i < textures.Length; i++) {
                 cancellationToken.ThrowIfCancellationRequested();
-                var width = reader.ReadUInt32(); var height = reader.ReadUInt32(); var srgb = reader.ReadBoolean();
+                var width = reader.ReadUInt32();
+                var height = reader.ReadUInt32();
+                var srgb = reader.ReadBoolean();
                 var sampler = new PbrTextureSampler((WGPUAddressMode)reader.ReadUInt32(), (WGPUAddressMode)reader.ReadUInt32(),
                     (WGPUFilterMode)reader.ReadUInt32(), (WGPUFilterMode)reader.ReadUInt32(), (WGPUMipmapFilterMode)reader.ReadUInt32(), reader.ReadBoolean());
                 var levels = new ReadOnlyMemory<byte>[Count(reader, 4, 14)];
@@ -135,7 +163,8 @@ public sealed partial class PbrSceneAsset
             var materials = new PbrMaterialAsset[Count(reader, 78, 4096)];
             for (var i = 0; i < materials.Length; i++) {
                 var parameters = new PbrMaterial(Vector(reader), reader.ReadSingle(), reader.ReadSingle(), Vector(reader), reader.ReadSingle());
-                var normalScale = reader.ReadSingle(); var occlusionStrength = reader.ReadSingle();
+                var normalScale = reader.ReadSingle();
+                var occlusionStrength = reader.ReadSingle();
                 var doubleSided = reader.ReadBoolean();
                 var alphaBlend = reader.ReadBoolean();
                 var opacity = reader.ReadSingle();
@@ -173,10 +202,33 @@ public sealed partial class PbrSceneAsset
         return count;
     }
 
-    private static void Blob(BinaryWriter writer, ReadOnlySpan<byte> bytes) { writer.Write(bytes.Length); writer.Write(bytes); }
-    private static void Vector(BinaryWriter writer, float3 value) { writer.Write(value.x); writer.Write(value.y); writer.Write(value.z); }
+    private static void Blob(BinaryWriter writer, ReadOnlySpan<byte> bytes)
+    {
+        writer.Write(bytes.Length);
+        writer.Write(bytes);
+    }
+
+    private static void Vector(BinaryWriter writer, float3 value)
+    {
+        writer.Write(value.x);
+        writer.Write(value.y);
+        writer.Write(value.z);
+    }
+
     private static float3 Vector(BinaryReader reader) => new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-    private static void Column(BinaryWriter writer, float4 value) { Vector(writer, value.xyz); writer.Write(value.w); }
+
+    private static void Column(BinaryWriter writer, float4 value)
+    {
+        Vector(writer, value.xyz);
+        writer.Write(value.w);
+    }
+
     private static float4 Column(BinaryReader reader) => new(Vector(reader), reader.ReadSingle());
-    private static void Require(bool condition, string message) { if (!condition) { throw new InvalidDataException(message); } }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition) {
+            throw new InvalidDataException(message);
+        }
+    }
 }

@@ -13,8 +13,9 @@ internal sealed unsafe partial class SceneExampleApp
     private Entity _timingSink;
     private int _timingSlot = -1, _timingDropped;
     private readonly List<GpuSample> _gpuSamples = [];
-    private static ulong TimingBytes => (ulong)VisibilityPbrFeature.GpuTimingStages.Length * 16;
-    private sealed class TimingSlot {
+    private static ulong TimingBytes => (ulong)PbrRenderer.GpuTimingStages.Length * 16;
+    private sealed class TimingSlot
+    {
         public Entity Buffer;
         public Task? Mapping;
         public int Sequence, Width, Height;
@@ -24,7 +25,7 @@ internal sealed unsafe partial class SceneExampleApp
 
     private Entity PrepareGpuTiming()
     {
-        if (!_gpuTimingEnabled || _visibilityLod is null || _materialStream is not null) return default;
+        if (!_gpuTimingEnabled || _sceneRenderer is null) return default;
         _timingSlot = -1;
         for (var i = 0; i < _timingSlots.Length; i++) {
             var slot = _timingSlots[i];
@@ -37,7 +38,7 @@ internal sealed unsafe partial class SceneExampleApp
                     for (var t = 0; t < times.Length; t += 2) {
                         if (times[t] == 0 && times[t + 1] == 0) continue;
                         if (times[t + 1] < times[t]) throw new InvalidOperationException("GPU timestamps out of order.");
-                        stages.Add(VisibilityPbrFeature.GpuTimingStages[t / 2], (times[t + 1] - times[t]) / 1_000_000d);
+                        stages.Add(PbrRenderer.GpuTimingStages[t / 2], (times[t + 1] - times[t]) / 1_000_000d);
                         first = System.Math.Min(first, times[t]); last = System.Math.Max(last, times[t + 1]);
                     }
                     if (stages.Count != 0) {
@@ -46,12 +47,13 @@ internal sealed unsafe partial class SceneExampleApp
                         if (Program.BenchmarkFrames > 0 && slot.Sequence >= 120)
                             _gpuSamples.Add(new(slot.Sequence, slot.Width, slot.Height, span, stages));
                     }
-                } finally { Wgpu.UnmapBuffer(slot.Buffer.GetWgpu<WGPUBuffer>()); slot.Mapping = null; }
+                }
+                finally { Wgpu.UnmapBuffer(slot.Buffer.GetWgpu<WGPUBuffer>()); slot.Mapping = null; }
             }
             if (slot.Mapping is null && _timingSlot < 0) _timingSlot = i;
         }
-        _visibilityLod.SampleGpuTiming = _benchmarkFrames % 16 == 0 && _timingSlot >= 0;
-        if (!_visibilityLod.SampleGpuTiming) {
+        _sceneRenderer.SampleGpuTiming = _benchmarkFrames % 16 == 0 && _timingSlot >= 0;
+        if (!_sceneRenderer.SampleGpuTiming) {
             if (_benchmarkFrames % 16 == 0) _timingDropped++;
             _timingSlot = -1;
             if (!_timingSink.IsValid) _timingSink = CreateTimingBuffer();
