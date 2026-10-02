@@ -50,7 +50,7 @@ public static partial class MeshPatchBuilder
             }
             frontier = next;
         }
-        return new(MeshPatchTree.Create(roots.ToArray(), cancellationToken: cancellationToken),
+        return new(MeshPatchTree.Create(roots.ToArray(), 64, 124, cancellationToken),
             source.Indices.Length / 3 + removed, removed, simplifications, targetMisses, unreduced);
     }
 

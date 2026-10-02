@@ -1,4 +1,5 @@
 using Sia.Math;
+using Sia.Engine.Mesh;
 using System.Runtime.CompilerServices;
 
 namespace Sia.Engine.Rendering.Pbr;
@@ -242,6 +243,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             return;
         }
         var start = output.Count;
+        var lodProjection = ProjectedGeometryError.PrepareLodProjection(vp, width, height);
         var visited = 0;
         var deferred = false;
         var groupIncomplete = false;
@@ -317,7 +319,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 foreach (var part in node.Pages) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Id)].Allocation, bounds));
                 return;
             }
-            var raw = node.ChildCount == 0 ? 0 : ProjectedGeometryError.ProjectError(bounds, node.Error * _norms[instanceIndex], vp, width, height);
+            var raw = node.ChildCount == 0 ? 0
+                : ProjectedGeometryError.ProjectLodError(bounds, node.Error * _norms[instanceIndex],
+                    lodProjection, vp, width, height,
+                    math.length(PbrSceneStream.NodeBounds(node).Max - PbrSceneStream.NodeBounds(node).Min)
+                        * .5f * _norms[instanceIndex]);
             var projected = float.IsFinite(raw) ? raw : float.MaxValue;
             if (node.ChildCount > 0 && (error == 0 || projected > error)) {
                 var complete = true;

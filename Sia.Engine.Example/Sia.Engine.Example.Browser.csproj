@@ -20,11 +20,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Assets/bunny.siapatch" LogicalName="Sia.Engine.Example.bunny.siapatch" />
-    <Compile Remove="obj\**" />
     <Compile Remove="obj_desktop\**" />
     <EmbeddedResource Remove="obj_desktop\**" />
     <None Remove="obj_desktop\**" />
-    <Content Remove="obj_desktop\**" />
   </ItemGroup>
 
   <ItemGroup>

@@ -42,9 +42,12 @@ internal sealed unsafe partial class PbrView
             CompactStreamDraws(list);
         }
         else {
+            var resolution = _owner.Settings.ShadowResolution;
+            var projection = ProjectedGeometryError.PrepareLodProjection(matrix, resolution, resolution);
             foreach (var draw in _owner.Scene.Opaque)
                 if (culler.Intersects(draw.Bounds))
-                    AddRange(list, SelectGeometry(draw, matrix, _owner.Settings.ShadowResolution, _owner.Settings.ShadowResolution, _owner.Settings.ShadowTexelError));
+                    AddRange(list, SelectGeometry(draw, matrix, projection, resolution, resolution,
+                        _owner.Settings.ShadowTexelError));
         }
     }
 

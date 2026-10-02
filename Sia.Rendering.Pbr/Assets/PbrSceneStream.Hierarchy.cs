@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sia.Asset;
 using Sia.Math;
 
@@ -19,7 +20,10 @@ public sealed partial class PbrSceneStream
         PagePart[] Pages,
         int Triangles);
 
-    internal sealed record HierarchyInfo(int Roots, NodeInfo[] Nodes);
+    private const int QuadricErrorMetric = 1;
+
+    internal sealed record HierarchyInfo(int Roots, NodeInfo[] Nodes,
+        [property: JsonRequired] int ErrorMetric = QuadricErrorMetric);
 
     private sealed record Header(
         byte[] Identity,
@@ -93,7 +97,7 @@ public sealed partial class PbrSceneStream
         var totalNodes = 0;
         foreach (var tree in h.Hierarchies) {
             if (tree is null || tree.Nodes is null || tree.Roots <= 0 || tree.Roots > tree.Nodes.Length
-                || (totalNodes += tree.Nodes.Length) > 1000000)
+                || tree.ErrorMetric != QuadricErrorMetric || (totalNodes += tree.Nodes.Length) > 1000000)
                 throw new InvalidDataException("Invalid hierarchy size.");
             var parents = Enumerable.Repeat(-1, tree.Nodes.Length).ToArray();
             var depths = new int[tree.Nodes.Length];

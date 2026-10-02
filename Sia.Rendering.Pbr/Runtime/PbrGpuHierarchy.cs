@@ -16,7 +16,9 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
         float4x4 Projection,
         uint4 Table,
         float4 Screen,
-        uint4 Output);
+        uint4 Output,
+        float4 EyeNear,
+        float4 ForwardPixels);
 
     private readonly GpuResources _gpu;
 
@@ -25,31 +27,51 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public Entity Residency { get; }
     public Entity Instances { get; }
     public Entity Layout { get; }
+    public Entity ExpansionLayout { get; }
     public Entity ResetFeedback { get; }
     public Entity ResetDraws { get; }
-    public Entity Traverse { get; }
+    public Entity SeedRoots { get; }
+    public Entity PrepareEven { get; }
+    public Entity PrepareOdd { get; }
+    public Entity TraverseEven { get; }
+    public Entity TraverseOdd { get; }
+    public Entity PrepareExpansion { get; }
+    public Entity Expand { get; }
 
     public uint RootBase { get; }
     public uint RootCount { get; }
     public uint PageCount { get; }
     public uint SingleCapacity { get; }
     public uint DoubleCapacity { get; }
+    public uint NodeCapacity { get; }
+    public int Levels { get; }
 
     public ulong Bytes => _gpu.Bytes;
 
     public PbrGpuHierarchy(in GpuFrame frame, ulong budget, ReadOnlySpan<Node> nodes, ReadOnlySpan<uint4> parts,
-        ReadOnlySpan<uint4> mapping, uint rootBase, uint rootCount, uint singleCapacity, uint doubleCapacity, Entity instances)
+        ReadOnlySpan<uint4> mapping, uint rootBase, uint rootCount, uint singleCapacity, uint doubleCapacity,
+        uint nodeCapacity, Entity instances)
     {
         _gpu = new(frame, budget);
         Instances = instances;
         (RootBase, RootCount, PageCount, SingleCapacity, DoubleCapacity) =
             (rootBase, rootCount, (uint)mapping.Length, singleCapacity, doubleCapacity);
+        NodeCapacity = nodeCapacity;
+        var depths = new int[nodes.Length];
+        for (var i = 0; i < nodes.Length; i++) {
+            var parent = nodes[i].Owner.x;
+            if (parent != uint.MaxValue && parent >= i)
+                throw new ArgumentException("GPU hierarchy parents must precede their children.", nameof(nodes));
+            depths[i] = parent == uint.MaxValue ? 1 : checked(depths[(int)parent] + 1);
+            Levels = System.Math.Max(Levels, depths[i]);
+        }
         try {
             Nodes = _gpu.Upload(nodes);
             Parts = _gpu.Upload(parts);
             Residency = _gpu.Upload(mapping);
             Layout = GpuBinding.Layout(_gpu, [
-                GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 112),
+                GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute,
+                    (ulong)Marshal.SizeOf<Configuration>()),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(3, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
@@ -62,7 +84,24 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, Layout);
             ResetFeedback = Compute(shader, pipelineLayout, "reset_feedback");
             ResetDraws = Compute(shader, pipelineLayout, "reset_draws");
-            Traverse = Compute(shader, pipelineLayout, "traverse");
+            SeedRoots = Compute(shader, pipelineLayout, "seed_roots");
+            PrepareEven = Compute(shader, pipelineLayout, "prepare_even");
+            PrepareOdd = Compute(shader, pipelineLayout, "prepare_odd");
+            TraverseEven = Compute(shader, pipelineLayout, "traverse_even");
+            TraverseOdd = Compute(shader, pipelineLayout, "traverse_odd");
+            PrepareExpansion = Compute(shader, pipelineLayout, "prepare_expansion");
+            ExpansionLayout = GpuBinding.Layout(_gpu, [
+                GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute,
+                    (ulong)Marshal.SizeOf<Configuration>()),
+                GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                GpuBinding.Buffer(2, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                GpuBinding.Buffer(3, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                GpuBinding.Buffer(4, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
+                GpuBinding.Buffer(5, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
+            ]);
+            var expansionShader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
+                PbrShaderSource.Compile("stream_expand.wgsl"), "pbr-stream-expand"));
+            Expand = Compute(expansionShader, GpuBinding.PipelineLayout(_gpu, ExpansionLayout), "expand");
         }
         catch {
             _gpu.Dispose();
@@ -71,17 +110,27 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     }
 
     internal static ulong MaximumCutTriangles(PbrSceneStream.HierarchyInfo tree)
+        => MaximumCut(tree).Triangles;
+
+    internal static (ulong Triangles, ulong Nodes) MaximumCut(PbrSceneStream.HierarchyInfo tree)
     {
-        var cuts = new ulong[tree.Nodes.Length];
+        var cuts = new (ulong Triangles, ulong Nodes)[tree.Nodes.Length];
         for (var n = tree.Nodes.Length - 1; n >= 0; n--) {
             var node = tree.Nodes[n];
-            ulong children = 0;
-            for (var c = 0; c < node.ChildCount; c++) children = checked(children + cuts[node.Children + c]);
-            cuts[n] = System.Math.Max((ulong)node.Triangles, children);
+            ulong triangles = 0, nodes = 0;
+            for (var c = 0; c < node.ChildCount; c++) {
+                var child = cuts[node.Children + c];
+                triangles = checked(triangles + child.Triangles);
+                nodes = checked(nodes + child.Nodes);
+            }
+            cuts[n] = (System.Math.Max((ulong)node.Triangles, triangles), System.Math.Max(1ul, nodes));
         }
-        ulong total = 0;
-        for (var root = 0; root < tree.Roots; root++) total = checked(total + cuts[root]);
-        return total;
+        ulong totalTriangles = 0, totalNodes = 0;
+        for (var root = 0; root < tree.Roots; root++) {
+            totalTriangles = checked(totalTriangles + cuts[root].Triangles);
+            totalNodes = checked(totalNodes + cuts[root].Nodes);
+        }
+        return (totalTriangles, totalNodes);
     }
 
     private Entity Compute(Entity shader, Entity layout, string entry)

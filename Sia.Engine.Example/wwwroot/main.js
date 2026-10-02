@@ -3,7 +3,7 @@ import { createBrowserInput } from './browser-input.js';
 const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
 const pipeline = parameters.get('pipeline') ?? 'pbr';
-const finest = parameters.has('lod') ? parameters.get('lod') !== 'auto' : parameters.get('quality') === 'high';
+const finest = parameters.get('lod') === 'finest';
 const inspection = document.getElementById('inspection');
 const settingsToggle = document.getElementById('settings-toggle');
 const distanceControl = document.getElementById('inspection-distance');
@@ -20,8 +20,6 @@ qualityControl.addEventListener('change', () => {
 qualityApply.addEventListener('click', () => {
   const url = new URL(location.href);
   url.searchParams.set('quality', qualityControl.value);
-  // Quality selects geometry detail as well; discard an explicit old LOD override.
-  url.searchParams.delete('lod');
   qualityApply.disabled = true;
   input.reset();
   location.href = url.href;
