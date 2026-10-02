@@ -4,14 +4,15 @@
 #import pbr/instance_types
 #import pbr/stream_selection_types
 #import pbr/stream_node_types
+#import pbr/stream_work_types
 
 @group(0) @binding(0) var<uniform> selection: StreamSelection;
 @group(0) @binding(1) var<storage, read> nodes: array<Node>;
 @group(0) @binding(2) var<storage, read> parts: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> residency: array<vec4<u32>>;
-@group(0) @binding(4) var<storage, read_write> work: array<vec2<u32>>;
+@group(0) @binding(4) var<storage, read_write> work: array<vec4<u32>>;
 // 0..7: draw arguments; 8..11: traversal counters; 12: selected nodes;
-// 13..14: frontier counts; 16..18: dispatch. The first 12 words retain the readback ABI.
+// 13..14: frontier counts; 15: actual triangles; 16..18: dispatch.
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> feedback: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read> instances: array<Instance>;
@@ -24,9 +25,9 @@ fn reset_feedback(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(1)
 fn reset_draws() {
     for (var i = 0u; i < 20u; i++) { atomicStore(&args[i], 0u); }
-    atomicStore(&args[1], 1u);
-    atomicStore(&args[5], 1u);
-    atomicStore(&args[6], selection.output.x * 3u);
+    atomicStore(&args[0], STREAM_WORK_BLOCK_TRIANGLES * 3u);
+    atomicStore(&args[4], STREAM_WORK_BLOCK_TRIANGLES * 3u);
+    atomicStore(&args[6], selection.output.x * STREAM_WORK_BLOCK_TRIANGLES * 3u);
 }
 
 fn touch(n: Node) {
@@ -55,17 +56,22 @@ fn children_ready(n: Node, priority: f32) -> bool {
 
 fn emit(node: u32, n: Node, instance: u32, side: u32) {
     var count = 0u;
-    for (var p = 0u; p < n.links.w; p++) { count += parts[n.links.z + p].z; }
-    let first = atomicAdd(&args[side * 4u], count * 3u) / 3u;
+    var triangles = 0u;
+    for (var p = 0u; p < n.links.w; p++) {
+        let size = parts[n.links.z + p].z;
+        triangles += size;
+        count += (size + STREAM_WORK_BLOCK_TRIANGLES - 1u) / STREAM_WORK_BLOCK_TRIANGLES;
+    }
+    let first = atomicAdd(&args[side * 4u + 1u], count);
     let capacity = select(selection.output.x, selection.output.y, side != 0u);
     if (first > capacity || count > capacity - first) { atomicAdd(&args[10], 1u); return; }
     let base = select(0u, selection.output.x, side != 0u);
     let selected = atomicAdd(&args[12], 1u);
     let node_capacity = frontier_capacity();
     if (selected >= node_capacity) { atomicAdd(&args[10], 1u); return; }
-    let record = selection.output.w + selected * 2u;
-    work[record] = vec2<u32>(node, instance);
-    work[record + 1u] = vec2<u32>(base + first, 0u);
+    let record = selection.output.w + selected;
+    work[record] = vec4<u32>(node, instance, base + first, 0u);
+    atomicAdd(&args[15], triangles);
 }
 
 @compute @workgroup_size(1)
@@ -78,11 +84,11 @@ fn prepare_expansion() {
 }
 
 fn frontier_capacity() -> u32 {
-    return (arrayLength(&work) - selection.output.w) / 6u;
+    return (arrayLength(&work) - selection.output.w) / 3u;
 }
 
 fn frontier_base(odd: bool) -> u32 {
-    return selection.output.w + frontier_capacity() * select(2u, 4u, odd);
+    return selection.output.w + frontier_capacity() * select(1u, 2u, odd);
 }
 
 @compute @workgroup_size(64)
@@ -91,9 +97,8 @@ fn seed_roots(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= selection.table.y) { return; }
     if (id.x >= frontier_capacity()) { atomicAdd(&args[10], 1u); return; }
     let root = parts[selection.table.x + id.x];
-    let at = frontier_base(false) + id.x * 2u;
-    work[at] = root.xy;
-    work[at + 1u] = root.zw;
+    let at = frontier_base(false) + id.x;
+    work[at] = root;
 }
 
 fn prepare_level(odd: bool) {
@@ -113,9 +118,9 @@ fn prepare_odd() { prepare_level(true); }
 fn visit(index: u32, odd: bool) {
     let count = min(atomicLoad(&args[select(13u, 14u, odd)]), frontier_capacity());
     if (index >= count) { return; }
-    let at = frontier_base(odd) + index * 2u;
+    let at = frontier_base(odd) + index;
     let entry = work[at];
-    let side = work[at + 1u].x;
+    let side = entry.z;
     let current = entry.x;
     let instance = instances[entry.y];
     let n = nodes[current];
@@ -144,10 +149,9 @@ fn visit(index: u32, odd: bool) {
                     let first = atomicAdd(&args[select(14u, 13u, odd)], n.links.y);
                     let capacity = frontier_capacity();
                     if (first <= capacity && n.links.y <= capacity - first) {
-                        let next = frontier_base(!odd) + first * 2u;
+                        let next = frontier_base(!odd) + first;
                         for (var c = 0u; c < n.links.y; c++) {
-                            work[next + c * 2u] = vec2<u32>(n.links.x + c, entry.y);
-                            work[next + c * 2u + 1u] = vec2<u32>(side, 0u);
+                            work[next + c] = vec4<u32>(n.links.x + c, entry.y, side, 0u);
                         }
                         return;
                     }

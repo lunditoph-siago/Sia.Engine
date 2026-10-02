@@ -1,6 +1,7 @@
 #define_import_path pbr/bindings
 
 #import pbr/frame_types
+#import pbr/stream_work_types
 
 struct Material {
     color: vec4<f32>,
@@ -36,7 +37,12 @@ struct Material {
 @group(1) @binding(2) var<storage, read> instances: array<Instance>;
 #endif
 #if SHADING_WORK
-@group(3) @binding(6) var<storage, read> visible_work: array<vec2<u32>>;
+@group(3) @binding(6) var<storage, read> visible_work: array<vec4<u32>>;
+
+fn stream_triangle(ordinal: u32) -> vec2<u32> {
+    let record = visible_work[ordinal / STREAM_WORK_BLOCK_TRIANGLES];
+    return vec2<u32>(record.x + ordinal % STREAM_WORK_BLOCK_TRIANGLES, record.y);
+}
 #endif
 @group(2) @binding(0) var<storage, read> materials: array<Material>;
 @group(2) @binding(1) var<uniform> batch: vec4<u32>;
@@ -62,7 +68,7 @@ fn shadow_matrix(layer: u32) -> mat4x4<f32> {
 
 fn vertex_index(triangle: u32, corner: u32) -> u32 {
 #if SHADING_WORK
-    return topology[visible_work[triangle].x * 3u + corner];
+    return topology[stream_triangle(triangle).x * 3u + corner];
 #else
     return topology[triangle * 3u + corner];
 #endif
@@ -80,7 +86,7 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
     let p = vertices[index];
     let n = vertices[frame.geometry.x + index];
 #if SHADING_WORK
-    let instance = instances[visible_work[triangle].y];
+    let instance = instances[stream_triangle(triangle).y];
     let tangent = vertices[frame.geometry.x * 2u + index];
     return Vertex(
         (instance.transform * vec4<f32>(p.xyz, 1.0)).xyz,
@@ -98,7 +104,7 @@ fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
 
 fn triangle_material(triangle: u32) -> u32 {
 #if SHADING_WORK
-    return instances[visible_work[triangle].y].material.x;
+    return instances[stream_triangle(triangle).y].material.x;
 #else
     return u32(abs(vertices[frame.geometry.x * 2u + vertex_index(triangle, 0u)].w)) - 1u;
 #endif

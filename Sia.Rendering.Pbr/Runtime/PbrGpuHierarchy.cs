@@ -8,6 +8,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe class PbrGpuHierarchy : IDisposable
 {
+    internal const uint WorkBlockTriangles = 16;
     [StructLayout(LayoutKind.Sequential)]
     internal readonly record struct Node(float4 Min, float4 Max, uint4 Links, uint4 Owner);
 
@@ -112,25 +113,30 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     internal static ulong MaximumCutTriangles(PbrSceneStream.HierarchyInfo tree)
         => MaximumCut(tree).Triangles;
 
-    internal static (ulong Triangles, ulong Nodes) MaximumCut(PbrSceneStream.HierarchyInfo tree)
+    internal static (ulong Triangles, ulong Nodes, ulong Records) MaximumCut(PbrSceneStream.HierarchyInfo tree)
     {
-        var cuts = new (ulong Triangles, ulong Nodes)[tree.Nodes.Length];
+        var cuts = new (ulong Triangles, ulong Nodes, ulong Records)[tree.Nodes.Length];
         for (var n = tree.Nodes.Length - 1; n >= 0; n--) {
             var node = tree.Nodes[n];
-            ulong triangles = 0, nodes = 0;
+            ulong triangles = 0, nodes = 0, records = 0, ownRecords = 0;
+            foreach (var part in node.Pages)
+                ownRecords = checked(ownRecords + (((ulong)part.Count + WorkBlockTriangles - 1) / WorkBlockTriangles));
             for (var c = 0; c < node.ChildCount; c++) {
                 var child = cuts[node.Children + c];
                 triangles = checked(triangles + child.Triangles);
                 nodes = checked(nodes + child.Nodes);
+                records = checked(records + child.Records);
             }
-            cuts[n] = (System.Math.Max((ulong)node.Triangles, triangles), System.Math.Max(1ul, nodes));
+            cuts[n] = (System.Math.Max((ulong)node.Triangles, triangles), System.Math.Max(1ul, nodes),
+                System.Math.Max(ownRecords, records));
         }
-        ulong totalTriangles = 0, totalNodes = 0;
+        ulong totalTriangles = 0, totalNodes = 0, totalRecords = 0;
         for (var root = 0; root < tree.Roots; root++) {
             totalTriangles = checked(totalTriangles + cuts[root].Triangles);
             totalNodes = checked(totalNodes + cuts[root].Nodes);
+            totalRecords = checked(totalRecords + cuts[root].Records);
         }
-        return (totalTriangles, totalNodes);
+        return (totalTriangles, totalNodes, totalRecords);
     }
 
     private Entity Compute(Entity shader, Entity layout, string entry)
