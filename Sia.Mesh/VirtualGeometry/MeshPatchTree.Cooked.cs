@@ -1,3 +1,4 @@
+using System.Buffers;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -58,26 +59,101 @@ public sealed partial class MeshPatchTree
             && nextMeshlet == meshlets.Meshlets.Length && leafTriangles == finest, "Incomplete patch forest or geometry stream.");
         Require(nodes.Length != 0 || geometry.Vertices.Length == 0, "Empty patch assets cannot contain unused geometry.");
         ValidateMeshlets(nodes, geometry, meshlets, cancellationToken);
-        var ids = VertexIds(geometry.Vertices, new(geometry.Vertices.Length));
-        var boundaries = new Dictionary<(int, int), int>[nodes.Length];
+        var ids = VertexIds(geometry.Vertices);
         try {
-            for (var i = nodes.Length - 1; i >= 0; i--) {
-                cancellationToken.ThrowIfCancellationRequested();
-                var node = nodes[i];
-                var boundary = Boundary(geometry.Indices.AsSpan(node.TriangleOffset * 3, node.TriangleCount * 3), ids);
-                if (node.ChildCount != 0) {
-                    var combined = new Dictionary<(int, int), int>();
-                    for (var c = node.ChildOffset; c < node.ChildOffset + node.ChildCount; c++) {
-                        foreach (var (edge, count) in boundaries[c]) { AddEdge(combined, edge, count); }
-                        boundaries[c] = null!;
-                    }
-                    Require(EqualBoundary(boundary, combined), "Parent geometry changes the children's oriented attribute boundary.");
-                }
-                boundaries[i] = boundary;
-            }
+            ValidateBoundaries(nodes, geometry.Indices, ids, cancellationToken);
         }
         catch (ArgumentException error) { throw new InvalidDataException("Invalid patch topology.", error); }
         return new(nodes, roots, finest, geometry, meshlets);
+    }
+
+    private static void ValidateBoundaries(ReadOnlySpan<MeshPatchNode> nodes, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<int> ids, CancellationToken cancellationToken)
+    {
+        if (nodes.IsEmpty) { return; }
+        var maximumEdges = 0;
+        var maximumChildEdges = 0;
+        foreach (var node in nodes) {
+            maximumEdges = System.Math.Max(maximumEdges, checked(node.TriangleCount * 3));
+            var childEdges = 0;
+            for (var c = node.ChildOffset; c < node.ChildOffset + node.ChildCount; c++) {
+                childEdges = checked(childEdges + nodes[c].TriangleCount * 3);
+            }
+            maximumChildEdges = System.Math.Max(maximumChildEdges, childEdges);
+        }
+        var parent = ArrayPool<ulong>.Shared.Rent(maximumEdges);
+        ulong[]? child = null;
+        ulong[]? combined = null;
+        try {
+            child = ArrayPool<ulong>.Shared.Rent(maximumEdges);
+            combined = ArrayPool<ulong>.Shared.Rent(maximumChildEdges);
+            // Check each patch independently. A parent's children are reduced
+            // locally, so no dictionary per node survives while other nodes run.
+            foreach (var node in nodes) {
+                cancellationToken.ThrowIfCancellationRequested();
+                var parentCount = CollectBoundary(
+                    indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3), ids, parent);
+                if (node.ChildCount == 0) { continue; }
+                var count = 0;
+                for (var c = node.ChildOffset; c < node.ChildOffset + node.ChildCount; c++) {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var childNode = nodes[c];
+                    var childCount = CollectBoundary(
+                        indices.Slice(childNode.TriangleOffset * 3, childNode.TriangleCount * 3), ids, child);
+                    child.AsSpan(0, childCount).CopyTo(combined.AsSpan(count));
+                    count += childCount;
+                }
+                var edges = combined.AsSpan(0, count);
+                edges.Sort();
+                var matched = 0;
+                for (var i = 0; i < edges.Length;) {
+                    var edge = edges[i] & ~1ul;
+                    var sum = 0;
+                    do {
+                        sum = checked(sum + ((edges[i] & 1) == 0 ? 1 : -1));
+                        i++;
+                    } while (i < edges.Length && (edges[i] & ~1ul) == edge);
+                    if (sum == 0) { continue; }
+                    Require(matched < parentCount && (parent[matched] & ~1ul) == edge
+                        && ((parent[matched] & 1) == 0 ? 1 : -1) == sum,
+                        "Parent geometry changes the children's oriented attribute boundary.");
+                    matched++;
+                }
+                Require(matched == parentCount, "Parent geometry changes the children's oriented attribute boundary.");
+            }
+        }
+        finally {
+            if (combined is not null) ArrayPool<ulong>.Shared.Return(combined);
+            if (child is not null) ArrayPool<ulong>.Shared.Return(child);
+            ArrayPool<ulong>.Shared.Return(parent);
+        }
+    }
+
+    private static int CollectBoundary(ReadOnlySpan<uint> indices, ReadOnlySpan<int> ids, Span<ulong> edges)
+    {
+        var count = 0;
+        for (var t = 0; t < indices.Length; t += 3) {
+            for (var c = 0; c < 3; c++) {
+                var a = ids[(int)indices[t + c]];
+                var b = ids[(int)indices[t + (c + 1) % 3]];
+                if (a == b) { continue; }
+                edges[count++] = ((ulong)(uint)System.Math.Min(a, b) << 32)
+                    | ((ulong)(uint)System.Math.Max(a, b) << 1) | (a < b ? 0ul : 1ul);
+            }
+        }
+        edges = edges[..count];
+        edges.Sort();
+        var boundaryCount = 0;
+        for (var i = 0; i < count;) {
+            var edge = edges[i] & ~1ul;
+            var end = i + 1;
+            while (end < count && (edges[end] & ~1ul) == edge) { end++; }
+            Require(end - i <= 2, "Patch geometry contains a nonmanifold edge.");
+            if (end - i == 1) { edges[boundaryCount++] = edges[i]; }
+            else { Require(edges[i] != edges[i + 1], "Patch geometry contains inconsistent edge winding."); }
+            i = end;
+        }
+        return boundaryCount;
     }
 
     private static void ValidateMeshlets(MeshPatchNode[] nodes, MeshData geometry, MeshletData data, CancellationToken cancellationToken)

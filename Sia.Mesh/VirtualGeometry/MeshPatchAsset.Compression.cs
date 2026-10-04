@@ -25,13 +25,15 @@ public sealed partial class MeshPatchAsset
         return bytes;
     }
 
-    private static unsafe byte[] Decompress(ReadOnlySpan<byte> bytes, int maximumDecodedBytes, CancellationToken cancellationToken)
+    private static unsafe MeshPatchAsset DecodeCompressed(ReadOnlySpan<byte> bytes, int maximumDecodedBytes,
+        CancellationToken cancellationToken)
     {
         Require(bytes.Length > 24, "Truncated compressed patch asset.");
         var length = BinaryPrimitives.ReadInt64LittleEndian(bytes[8..]);
         Require(length >= HeaderSize && length <= maximumDecodedBytes, "Invalid compressed patch length or decoded byte limit exceeded.");
         Require(BinaryPrimitives.ReadInt64LittleEndian(bytes[16..]) == bytes.Length, "Compressed patch length mismatch or trailing data.");
         var raw = ArrayPool<byte>.Shared.Rent((int)length);
+        byte[]? restored = null;
         try {
             fixed (byte* pointer = bytes) {
                 using var input = new UnmanagedMemoryStream(pointer + 24, bytes.Length - 24);
@@ -43,18 +45,34 @@ public sealed partial class MeshPatchAsset
                 Require(decoder.ReadByte() == -1, "Compressed patch exceeds the declared decoded length.");
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return Shuffle(raw.AsSpan(0, (int)length), restore: true, cancellationToken);
+            restored = ArrayPool<byte>.Shared.Rent((int)length);
+            Shuffle(raw.AsSpan(0, (int)length), restored.AsSpan(0, (int)length), restore: true,
+                cancellationToken);
+            // DecodeRaw copies every section into tree-owned arrays before either
+            // scratch buffer is returned; the asset cannot retain pooled memory.
+            return DecodeRaw(restored.AsSpan(0, (int)length), cancellationToken);
         }
         catch (EndOfStreamException error) { throw new InvalidDataException("Truncated compressed patch payload.", error); }
-        finally { ArrayPool<byte>.Shared.Return(raw); }
+        finally {
+            if (restored is not null) ArrayPool<byte>.Shared.Return(restored);
+            ArrayPool<byte>.Shared.Return(raw);
+        }
     }
 
     private static byte[] Shuffle(ReadOnlySpan<byte> bytes, bool restore, CancellationToken cancellationToken)
     {
+        var output = new byte[bytes.Length];
+        Shuffle(bytes, output, restore, cancellationToken);
+        return output;
+    }
+
+    private static void Shuffle(ReadOnlySpan<byte> bytes, Span<byte> output, bool restore,
+        CancellationToken cancellationToken)
+    {
         const int headerSize = HeaderSize;
         Require(bytes.Length >= headerSize && bytes.StartsWith("SIAPATC2"u8),
             "Unsupported patch asset format; recook with the current Quadric cooker.");
-        var output = new byte[bytes.Length];
+        Require(output.Length == bytes.Length, "Invalid patch shuffle output length.");
         bytes[..headerSize].CopyTo(output);
         var offset = headerSize;
         for (var section = 0; section < Strides.Length; section++) {
@@ -66,8 +84,9 @@ public sealed partial class MeshPatchAsset
                 && BinaryPrimitives.ReadInt32LittleEndian(descriptor[12..]) == stride
                 && (long)count * stride <= bytes.Length - offset, "Invalid compressed patch section.");
             if (stride == 1) {
-                bytes.Slice(offset, count).CopyTo(output.AsSpan(offset));
-            } else if (restore) {
+                bytes.Slice(offset, count).CopyTo(output[offset..]);
+            }
+            else if (restore) {
                 for (var lane = 0; lane < stride; lane += 4) {
                     var a = bytes.Slice(offset + lane * count, count);
                     var b = bytes.Slice(offset + (lane + 1) * count, count);
@@ -76,10 +95,11 @@ public sealed partial class MeshPatchAsset
                     for (var i = 0; i < count; i++) {
                         if ((i & 65535) == 0) { cancellationToken.ThrowIfCancellationRequested(); }
                         var value = (uint)(a[i] | b[i] << 8 | c[i] << 16 | d[i] << 24);
-                        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(offset + i * stride + lane), value);
+                        BinaryPrimitives.WriteUInt32LittleEndian(output[(offset + i * stride + lane)..], value);
                     }
                 }
-            } else {
+            }
+            else {
                 for (var lane = 0; lane < stride; lane++) {
                     for (var i = 0; i < count; i++) {
                         if ((i & 65535) == 0) { cancellationToken.ThrowIfCancellationRequested(); }
@@ -90,6 +110,5 @@ public sealed partial class MeshPatchAsset
             offset += count * stride;
         }
         Require(offset == bytes.Length, "Unexpected compressed patch section data.");
-        return output;
     }
 }
