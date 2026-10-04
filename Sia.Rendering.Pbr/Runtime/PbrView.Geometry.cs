@@ -102,10 +102,13 @@ internal sealed unsafe partial class PbrView
 
     private void Tiles(WgpuReactiveRenderGraphPassContext context)
     {
-        if (_owner.Materials.Groups.Length == 1 || !_owner.Pipelines.UseIndirectMaterialDispatch) return;
+        if (_owner.Materials.Groups.Length == 1) return;
         var pass = Wgpu.BeginComputePass(context.CommandEncoder, WGPUComputePassDescriptor.Default);
         try {
-            BindShading(pass, _tileGroup);
+            Wgpu.SetBindGroup(pass, 0, _tileFrameGroup.GetWgpu<WGPUBindGroup>());
+            Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
+            Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[0].GetWgpu<WGPUBindGroup>());
+            Wgpu.SetBindGroup(pass, 3, _tileGroup.GetWgpu<WGPUBindGroup>());
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.TileReset.GetWgpu<WGPUComputePipeline>());
             Wgpu.DispatchWorkgroups(pass, ((uint)_owner.Materials.Groups.Length + 63) / 64);
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.TileClassify.GetWgpu<WGPUComputePipeline>());
@@ -116,18 +119,25 @@ internal sealed unsafe partial class PbrView
 
     private void Shade(WgpuReactiveRenderGraphPassContext context)
     {
+        var separateBackground = _owner.Materials.Groups.Length == 1 && _owner.Pipelines.SeparateDirectResolvePass;
+        if (separateBackground) {
+            // GLES can retain incorrect sampler state when background and direct
+            // resolve share a pass. Rebinding the existing groups is insufficient.
+            var backgroundPass = Wgpu.BeginComputePass(context.CommandEncoder, WGPUComputePassDescriptor.Default);
+            try {
+                BindShading(backgroundPass, _resolveGroup);
+                DispatchBackground(backgroundPass);
+            }
+            finally { Wgpu.EndComputePass(backgroundPass); Wgpu.Release(ref backgroundPass); }
+        }
+
         var pass = Wgpu.BeginComputePass(context.CommandEncoder, WGPUComputePassDescriptor.Default);
         try {
             BindShading(pass, _resolveGroup);
-            Wgpu.SetComputePipeline(pass, _owner.Pipelines.Background.GetWgpu<WGPUComputePipeline>());
-            Wgpu.DispatchWorkgroups(pass, (_width + 7) / 8, (_height + 7) / 8);
-            if (_owner.Materials.Groups.Length == 1 || !_owner.Pipelines.UseIndirectMaterialDispatch) {
+            if (!separateBackground) DispatchBackground(pass);
+            if (_owner.Materials.Groups.Length == 1) {
                 Wgpu.SetComputePipeline(pass, _owner.Pipelines.ResolveDirect.GetWgpu<WGPUComputePipeline>());
-                // Each batch still writes only its own visibility pixels.
-                for (var batch = 0; batch < _owner.Materials.Groups.Length; batch++) {
-                    Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[batch].GetWgpu<WGPUBindGroup>());
-                    Wgpu.DispatchWorkgroups(pass, (_width + 7) / 8, (_height + 7) / 8);
-                }
+                Wgpu.DispatchWorkgroups(pass, (_width + 7) / 8, (_height + 7) / 8);
                 return;
             }
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.Resolve.GetWgpu<WGPUComputePipeline>());
@@ -137,5 +147,11 @@ internal sealed unsafe partial class PbrView
             }
         }
         finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+    }
+
+    private void DispatchBackground(WgpuHandle<WGPUComputePassEncoder> pass)
+    {
+        Wgpu.SetComputePipeline(pass, _owner.Pipelines.Background.GetWgpu<WGPUComputePipeline>());
+        Wgpu.DispatchWorkgroups(pass, (_width + 7) / 8, (_height + 7) / 8);
     }
 }

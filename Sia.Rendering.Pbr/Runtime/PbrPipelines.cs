@@ -12,7 +12,10 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private readonly GpuResources _gpu;
     private readonly bool _sceneGi;
 
+    public bool SeparateDirectResolvePass { get; }
+
     public Entity FrameLayout { get; }
+    public Entity TileFrameLayout { get; }
     public Entity RasterFrameLayout { get; }
     public Entity ClusterLayout { get; }
     public Entity GeometryLayout { get; }
@@ -46,7 +49,6 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public Entity Background { get; }
     public Entity Resolve { get; }
     public Entity ResolveDirect { get; }
-    public bool UseIndirectMaterialDispatch { get; }
 
     public Entity Coverage { get; }
     public Entity CoverageDouble { get; }
@@ -92,6 +94,11 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 frameEntries.Add(GpuBinding.Buffer(10, WGPUBufferBindingType.Uniform, k_Shade, 48));
             }
             FrameLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(frameEntries));
+            // Classification reads Frame as storage on GLES. Keep lighting and
+            // reconstruction out of this layout so streamed resolve still fits eight bindings.
+            TileFrameLayout = GpuBinding.Layout(_gpu, [
+                GpuBinding.Buffer(0, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute, 512)
+            ]);
             RasterFrameLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex, 512),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Vertex)
@@ -154,14 +161,16 @@ internal sealed unsafe class PbrPipelines : IDisposable
             }
             var geometry = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout);
             var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)_gpu.Device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
-            UseIndirectMaterialDispatch = core;
+            SeparateDirectResolvePass = !core;
             var rasterFragment = core ? "raster_fragment" : "raster_fragment_depth";
+            // Some GLES devices leave depth-only passes clear without an explicit depth output.
+            var shadowFragment = core ? null : "shadow_fragment_depth";
             var rasterShader = Module("raster.wgsl", streamInstances: gpuStream);
             if (!gpuStream) {
                 Raster = Render(rasterShader, geometry, "raster_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
                 RasterDouble = Render(rasterShader, geometry, "raster_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
-                Shadow = Render(rasterShader, geometry, "shadow_vertex", null, null, true, WGPUCullMode.Back, shadowBias: true);
-                ShadowDouble = Render(rasterShader, geometry, "shadow_vertex", null, null, true, WGPUCullMode.None, shadowBias: true);
+                Shadow = Render(rasterShader, geometry, "shadow_vertex", shadowFragment, null, true, WGPUCullMode.Back, shadowBias: true);
+                ShadowDouble = Render(rasterShader, geometry, "shadow_vertex", shadowFragment, null, true, WGPUCullMode.None, shadowBias: true);
             }
             if (gpuStream) {
                 StreamWorkLayout = GpuBinding.Layout(_gpu, [
@@ -172,8 +181,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 var streamLayout = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout, StreamWorkLayout);
                 StreamRaster = Render(rasterShader, streamLayout, "stream_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.Back);
                 StreamRasterDouble = Render(rasterShader, streamLayout, "stream_vertex", rasterFragment, WGPUTextureFormat.R32Uint, true, WGPUCullMode.None);
-                StreamShadow = Render(rasterShader, streamLayout, "stream_shadow_vertex", null, null, true, WGPUCullMode.Back, shadowBias: true);
-                StreamShadowDouble = Render(rasterShader, streamLayout, "stream_shadow_vertex", null, null, true, WGPUCullMode.None, shadowBias: true);
+                StreamShadow = Render(rasterShader, streamLayout, "stream_shadow_vertex", shadowFragment, null, true, WGPUCullMode.Back, shadowBias: true);
+                StreamShadowDouble = Render(rasterShader, streamLayout, "stream_shadow_vertex", shadowFragment, null, true, WGPUCullMode.None, shadowBias: true);
             }
             if (opaquePath == PbrOpaquePath.ForwardPlus) {
                 var forward = Module("forward.wgsl");
@@ -186,7 +195,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             var clusterShader = Module("clusters.wgsl", writableClusters: true);
             Cluster = Compute(clusterShader, GpuBinding.PipelineLayout(_gpu, ClusterLayout), "cull");
             var tiles = Module("tiles.wgsl", streamInstances: gpuStream, shadingWork: gpuStream);
-            var tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, TileLayout);
+            var tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, TileFrameLayout, GeometryLayout, MaterialLayout, TileLayout);
             TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
