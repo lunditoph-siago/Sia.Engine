@@ -153,13 +153,35 @@ public sealed partial class MeshPatchTree
                 || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y) || !v.HasFiniteTangent) {
                 throw new ArgumentException("Patch attributes must be finite.", nameof(vertices));
             }
-            var identity = new VertexIdentity(v.Position.x, v.Position.y, v.Position.z,
-                v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y, v.Tangent.x, v.Tangent.y, v.Tangent.z, v.Tangent.w);
+            var identity = Identity(v);
             ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, identity, out var exists);
             if (!exists) { id = identities.Count - 1; }
             ids[i] = id;
         }
         return ids;
+    }
+
+    private static int[] VertexIds(MeshVertex[] vertices)
+    {
+        var ids = new int[vertices.Length];
+        var identities = new Dictionary<int, int>(vertices.Length, new VertexIndexComparer(vertices));
+        for (var i = 0; i < ids.Length; i++) {
+            ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, i, out var exists);
+            if (!exists) { id = identities.Count - 1; }
+            ids[i] = id;
+        }
+        return ids;
+    }
+
+    private static VertexIdentity Identity(MeshVertex vertex) => new(
+        vertex.Position.x, vertex.Position.y, vertex.Position.z,
+        vertex.Normal.x, vertex.Normal.y, vertex.Normal.z, vertex.UV.x, vertex.UV.y,
+        vertex.Tangent.x, vertex.Tangent.y, vertex.Tangent.z, vertex.Tangent.w);
+
+    private sealed class VertexIndexComparer(MeshVertex[] vertices) : IEqualityComparer<int>
+    {
+        public bool Equals(int a, int b) => Identity(vertices[a]).Equals(Identity(vertices[b]));
+        public int GetHashCode(int index) => Identity(vertices[index]).GetHashCode();
     }
 
     private static Dictionary<(int, int), int> Boundary(ReadOnlySpan<uint> indices, ReadOnlySpan<int> ids)

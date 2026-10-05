@@ -35,21 +35,16 @@ internal sealed partial class PbrStreamResidency
         var nodes = new List<PbrGpuHierarchy.Node>(nodeCount);
         var parts = new List<uint4>(checked(partCount + rootCount));
         var roots = new List<uint4>(rootCount);
-        var offsets = new Dictionary<int, int>(assets.Count);
-        var capacities = _source.Hierarchies.Select(PbrGpuHierarchy.MaximumCut).ToArray();
+        var geometries = new Dictionary<int, (int First, ulong Triangles, ulong Nodes, ulong Records)>(assets.Count);
         ulong single = 0, twice = 0, selectedNodes = 0, triangles = 0;
         for (var instance = 0; instance < _source.Instances.Length; instance++) {
             var info = _source.Instances.Span[instance];
             var tree = _source.Hierarchies[info.AssetIndex];
             var side = _source.Bootstrap.Materials.Span[info.MaterialIndex].DoubleSided ? 1u : 0u;
-            var capacity = capacities[info.AssetIndex];
-            if (side == 0) single = checked(single + capacity.Records);
-            else twice = checked(twice + capacity.Records);
-            triangles = checked(triangles + capacity.Triangles);
-            selectedNodes = checked(selectedNodes + capacity.Nodes);
-            if (!offsets.TryGetValue(info.AssetIndex, out var first)) {
-                first = nodes.Count;
-                offsets.Add(info.AssetIndex, first);
+            if (!geometries.TryGetValue(info.AssetIndex, out var geometry)) {
+                var cut = PbrGpuHierarchy.MaximumCut(tree);
+                geometry = (nodes.Count, cut.Triangles, cut.Nodes, cut.Records);
+                geometries.Add(info.AssetIndex, geometry);
                 for (var n = 0; n < tree.Nodes.Length; n++) {
                     var node = tree.Nodes[n];
                     var bounds = PbrSceneStream.NodeBounds(node);
@@ -65,15 +60,19 @@ internal sealed partial class PbrStreamResidency
                     }
                     var radius = math.length((bounds.Max - bounds.Min) * .5f);
                     nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, radius),
-                        new((uint)(first + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
-                        new(node.Parent < 0 ? uint.MaxValue : (uint)(first + node.Parent),
+                        new((uint)(geometry.First + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
+                        new(node.Parent < 0 ? uint.MaxValue : (uint)(geometry.First + node.Parent),
                             0, 0, 0)));
                     if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + rootCount) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
                         throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
                 }
             }
+            if (side == 0) single = checked(single + geometry.Records);
+            else twice = checked(twice + geometry.Records);
+            triangles = checked(triangles + geometry.Triangles);
+            selectedNodes = checked(selectedNodes + geometry.Nodes);
             for (var root = 0; root < tree.Roots; root++)
-                roots.Add(new((uint)(first + root), (uint)instance, side, 0));
+                roots.Add(new((uint)(geometry.First + root), (uint)instance, side, 0));
         }
         var rootBase = parts.Count;
         parts.AddRange(roots);

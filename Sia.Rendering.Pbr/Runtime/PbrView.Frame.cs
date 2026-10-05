@@ -42,7 +42,7 @@ internal sealed unsafe partial class PbrView
                     ? checked((hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * PbrGpuHierarchy.WorkBlockTriangles)
                     : _owner.Scene.OpaqueTriangles,
                 _owner.Scene.TriangleCount),
-            Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, k_MaximumLights * 4)
+            Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, ShadowMatrixBase)
         };
         var scale = 24 / MathF.Log(parameters.Far / parameters.Near);
         _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1, 0);

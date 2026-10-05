@@ -33,7 +33,7 @@ internal sealed unsafe partial class PbrView
         if (_selection is not null)
             Import(ref graph, _streamDispatchKey, _selection.DispatchArguments,
                 RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination);
-        Import(ref graph, _frameKey, _uniform, RenderGraphBufferUsage.Uniform);
+        Import(ref graph, _frameKey, _uniform, RenderGraphBufferUsage.Uniform | RenderGraphBufferUsage.Storage);
         Import(ref graph, _lightsKey, _lightData, RenderGraphBufferUsage.Storage);
         Import(ref graph, _clustersKey, _clusters, RenderGraphBufferUsage.Storage);
         if (_owner.Probes is { } probes) {
@@ -104,7 +104,8 @@ internal sealed unsafe partial class PbrView
                     context => _owner.Probes.Integrate(context.CommandEncoder), RenderGraphPassKind.Compute);
             TimingMarker(ref graph, dependency, 6);
             graph.UsePass(new(_prefix + "tiles"), "pbr-material-tiles", dependency, static (in d, p) =>
-                d.View.ReadStreamWork(d.View.ReadFrame(p)).Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Write(d.View._tilesKey, RenderGraphBufferUsage.Storage), Tiles, RenderGraphPassKind.Compute);
+                d.View.ReadStreamWork(d.View.ReadFrame(p, RenderGraphBufferUsage.Storage))
+                    .Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Write(d.View._tilesKey, RenderGraphBufferUsage.Storage), Tiles, RenderGraphPassKind.Compute);
             graph.UsePass(new(_prefix + "shade"), "pbr-fused-shading", dependency, static (in d, p) =>
                 d.View.WriteSurface(d.View.ReadStreamWork(d.View.ReadLighting(p)).Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Read(d.Depth, RenderGraphTextureUsage.TextureBinding)
                     .Read(d.View._tilesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect).Write(d.View._hdrKey, RenderGraphTextureUsage.StorageBinding)), Shade, RenderGraphPassKind.Compute);
@@ -148,13 +149,14 @@ internal sealed unsafe partial class PbrView
         return p;
     }
 
-    private RenderGraphPassDeclarationBuilder ReadFrame(RenderGraphPassDeclarationBuilder p)
+    private RenderGraphPassDeclarationBuilder ReadFrame(RenderGraphPassDeclarationBuilder p,
+        RenderGraphBufferUsage frameUsage = RenderGraphBufferUsage.Uniform)
     {
         foreach (var (Key, Value, Usage) in _sceneBuffers)
             p.Read(Key, Usage);
         foreach (var (Key, Value) in _sceneTextures)
             p.Read(Key, RenderGraphTextureUsage.TextureBinding);
-        p.Read(_frameKey, RenderGraphBufferUsage.Uniform).Read(_lightsKey, RenderGraphBufferUsage.Storage);
+        p.Read(_frameKey, frameUsage).Read(_lightsKey, RenderGraphBufferUsage.Storage);
         if (_queries.IsValid) p.Read(_timingsKey, RenderGraphBufferUsage.CopySource);
         return p;
     }

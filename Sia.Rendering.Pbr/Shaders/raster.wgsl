@@ -32,13 +32,32 @@ fn raster_fragment_depth(input: RasterVertex) -> DepthRasterOutput {
     return DepthRasterOutput(input.ordinal + 1u, input.position.z);
 }
 
-@vertex
-fn stream_vertex(@builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> RasterVertex {
+@fragment
+fn shadow_fragment_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return position.z;
+}
+
 #if STREAM_INSTANCES
-    let record = index / (STREAM_WORK_BLOCK_TRIANGLES * 3u) + instance_index;
-    let local = (index % (STREAM_WORK_BLOCK_TRIANGLES * 3u)) / 3u;
+fn stream_work_address(vertex: u32, instance: u32) -> vec2<u32> {
+    let triangle = vertex / 3u;
+    return vec2<u32>(triangle / STREAM_WORK_BLOCK_TRIANGLES + instance,
+        triangle % STREAM_WORK_BLOCK_TRIANGLES);
+}
+#endif
+
+@vertex
+fn stream_vertex(
+    @builtin(vertex_index) index: u32,
+    @builtin(instance_index) instance_index: u32
+) -> RasterVertex {
+#if STREAM_INSTANCES
+    let address = stream_work_address(index, instance_index);
+    let record = address.x;
+    let local = address.y;
     let work = stream_work[record];
-    if (local >= work.z) { return RasterVertex(vec4<f32>(0.0, 0.0, 0.0, 1.0), 0u); }
+    if (local >= work.z) {
+        return RasterVertex(vec4<f32>(0.0, 0.0, 0.0, 1.0), 0u);
+    }
     let ordinal = record * STREAM_WORK_BLOCK_TRIANGLES + local;
     let position = instances[work.y].transform * world_corner(work.x + local, index % 3u);
     return RasterVertex(frame.vp * position, ordinal);
@@ -48,12 +67,18 @@ fn stream_vertex(@builtin(vertex_index) index: u32, @builtin(instance_index) ins
 }
 
 @vertex
-fn stream_shadow_vertex(@builtin(vertex_index) index: u32, @builtin(instance_index) instance_index: u32) -> @builtin(position) vec4<f32> {
+fn stream_shadow_vertex(
+    @builtin(vertex_index) index: u32,
+    @builtin(instance_index) instance_index: u32
+) -> @builtin(position) vec4<f32> {
 #if STREAM_INSTANCES
-    let record = index / (STREAM_WORK_BLOCK_TRIANGLES * 3u) + instance_index;
-    let local = (index % (STREAM_WORK_BLOCK_TRIANGLES * 3u)) / 3u;
+    let address = stream_work_address(index, instance_index);
+    let record = address.x;
+    let local = address.y;
     let work = stream_work[record];
-    if (local >= work.z) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    if (local >= work.z) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
     let position = instances[work.y].transform * world_corner(work.x + local, index % 3u);
     return shadow_matrix(stream_selection.output.z) * position;
 #else

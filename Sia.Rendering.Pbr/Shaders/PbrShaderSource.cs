@@ -11,6 +11,8 @@ internal static class PbrShaderSource
             ["SCENE_GI"] = sceneGi ? "true" : "false",
             ["STREAM_INSTANCES"] = streamInstances ? "true" : "false",
             ["SHADING_WORK"] = shadingWork ? "true" : "false",
+            ["STORAGE_FRAME"] = entry == "tiles.wgsl" ? "true" : "false",
+            ["SHADOW_MATRIX_BASE"] = PbrView.ShadowMatrixBase.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["STREAM_WORK_BLOCK_TRIANGLES"] = PbrGpuHierarchy.WorkBlockTriangles.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
         var source = Read("pbr/" + entry.Replace(".wgsl", "")) ?? throw new InvalidOperationException($"Missing PBR entry: {entry}");

@@ -12,7 +12,11 @@ struct Material {
     transport: vec4<f32>,
 }
 
+#if STORAGE_FRAME
+@group(0) @binding(0) var<storage, read> frame: Frame;
+#else
 @group(0) @binding(0) var<uniform> frame: Frame;
+#endif
 @group(0) @binding(1) var<storage, read> scene_data: array<vec4<f32>>;
 #if WRITABLE_CLUSTERS
 @group(0) @binding(2) var<storage, read_write> clusters: array<u32>;
@@ -62,7 +66,7 @@ fn unit(v: vec3<f32>) -> vec3<f32> {
 }
 
 fn shadow_matrix(layer: u32) -> mat4x4<f32> {
-    let i = frame.counts.w + layer * 4u;
+    let i = #{SHADOW_MATRIX_BASE}u + layer * 4u;
     return mat4x4<f32>(scene_data[i], scene_data[i + 1u], scene_data[i + 2u], scene_data[i + 3u]);
 }
 

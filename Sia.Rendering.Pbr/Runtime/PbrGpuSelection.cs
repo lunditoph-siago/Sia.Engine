@@ -65,8 +65,10 @@ internal sealed class PbrGpuSelection : IDisposable
         try {
             // Selected nodes and two traversal frontiers occupy disjoint buffer tails.
             // Sharing the binding keeps the compute storage-buffer count unchanged.
-            Work = _gpu.Buffer(checked((((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * 16)
-                + ((ulong)hierarchy.NodeCapacity * 48)), WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
+            var workRecords = checked((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity
+                + ((ulong)hierarchy.NodeCapacity * 3));
+            Work = _gpu.Buffer(checked(workRecords * (ulong)Unsafe.SizeOf<uint4>()),
+                WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
             Arguments = _gpu.Buffer(80, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             // A writable counter buffer cannot also supply this dispatch's indirect arguments.
             DispatchArguments = _gpu.Buffer(16, WGPUBufferUsage.Indirect | WGPUBufferUsage.CopyDst);
