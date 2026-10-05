@@ -94,8 +94,6 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 frameEntries.Add(GpuBinding.Buffer(10, WGPUBufferBindingType.Uniform, k_Shade, 48));
             }
             FrameLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(frameEntries));
-            // Classification reads Frame as storage on GLES. Keep lighting and
-            // reconstruction out of this layout so streamed resolve still fits eight bindings.
             TileFrameLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute, 512)
             ]);
@@ -163,7 +161,6 @@ internal sealed unsafe class PbrPipelines : IDisposable
             var core = WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)_gpu.Device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) != 0;
             SeparateDirectResolvePass = !core;
             var rasterFragment = core ? "raster_fragment" : "raster_fragment_depth";
-            // Some GLES devices leave depth-only passes clear without an explicit depth output.
             var shadowFragment = core ? null : "shadow_fragment_depth";
             var rasterShader = Module("raster.wgsl", streamInstances: gpuStream);
             if (!gpuStream) {

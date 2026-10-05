@@ -164,8 +164,6 @@ public sealed partial class MeshPatchTree
     private static int[] VertexIds(MeshVertex[] vertices)
     {
         var ids = new int[vertices.Length];
-        // Restore already checked finite attributes. The comparer reads the
-        // immutable input instead of storing all twelve floats in every entry.
         var identities = new Dictionary<int, int>(vertices.Length, new VertexIndexComparer(vertices));
         for (var i = 0; i < ids.Length; i++) {
             ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, i, out var exists);

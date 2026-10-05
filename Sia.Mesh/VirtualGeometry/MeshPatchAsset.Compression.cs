@@ -48,8 +48,6 @@ public sealed partial class MeshPatchAsset
             restored = ArrayPool<byte>.Shared.Rent((int)length);
             Shuffle(raw.AsSpan(0, (int)length), restored.AsSpan(0, (int)length), restore: true,
                 cancellationToken);
-            // DecodeRaw copies every section into tree-owned arrays before either
-            // scratch buffer is returned; the asset cannot retain pooled memory.
             return DecodeRaw(restored.AsSpan(0, (int)length), cancellationToken);
         }
         catch (EndOfStreamException error) { throw new InvalidDataException("Truncated compressed patch payload.", error); }

@@ -121,8 +121,6 @@ internal sealed unsafe partial class PbrView
     {
         var separateBackground = _owner.Materials.Groups.Length == 1 && _owner.Pipelines.SeparateDirectResolvePass;
         if (separateBackground) {
-            // GLES can retain incorrect sampler state when background and direct
-            // resolve share a pass. Rebinding the existing groups is insufficient.
             var backgroundPass = Wgpu.BeginComputePass(context.CommandEncoder, WGPUComputePassDescriptor.Default);
             try {
                 BindShading(backgroundPass, _resolveGroup);

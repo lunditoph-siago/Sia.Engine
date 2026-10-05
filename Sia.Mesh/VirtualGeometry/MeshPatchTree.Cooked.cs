@@ -87,8 +87,6 @@ public sealed partial class MeshPatchTree
         try {
             child = ArrayPool<ulong>.Shared.Rent(maximumEdges);
             combined = ArrayPool<ulong>.Shared.Rent(maximumChildEdges);
-            // Check each patch independently. A parent's children are reduced
-            // locally, so no dictionary per node survives while other nodes run.
             foreach (var node in nodes) {
                 cancellationToken.ThrowIfCancellationRequested();
                 var parentCount = CollectBoundary(

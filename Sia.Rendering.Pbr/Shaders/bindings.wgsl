@@ -60,8 +60,6 @@ fn unit(v: vec3<f32>) -> vec3<f32> {
 }
 
 fn shadow_matrix(layer: u32) -> mat4x4<f32> {
-    // The CPU reserves this fixed region after the local-light records.
-    // A uniform-derived base address is unreliable on affected GLES devices.
     let i = #{SHADOW_MATRIX_BASE}u + layer * 4u;
     return mat4x4<f32>(scene_data[i], scene_data[i + 1u], scene_data[i + 2u], scene_data[i + 3u]);
 }
