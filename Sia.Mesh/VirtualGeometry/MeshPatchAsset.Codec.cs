@@ -95,7 +95,7 @@ public sealed partial class MeshPatchAsset
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
         if (bytes.StartsWith("SIAGZIP\0"u8)) {
-            return DecodeRaw(Decompress(bytes, maximumDecodedBytes, cancellationToken), cancellationToken);
+            return DecodeCompressed(bytes, maximumDecodedBytes, cancellationToken);
         }
         Require(bytes.Length <= maximumDecodedBytes, "Patch asset exceeds the decoded byte limit.");
         return DecodeRaw(bytes, cancellationToken);

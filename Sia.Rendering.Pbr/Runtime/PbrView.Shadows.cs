@@ -16,7 +16,7 @@ internal sealed unsafe partial class PbrView
 
     private void SetShadow(int layer, float4x4 matrix)
     {
-        var at = ((int)k_MaximumLights * 4) + (layer * 4);
+        var at = (int)ShadowMatrixBase + (layer * 4);
         _sceneData[at] = matrix.c0;
         _sceneData[at + 1] = matrix.c1;
         _sceneData[at + 2] = matrix.c2;

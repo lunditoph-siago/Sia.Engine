@@ -32,6 +32,11 @@ fn raster_fragment_depth(input: RasterVertex) -> DepthRasterOutput {
     return DepthRasterOutput(input.ordinal + 1u, input.position.z);
 }
 
+@fragment
+fn shadow_fragment_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return position.z;
+}
+
 @vertex
 fn stream_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
 #if STREAM_INSTANCES

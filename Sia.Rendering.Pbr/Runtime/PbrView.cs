@@ -15,6 +15,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private const uint k_Cells = 16 * 9 * 24;
     private const uint k_LightsPerCell = 64;
     private const uint k_MaximumLights = 256;
+    internal const uint ShadowMatrixBase = k_MaximumLights * 4;
     private const uint k_ShadowLayers = 7;
 
     private static readonly IEntityMatcher s_Casters = Matchers.Of<ShadowCaster>();
@@ -33,7 +34,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private GpuResources? _sizeResources;
     private readonly Entity _uniform, _lightData, _clusters;
     private readonly Entity _shadowAtlas, _shadowArray;
-    private readonly Entity _frameGroup, _rasterGroup, _clusterGroup;
+    private readonly Entity _frameGroup, _tileFrameGroup, _rasterGroup, _clusterGroup;
     private readonly Entity _outputUniform;
     private readonly Entity _sampler;
     private readonly Entity _depthSampler;
@@ -42,7 +43,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly bool[] _shadowDirty = new bool[k_ShadowLayers];
     private readonly float4x4[] _shadowMatrices = new float4x4[k_ShadowLayers];
     private readonly bool[] _shadowActive = new bool[k_ShadowLayers];
-    private readonly float4[] _sceneData = new float4[(k_MaximumLights * 4) + (k_ShadowLayers * 4)];
+    private readonly float4[] _sceneData = new float4[ShadowMatrixBase + (k_ShadowLayers * 4)];
     private readonly List<Entity> _directional = [];
     private readonly HashSet<Entity> _casters = [];
     private readonly EntityHandler _collectCaster, _collectDirectional, _collectPoint, _collectSpot;
@@ -132,7 +133,7 @@ internal sealed unsafe partial class PbrView : IDisposable
         _collectPoint = CollectPoint;
         _collectSpot = CollectSpot;
         try {
-            _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
+            _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);
             _outputUniform = _gpu.Upload<float4>([new(1, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform);
@@ -162,6 +163,7 @@ internal sealed unsafe partial class PbrView : IDisposable
                 _shadowViews[i] = _gpu.Own(Wgpu.CreateTextureView(_shadowAtlas.GetWgpu<WGPUTexture>(), layer));
             }
             _rasterGroup = GpuBinding.Group(_gpu, owner.Pipelines.RasterFrameLayout, [GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _lightData)]);
+            _tileFrameGroup = GpuBinding.Group(_gpu, owner.Pipelines.TileFrameLayout, [GpuBinding.Buffer(0, _uniform)]);
             _clusterGroup = GpuBinding.Group(_gpu, owner.Pipelines.ClusterLayout, [GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _lightData), GpuBinding.Buffer(2, _clusters)]);
             var frameEntries = new List<WGPUBindGroupEntry> {
                 GpuBinding.Buffer(0, _uniform),
