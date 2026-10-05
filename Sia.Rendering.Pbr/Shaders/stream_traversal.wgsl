@@ -11,8 +11,6 @@
 @group(0) @binding(2) var<storage, read> parts: array<vec4<u32>>;
 @group(0) @binding(3) var<storage, read> residency: array<vec4<u32>>;
 @group(0) @binding(4) var<storage, read_write> work: array<vec4<u32>>;
-// 0..7: draw arguments; 8..11: traversal counters; 12: selected nodes;
-// 13..14: frontier counts; 15: actual triangles; 16..18: dispatch.
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> feedback: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read> instances: array<Instance>;
