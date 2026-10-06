@@ -11,11 +11,7 @@ struct Material {
     transport: vec4<f32>,
 }
 
-#if STORAGE_FRAME
-@group(0) @binding(0) var<storage, read> frame: Frame;
-#else
 @group(0) @binding(0) var<uniform> frame: Frame;
-#endif
 @group(0) @binding(1) var<storage, read> scene_data: array<vec4<f32>>;
 #if WRITABLE_CLUSTERS
 @group(0) @binding(2) var<storage, read_write> clusters: array<u32>;

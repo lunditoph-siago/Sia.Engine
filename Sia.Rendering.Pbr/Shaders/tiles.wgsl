@@ -8,7 +8,12 @@
 var<workgroup> mask: array<atomic<u32>, 8>;
 
 fn stride() -> u32 {
+#if COMPATIBILITY_UNIFORM_PADDING
+    let padding = bitcast<u32>(frame.directional[frame.size.z & 3u].radiance.w);
+    let tiles = (frame.size.xy + vec2<u32>(padding) + 7u) / 8u;
+#else
     let tiles = (frame.size.xy + 7u) / 8u;
+#endif
     return tiles.x * tiles.y + 4u;
 }
 

@@ -40,7 +40,7 @@ internal sealed unsafe partial class PbrView
             Geometry = new(_owner.Scene.VertexCount, _owner.Scene.TriangleOffset,
                 _owner.Scene.Streaming?.Hierarchy is { } hierarchy ? hierarchy.SingleCapacity + hierarchy.DoubleCapacity : _owner.Scene.OpaqueTriangles,
                 _owner.Scene.TriangleCount),
-            Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, ShadowMatrixBase)
+            Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, 0)
         };
         var scale = 24 / MathF.Log(parameters.Far / parameters.Near);
         _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1, 0);

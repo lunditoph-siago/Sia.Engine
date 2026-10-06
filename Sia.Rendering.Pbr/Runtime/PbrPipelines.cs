@@ -15,7 +15,6 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public bool SeparateDirectResolvePass { get; }
 
     public Entity FrameLayout { get; }
-    public Entity TileFrameLayout { get; }
     public Entity RasterFrameLayout { get; }
     public Entity ClusterLayout { get; }
     public Entity GeometryLayout { get; }
@@ -94,9 +93,6 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 frameEntries.Add(GpuBinding.Buffer(10, WGPUBufferBindingType.Uniform, k_Shade, 48));
             }
             FrameLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(frameEntries));
-            TileFrameLayout = GpuBinding.Layout(_gpu, [
-                GpuBinding.Buffer(0, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute, 512)
-            ]);
             RasterFrameLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex, 512),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Vertex)
@@ -191,8 +187,9 @@ internal sealed unsafe class PbrPipelines : IDisposable
             }
             var clusterShader = Module("clusters.wgsl", writableClusters: true);
             Cluster = Compute(clusterShader, GpuBinding.PipelineLayout(_gpu, ClusterLayout), "cull");
-            var tiles = Module("tiles.wgsl", streamInstances: gpuStream, shadingWork: gpuStream);
-            var tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, TileFrameLayout, GeometryLayout, MaterialLayout, TileLayout);
+            var tiles = Module("tiles.wgsl", streamInstances: gpuStream, shadingWork: gpuStream,
+                compatibilityUniformPadding: !core);
+            var tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, TileLayout);
             TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
@@ -224,10 +221,12 @@ internal sealed unsafe class PbrPipelines : IDisposable
         }
     }
 
-    private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false)
+    private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false,
+        bool compatibilityUniformPadding = false)
         => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
             PbrShaderSource.Compile(file, writableClusters, sceneGi: _sceneGi,
-                streamInstances: streamInstances, shadingWork: shadingWork), file));
+                streamInstances: streamInstances, shadingWork: shadingWork,
+                compatibilityUniformPadding: compatibilityUniformPadding), file));
 
     private Entity Compute(Entity shader, Entity layout, string entry)
     {
