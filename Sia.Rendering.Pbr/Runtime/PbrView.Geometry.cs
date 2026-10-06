@@ -105,10 +105,7 @@ internal sealed unsafe partial class PbrView
         if (_owner.Materials.Groups.Length == 1) return;
         var pass = Wgpu.BeginComputePass(context.CommandEncoder, WGPUComputePassDescriptor.Default);
         try {
-            Wgpu.SetBindGroup(pass, 0, _tileFrameGroup.GetWgpu<WGPUBindGroup>());
-            Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
-            Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[0].GetWgpu<WGPUBindGroup>());
-            Wgpu.SetBindGroup(pass, 3, _tileGroup.GetWgpu<WGPUBindGroup>());
+            BindShading(pass, _tileGroup);
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.TileReset.GetWgpu<WGPUComputePipeline>());
             Wgpu.DispatchWorkgroups(pass, ((uint)_owner.Materials.Groups.Length + 63) / 64);
             Wgpu.SetComputePipeline(pass, _owner.Pipelines.TileClassify.GetWgpu<WGPUComputePipeline>());

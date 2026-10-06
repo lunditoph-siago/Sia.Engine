@@ -3,7 +3,7 @@ namespace Sia.Engine.Rendering.Pbr;
 internal static class PbrShaderSource
 {
     internal static string Compile(string entry, bool writableClusters = false, bool surfaceData = false, bool sceneGi = false,
-        bool streamInstances = false, bool shadingWork = false)
+        bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false)
     {
         var definitions = new Dictionary<string, string> {
             ["WRITABLE_CLUSTERS"] = writableClusters ? "true" : "false",
@@ -11,7 +11,7 @@ internal static class PbrShaderSource
             ["SCENE_GI"] = sceneGi ? "true" : "false",
             ["STREAM_INSTANCES"] = streamInstances ? "true" : "false",
             ["SHADING_WORK"] = shadingWork ? "true" : "false",
-            ["STORAGE_FRAME"] = entry == "tiles.wgsl" ? "true" : "false",
+            ["COMPATIBILITY_UNIFORM_PADDING"] = compatibilityUniformPadding ? "true" : "false",
             ["SHADOW_MATRIX_BASE"] = PbrView.ShadowMatrixBase.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
         var source = Read("pbr/" + entry.Replace(".wgsl", "")) ?? throw new InvalidOperationException($"Missing PBR entry: {entry}");
