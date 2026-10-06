@@ -38,7 +38,9 @@ internal sealed unsafe partial class PbrView
             ViewProjection = camera.ViewProj, View = camera.View, InverseProjection = math.inverse(camera.Proj), InverseViewProjection = camera.InvViewProj,
             Eye = new(camera.WorldPosition, 1), Size = new(_width, _height, (uint)_owner.Materials.Groups.Length, (uint)_owner.DebugMode),
             Geometry = new(_owner.Scene.VertexCount, _owner.Scene.TriangleOffset,
-                _owner.Scene.Streaming?.Hierarchy is { } hierarchy ? hierarchy.SingleCapacity + hierarchy.DoubleCapacity : _owner.Scene.OpaqueTriangles,
+                _owner.Scene.Streaming?.Hierarchy is { } hierarchy
+                    ? checked((hierarchy.SingleCapacity + hierarchy.DoubleCapacity) * PbrGpuHierarchy.WorkBlockTriangles)
+                    : _owner.Scene.OpaqueTriangles,
                 _owner.Scene.TriangleCount),
             Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, 0)
         };
