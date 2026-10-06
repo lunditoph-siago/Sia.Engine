@@ -7,7 +7,7 @@
 fn triangle_debug_color(ordinal: u32) -> vec3<f32> {
     var hash = 2166136261u;
 #if SHADING_WORK
-    hash = (hash ^ (visible_work[ordinal].y + 1u)) * 16777619u;
+    hash = (hash ^ (stream_triangle(ordinal).y + 1u)) * 16777619u;
 #endif
     for (var corner = 0u; corner < 3u; corner++) {
         let position = vertices[vertex_index(ordinal, corner)].xyz;
