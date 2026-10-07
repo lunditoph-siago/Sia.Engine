@@ -14,7 +14,7 @@ namespace Sia.Engine.Rendering.Pbr;
 internal sealed unsafe partial class PbrView
 {
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    public void Prepare(in RenderFrameContext frame)
+    public void Prepare(in RenderFrameContext frame, ulong frameIndex)
     {
         _frame = frame;
         _selection?.Prepare(_owner.Scene.Streaming!);
@@ -23,7 +23,10 @@ internal sealed unsafe partial class PbrView
             foreach (var texture in _owner.Materials.Textures)
                 _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), texture));
             _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), _owner.Environment.Cube));
+            if (_owner.Environment.CapturedCube.IsValid)
+                _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), _owner.Environment.CapturedCube));
             _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), _owner.Environment.Lut));
+            if (_owner.Lightmaps is { } lightmaps) _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), lightmaps.Texture));
             _materialRevision = _owner.ResourceRevision;
         }
         var viewport = frame.Viewport ?? frame.Frame.MainWorld.AcquireAddon<Viewport>().Value;
@@ -87,12 +90,13 @@ internal sealed unsafe partial class PbrView
             var sky = frame.Frame.MainWorld.AcquireAddon<EnvironmentLighting>().Sky;
             probes.Prepare(sky, _directional.Count == 0 ? sky.SunDirection : -_data.Direction0.xyz,
                 _directional.Count == 0 ? float3.zero : _data.Radiance0.xyz,
-                _owner.Settings.ProbeUpdates, _owner.Settings.ProbeSamples);
+                _owner.Settings.ProbeUpdates, _owner.Settings.ProbeSamples, _owner.ProbeMaximumDistance);
         }
         frame.Frame.MainWorld.Query(s_Points, _collectPoint);
         frame.Frame.MainWorld.Query(s_Spots, _collectSpot);
         Wgpu.WriteBuffer<PbrFrame>(_gpu.Queue, _uniform.GetWgpu<WGPUBuffer>(), 0, [_data]);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
+        Wgpu.WriteBuffer<float4>(_gpu.Queue, _rasterShadowData.GetWgpu<WGPUBuffer>(), 0, _sceneData.AsSpan((int)ShadowMatrixBase, (int)k_ShadowLayers * 4));
         var culler = new FrustumCuller(camera.Frustum);
         _opaque.Clear();
         _transparent.Clear();
@@ -108,16 +112,23 @@ internal sealed unsafe partial class PbrView
         else {
             var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
             foreach (var draw in _owner.Scene.Opaque) {
-                if (culler.Intersects(draw.Bounds))
+                if (_owner.Scene.IsEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
                     AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, projection,
                         _width, _height, _owner.Settings.TargetPixelError), UseForward);
             }
         }
+        if (_owner.Scene.Conventional.Length > 0) {
+            var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
+            foreach (var draw in _owner.Scene.Conventional)
+                if (_owner.Scene.IsEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
+                    AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, projection,
+                        _width, _height, _owner.Settings.TargetPixelError), UseForward);
+        }
         foreach (var draw in _owner.Scene.Transparent)
-            if (culler.Intersects(draw.Bounds)) _transparent.Add(draw);
+            if (_owner.Scene.IsEnabled(draw.Instance) && culler.Intersects(draw.Bounds)) _transparent.Add(draw);
 
         var opaqueTriangles = _selection?.VisibleTriangles ?? 0;
-        if (_selection is null) foreach (var draw in _opaque) opaqueTriangles = checked(opaqueTriangles + draw.Count);
+        foreach (var draw in _opaque) opaqueTriangles = checked(opaqueTriangles + draw.Count);
         var transparentTriangles = 0u;
         _needsSnapshot = false;
         foreach (var draw in _transparent) {
@@ -125,6 +136,31 @@ internal sealed unsafe partial class PbrView
             _needsSnapshot |= _owner.Materials.Transmission[draw.Material];
         }
         VisibleTriangles = checked(opaqueTriangles + transparentTriangles);
+        if (_owner.Lightmaps?.PagedSource is not null) {
+            if (_owner.Scene.Streaming is { } stream) {
+                for (var i = 0; i < stream.Source.Instances.Length; i++) {
+                    var bounds = stream.InstanceBounds[i];
+                    if (!culler.Intersects(bounds)) continue;
+                    var pixels = ProjectedGeometryError.ProjectError(bounds, math.length(bounds.Max - bounds.Min), camera.ViewProj, _width, _height);
+                    _owner.Lightmaps.Demand((uint)stream.Source.OpaqueSourceInstances.Span[i], float.IsFinite(pixels) ? pixels : System.Math.Max(_width, _height));
+                }
+                foreach (var draw in _owner.Scene.Conventional) {
+                    if (!_owner.Scene.IsEnabled(draw.Instance) || !culler.Intersects(draw.Bounds)) continue;
+                    var bootstrapIndex = (int)draw.Instance - (_owner.Scene.LocalInstances ? stream.Source.Instances.Length : 0);
+                    if (stream.Source.Bootstrap.Instances.Span[bootstrapIndex].Dynamic) continue;
+                    var pixels = ProjectedGeometryError.ProjectError(draw.Bounds, math.length(draw.Bounds.Max - draw.Bounds.Min), camera.ViewProj, _width, _height);
+                    _owner.Lightmaps.Demand((uint)stream.Source.BootstrapSourceInstances.Span[bootstrapIndex], float.IsFinite(pixels) ? pixels : System.Math.Max(_width, _height));
+                }
+            }
+            else {
+                // Use source draws: Forward compaction can merge several authored receiver identities.
+                foreach (var draw in _owner.Scene.Opaque) {
+                    if (!_owner.Scene.IsEnabled(draw.Instance) || !culler.Intersects(draw.Bounds)) continue;
+                    var pixels = ProjectedGeometryError.ProjectError(draw.Bounds, math.length(draw.Bounds.Max - draw.Bounds.Min), camera.ViewProj, _width, _height);
+                    _owner.Lightmaps.Demand(draw.Instance, float.IsFinite(pixels) ? pixels : System.Math.Max(_width, _height));
+                }
+            }
+        }
         if (_owner.Materials.IsStreaming) {
             Array.Clear(_materialPixels);
             void TextureDemand(PbrGpuScene.Draw draw)
@@ -149,6 +185,7 @@ internal sealed unsafe partial class PbrView
         }
         _transparentEye = camera.WorldPosition;
         _transparent.Sort(_sortTransparent);
+        PrepareReflectionHistory(camera.Proj, frameIndex);
     }
 
     private int CompareTransparent(PbrGpuScene.Draw a, PbrGpuScene.Draw b)

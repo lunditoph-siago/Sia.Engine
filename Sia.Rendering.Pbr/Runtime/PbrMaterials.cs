@@ -16,6 +16,8 @@ internal readonly record struct PbrMaterialGpu(
 
 internal sealed partial class PbrMaterials : IDisposable
 {
+    internal const int MapCount = 5;
+    internal const int BindingCount = 2 + MapCount * 2;
     private sealed class ArrayTexture(Entity texture, Entity view, Entity sampler)
     {
         public readonly Entity Sampler = sampler;
@@ -44,7 +46,7 @@ internal sealed partial class PbrMaterials : IDisposable
             var bytes = _gpu.Bytes;
             foreach (var array in _arrays) bytes = checked(bytes + (array.Residency?.Bytes ?? 0));
             foreach (var (Upload, Completion) in _retired) bytes = checked(bytes + Upload.Bytes);
-            return checked(bytes + (_pending?.Upload?.Bytes ?? 0));
+            return checked(bytes + (_upload?.Bytes ?? 0));
         }
     }
 
@@ -56,6 +58,7 @@ internal sealed partial class PbrMaterials : IDisposable
             || _streaming.DecodedBytes < 65536 || _streaming.DecodedBytes > 256L * 1024 * 1024 || _streaming.IdleFrames < 1
             || !float.IsFinite(_streaming.MipBias) || _streaming.MipBias is < 0 or > 4)
             throw new ArgumentOutOfRangeException(nameof(streaming));
+        _requests = new(ReadTextureAsync, 1, _streaming.DecodedBytes);
         _gpu = new(frame, budget);
         try {
             var assets = source.IsEmpty ? [new PbrMaterialAsset(PbrMaterial.Default)] : source.ToArray();
@@ -117,14 +120,7 @@ internal sealed partial class PbrMaterials : IDisposable
             for (var batch = 0; batch < Groups.Length; batch++) {
                 var uniform = _gpu.Upload<uint4>([new((uint)batch, 0, 0, 0)], WGPUBufferUsage.Uniform);
                 Uniforms.Add(uniform);
-                var entries = new WGPUBindGroupEntry[12];
-                entries[0] = GpuBinding.Buffer(0, Table);
-                entries[1] = GpuBinding.Buffer(1, uniform);
-                for (uint map = 0; map < 5; map++) {
-                    entries[2 + (map * 2)] = GpuBinding.Texture(2 + (map * 2), batchMaps[batch][map].View.GetWgpu<WGPUTextureView>());
-                    entries[3 + (map * 2)] = GpuBinding.Sampler(3 + (map * 2), batchMaps[batch][map].Sampler);
-                }
-                Groups[batch] = GpuBinding.Group(_gpu, layout, entries);
+                Groups[batch] = CreateGroup(batch);
             }
             if (Bytes > budget) throw new InvalidOperationException("Combined material allocation budget exceeded.");
             _peak = Bytes;
@@ -177,20 +173,38 @@ internal sealed partial class PbrMaterials : IDisposable
         var viewDescriptor = WGPUTextureViewDescriptor.Default;
         viewDescriptor.Dimension = WGPUTextureViewDimension._2DArray;
         var view = _gpu.Own(Wgpu.CreateTextureView(texture.GetWgpu<WGPUTexture>(), viewDescriptor));
-        var samplerDescriptor = WGPUSamplerDescriptor.Default;
-        samplerDescriptor.AddressModeU = first.Sampler.AddressU;
-        samplerDescriptor.AddressModeV = first.Sampler.AddressV;
-        samplerDescriptor.MinFilter = first.Sampler.MinFilter;
-        samplerDescriptor.MagFilter = first.Sampler.MagFilter;
-        samplerDescriptor.MipmapFilter = first.Sampler.MipFilter;
-        samplerDescriptor.LodMaxClamp = first.Sampler.UseMipmaps ? first.MipLevels.Length - 1 : 0;
-        return new(texture, view, _gpu.Own(Wgpu.CreateSampler(_gpu.Device, samplerDescriptor)));
+        return new(texture, view, CreateSampler(first.Sampler, first.MipLevels.Length));
+    }
+
+    private Entity CreateSampler(PbrTextureSampler source, int levels)
+    {
+        var descriptor = WGPUSamplerDescriptor.Default;
+        descriptor.AddressModeU = source.AddressU;
+        descriptor.AddressModeV = source.AddressV;
+        descriptor.MinFilter = source.MinFilter;
+        descriptor.MagFilter = source.MagFilter;
+        descriptor.MipmapFilter = source.MipFilter;
+        descriptor.LodMaxClamp = source.UseMipmaps ? levels - 1 : 0;
+        return _gpu.Own(Wgpu.CreateSampler(_gpu.Device, descriptor));
+    }
+
+    private Entity CreateGroup(int batch)
+    {
+        Span<WGPUBindGroupEntry> entries = stackalloc WGPUBindGroupEntry[BindingCount];
+        entries[0] = GpuBinding.Buffer(0, Table);
+        entries[1] = GpuBinding.Buffer(1, Uniforms[batch]);
+        var maps = _batchMaps[batch];
+        for (var map = 0; map < MapCount; map++) {
+            entries[2 + map * 2] = GpuBinding.Texture((uint)(2 + map * 2), maps[map].View.GetWgpu<WGPUTextureView>());
+            entries[3 + map * 2] = GpuBinding.Sampler((uint)(3 + map * 2), maps[map].Sampler);
+        }
+        return GpuBinding.Group(_gpu, _layout, entries);
     }
 
     public void Dispose()
     {
         if (!IsStopped) throw new InvalidOperationException("Await material streaming shutdown before disposal.");
-        _pending?.Upload?.Dispose();
+        _upload?.Dispose();
         foreach (var (Upload, Completion) in _retired) Upload.Dispose();
         foreach (var array in _arrays) array.Residency?.Dispose();
         _gpu.Dispose();

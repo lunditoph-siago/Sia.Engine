@@ -27,6 +27,7 @@ internal sealed unsafe partial class PbrView
     private void AddRange(List<PbrGpuScene.Draw> list, PbrGpuScene.Draw draw, bool matchBatch = false)
     {
         if (list.Count != 0 && list[^1].DoubleSided == draw.DoubleSided && list[^1].First + list[^1].Count == draw.First
+            && (!_owner.Scene.LocalInstances || list[^1].Instance == draw.Instance)
             && (!matchBatch || _owner.Materials.MaterialBatches[list[^1].Material] == _owner.Materials.MaterialBatches[draw.Material]))
             list[^1] = list[^1] with {
                 Count = list[^1].Count + draw.Count
@@ -51,6 +52,7 @@ internal sealed unsafe partial class PbrView
             var draw = list[read];
             if (write > 0 && list[write - 1].DoubleSided == draw.DoubleSided
                 && list[write - 1].First + list[write - 1].Count == draw.First
+                && (!_owner.Scene.LocalInstances || list[write - 1].Instance == draw.Instance)
                 && (!matchBatch || _owner.Materials.MaterialBatches[list[write - 1].Material] == _owner.Materials.MaterialBatches[draw.Material]))
                 list[write - 1] = list[write - 1] with {
                     Count = list[write - 1].Count + draw.Count,
@@ -65,7 +67,6 @@ internal sealed unsafe partial class PbrView
     {
         if (_selection is not null) {
             DrawStreamGeometry(pass, shadow, layer);
-            return;
         }
         Wgpu.SetBindGroup(pass, 0, _rasterGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());

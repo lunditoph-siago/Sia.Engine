@@ -9,6 +9,7 @@ internal sealed unsafe partial class SceneExampleApp
 {
     private static readonly RenderGraphBufferKey _gpuReadbackKey = new("example-gpu-timing");
     private bool _gpuTimingEnabled;
+    private GpuTimestampClock? _gpuClock;
     private readonly TimingSlot[] _timingSlots = Enumerable.Range(0, 4).Select(_ => new TimingSlot()).ToArray();
     private Entity _timingSink;
     private int _timingSlot = -1, _timingDropped;
@@ -26,6 +27,7 @@ internal sealed unsafe partial class SceneExampleApp
     private Entity PrepareGpuTiming()
     {
         if (!_gpuTimingEnabled || _sceneRenderer is null) return default;
+        var clock = _gpuClock ??= GpuTimestampClock.ForQueue(_queue);
         _timingSlot = -1;
         for (var i = 0; i < _timingSlots.Length; i++) {
             var slot = _timingSlots[i];
@@ -37,12 +39,11 @@ internal sealed unsafe partial class SceneExampleApp
                     ulong first = ulong.MaxValue, last = 0;
                     for (var t = 0; t < times.Length; t += 2) {
                         if (times[t] == 0 && times[t + 1] == 0) continue;
-                        if (times[t + 1] < times[t]) throw new InvalidOperationException("GPU timestamps out of order.");
-                        stages.Add(PbrRenderer.GpuTimingStages[t / 2], (times[t + 1] - times[t]) / 1_000_000d);
+                        stages.Add(PbrRenderer.GpuTimingStages[t / 2], clock.Milliseconds(times[t], times[t + 1]));
                         first = System.Math.Min(first, times[t]); last = System.Math.Max(last, times[t + 1]);
                     }
                     if (stages.Count != 0) {
-                        var span = (last - first) / 1_000_000d;
+                        var span = clock.Milliseconds(first, last);
                         _resolutionController?.Observe(slot.Sequence, _benchmarkFrames, slot.Scale, span);
                         if (Program.BenchmarkFrames > 0 && slot.Sequence >= 120)
                             _gpuSamples.Add(new(slot.Sequence, slot.Width, slot.Height, span, stages));

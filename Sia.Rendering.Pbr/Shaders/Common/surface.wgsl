@@ -14,6 +14,9 @@ struct Surface {
     opacity: f32,
     transport: vec2<f32>,
     valid: bool,
+    lightmap: vec3<f32>,
+    lightmap_dx: vec2<f32>,
+    lightmap_dy: vec2<f32>,
 }
 
 fn sample_material(

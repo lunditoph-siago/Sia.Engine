@@ -15,17 +15,22 @@ public static partial class Program
     internal static int Height { get; private set; } = 720;
     internal static bool ImmediatePresent { get; private set; }
     internal static bool GpuTiming { get; private set; }
-    internal static bool GpuTraversal { get; private set; } = true;
+    internal static bool? GpuTraversal { get; private set; }
     internal static PbrOpaquePath? OpaquePath { get; private set; }
     internal static bool ExportSurfaceData { get; private set; }
     internal static IblEnvironmentAsset? BakedEnvironment { get; private set; }
+    internal static PbrReflectionCaptureAsset? BakedReflections { get; private set; }
     internal static DiffuseProbeAsset? BakedProbes { get; private set; }
+    internal static PbrLightmapAsset? BakedLightmaps { get; private set; }
+    internal static PbrLightmapStream? StreamedLightmaps { get; private set; }
     internal static bool? DynamicSceneGi { get; private set; }
     internal static string? ProbesPath { get; private set; }
+    internal static string? LightmapsPath { get; private set; }
     internal static string? EnvironmentPath { get; private set; }
+    internal static string? ReflectionsPath { get; private set; }
     internal static int TargetFps { get; private set; }
 
-    private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool Finest,
+    private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool? Finest,
         (float3 Eye, float3 Target)? Camera) ParseOptions(string[] args)
     {
         var pipeline = ScenePipeline.Pbr;
@@ -54,8 +59,14 @@ public static partial class Program
             else if (args[i] == "--environment") {
                 EnvironmentPath = args[i + 1];
             }
+            else if (args[i] == "--reflections") {
+                ReflectionsPath = args[i + 1];
+            }
             else if (args[i] == "--probes") {
                 ProbesPath = args[i + 1];
+            }
+            else if (args[i] == "--lightmaps") {
+                LightmapsPath = args[i + 1];
             }
             else if (args[i] == "--scene-gi") {
                 DynamicSceneGi = bool.Parse(args[i + 1]);
@@ -165,7 +176,7 @@ public static partial class Program
         }
         if (pipeline != ScenePipeline.Pbr) {
             for (var i = 0; i < args.Length; i += 2) {
-                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes"
+                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes" or "--lightmaps" or "--reflections"
                     or "--scene-gi" or "--surface-data"
                     or "--render-scale" or "--target-fps") {
                     throw new ArgumentException($"{args[i]} requires --pipeline pbr.");
@@ -190,7 +201,7 @@ public static partial class Program
         if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
             throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
         }
-        return (pipeline, debugMode, distance, scenePath, finest ?? false, camera);
+        return (pipeline, debugMode, distance, scenePath, finest, camera);
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {

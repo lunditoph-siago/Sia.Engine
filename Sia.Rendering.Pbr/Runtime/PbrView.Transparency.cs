@@ -30,7 +30,7 @@ internal sealed unsafe partial class PbrView
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 3, _glassGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-        for (uint plane = 0; plane < 3; plane++)
+        for (uint plane = 0; plane < _owner.Scene.VertexPlanes; plane++)
             Wgpu.SetVertexBuffer(pass, plane, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * _owner.Scene.VertexCount * 16);
         Entity previous = default;
         foreach (var draw in _transparent) {
@@ -43,7 +43,7 @@ internal sealed unsafe partial class PbrView
                 previous = pipeline;
             }
             Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[_owner.Materials.MaterialBatches[draw.Material]].GetWgpu<WGPUBindGroup>());
-            Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.First * 3);
+            Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.First * 3, firstInstance: draw.Instance);
         }
     }
 }

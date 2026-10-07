@@ -9,9 +9,10 @@
     <BistroFinestAssetPath Condition="'$(BistroFinestAssetPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroFinestAssetHash)/BistroFinest.siapbr', '$(MSBuildProjectDirectory)'))</BistroFinestAssetPath>
     <_BistroLicensePath>$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroLicenseHash)/Bistro.LICENSE.txt', '$(MSBuildProjectDirectory)'))</_BistroLicensePath>
     <BistroEnvironmentPath Condition="'$(BistroEnvironmentPath)' == ''">$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)bistro/$(_BistroEnvironmentHash)/Bistro.siaenv', '$(MSBuildProjectDirectory)'))</BistroEnvironmentPath>
+    <_BistroSceneBundle Condition="'$(BistroStreamDirectory)' != '' and Exists('$(BistroStreamDirectory)/scene.siascene')">true</_BistroSceneBundle>
   </PropertyGroup>
 
-  <Target Name="PublishBistroAsset" AfterTargets="Publish">
+  <Target Name="PublishBistroAsset" AfterTargets="Publish" Condition="'$(_BistroSceneBundle)' != 'true'">
     <DownloadFile Condition="!Exists('$(_BistroLicensePath)')"
                   SourceUrl="$(_BistroReleaseUrl)/LICENSE.txt"
                   DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(_BistroLicensePath)'))"
@@ -55,9 +56,35 @@
     <Copy Condition="'$(BistroStreamDirectory)' != ''" SourceFiles="@(_BistroStreamFiles)"
           DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(_BistroPublishPath)'))/Stream" SkipUnchangedFiles="true" />
     <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
-      <_BistroIndexHtml>$([System.IO.File]::ReadAllText('$(PublishDir)/wwwroot/index.html').Replace('__BISTRO_SHA256__', '$(_BistroAssetHash)').Replace('__BISTRO_FINEST_SHA256__', '$(_BistroFinestAssetHash)'))</_BistroIndexHtml>
+      <_BistroIndexHtml>$([System.IO.File]::ReadAllText('$(PublishDir)/wwwroot/index.html').Replace('__BISTRO_SHA256__', '$(_BistroAssetHash)').Replace('__BISTRO_FINEST_SHA256__', '$(_BistroFinestAssetHash)').Replace('__BISTRO_SCENE__', 'Assets/Bistro.siapbr'))</_BistroIndexHtml>
     </PropertyGroup>
     <WriteLinesToFile Condition="'$(RuntimeIdentifier)' == 'browser-wasm'" File="$(PublishDir)/wwwroot/index.html"
                       Lines="$([MSBuild]::Escape('$(_BistroIndexHtml)'))" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
+  </Target>
+
+  <Target Name="PublishBistroBundle" AfterTargets="Publish" Condition="'$(_BistroSceneBundle)' == 'true'">
+    <ItemGroup>
+      <_BistroBundleRequired Include="$(BistroStreamDirectory)/scene.siascene;$(BistroStreamDirectory)/scene.siapbr;$(BistroStreamDirectory)/Bistro.siastream;$(BistroStreamDirectory)/environment.siaenv;$(BistroStreamDirectory)/lightmaps.sialmst;$(BistroStreamDirectory)/probes.siaprobe" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(_BistroBundleRequired.Identity)')" Text="Incomplete scene bundle: %(_BistroBundleRequired.Identity)" />
+    <PropertyGroup>
+      <_BistroBundlePublishRoot>$(PublishDir)/Assets</_BistroBundlePublishRoot>
+      <_BistroBundlePublishRoot Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">$(PublishDir)/wwwroot/Assets</_BistroBundlePublishRoot>
+    </PropertyGroup>
+    <ItemGroup>
+      <_BistroBundleFiles Include="@(_BistroBundleRequired);$(BistroStreamDirectory)/*.chunk" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BistroBundleFiles)" DestinationFolder="$(_BistroBundlePublishRoot)/Stream" SkipUnchangedFiles="true" />
+    <DownloadFile Condition="!Exists('$(_BistroLicensePath)')"
+                  SourceUrl="$(_BistroReleaseUrl)/LICENSE.txt"
+                  DestinationFolder="$([System.IO.Path]::GetDirectoryName('$(_BistroLicensePath)'))"
+                  DestinationFileName="Bistro.LICENSE.txt" Retries="3" RetryDelayMilliseconds="1000" />
+    <VerifyFileHash File="$(_BistroLicensePath)" Algorithm="SHA256" Hash="$(_BistroLicenseHash)" />
+    <Copy SourceFiles="$(_BistroLicensePath)" DestinationFolder="$(_BistroBundlePublishRoot)" SkipUnchangedFiles="true" />
+    <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">
+      <_BistroBundleIndexHtml>$([System.IO.File]::ReadAllText('$(PublishDir)/wwwroot/index.html').Replace('__BISTRO_SCENE__', 'Assets/Stream/scene.siascene').Replace('__BISTRO_SHA256__', '$(_BistroAssetHash)').Replace('__BISTRO_FINEST_SHA256__', '$(_BistroFinestAssetHash)'))</_BistroBundleIndexHtml>
+    </PropertyGroup>
+    <WriteLinesToFile Condition="'$(RuntimeIdentifier)' == 'browser-wasm'" File="$(PublishDir)/wwwroot/index.html"
+                      Lines="$([MSBuild]::Escape('$(_BistroBundleIndexHtml)'))" Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
   </Target>
 </Project>

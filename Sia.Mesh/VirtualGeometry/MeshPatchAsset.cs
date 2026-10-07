@@ -7,12 +7,16 @@ public sealed partial class MeshPatchAsset
     public MeshPatchBuildResult Build { get; }
     public MeshPatchBuildSettings Settings { get; }
     public string SourceHash { get; }
+    /// <summary>At least one retained vertex has nonzero bake coordinates; does not certify chart validity.</summary>
+    public bool HasLightmapUV { get; }
 
     private MeshPatchAsset(MeshPatchBuildResult build, MeshPatchBuildSettings settings, string sourceHash)
     {
         Build = build;
         Settings = settings;
         SourceHash = sourceHash;
+        foreach (var vertex in build.Tree.Vertices)
+            if (vertex.LightmapUV.x != 0 || vertex.LightmapUV.y != 0) { HasLightmapUV = true; break; }
     }
 
     public MeshPatchAsset ExtractFinest() => new(
@@ -36,7 +40,9 @@ public sealed partial class MeshPatchAsset
         var options = settings ?? MeshPatchBuildSettings.Default;
         var build = MeshPatchBuilder.Build(snapshot, options, cancellationToken);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> buffer = stackalloc byte[48];
+        var lightmap = snapshot.Vertices.Any(v => v.LightmapUV.x != 0 || v.LightmapUV.y != 0);
+        Span<byte> buffer = stackalloc byte[lightmap ? 56 : 48];
+        if (lightmap) hash.AppendData("SIAMESHUV1"u8);
         var writer = new Writer(buffer);
         writer.Int(snapshot.Vertices.Length);
         writer.Int(snapshot.Indices.Length);
@@ -44,7 +50,7 @@ public sealed partial class MeshPatchAsset
         foreach (var vertex in snapshot.Vertices) {
             cancellationToken.ThrowIfCancellationRequested();
             writer = new(buffer);
-            writer.Vertex(vertex);
+            writer.Vertex(vertex, lightmap);
             hash.AppendData(buffer);
         }
         foreach (var index in snapshot.Indices) {

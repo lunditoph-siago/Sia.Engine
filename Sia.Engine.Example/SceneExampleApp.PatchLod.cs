@@ -62,14 +62,14 @@ internal sealed partial class SceneExampleApp
             ShadowTexelError = BunnyPixelError,
             GpuTiming = _gpuTimingEnabled,
             Streaming = new() {
-                GpuTraversal = Program.GpuTraversal,
+                GpuTraversal = Program.GpuTraversal ?? true,
                 DetailBytes = 8ul * 1024 * 1024,
                 MaximumSelectionNodesPerView = 32768
             }
         };
         _sceneRenderer = new PbrRenderer(in frame, stream, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer).Build();
-        Console.WriteLine($"{(Program.GpuTraversal ? "GPU" : "CPU")} Bunny LOD: {BunnyInstanceCount} instances; target {BunnyPixelError} px; detail budget {settings.Streaming.DetailBytes} bytes.");
+        Console.WriteLine($"{(settings.Streaming.GpuTraversal ? "GPU" : "CPU")} Bunny LOD: {BunnyInstanceCount} instances; target {BunnyPixelError} px; detail budget {settings.Streaming.DetailBytes} bytes.");
         InitializeInspectionControls();
         Console.WriteLine($"Bunny wall: {BunnyColumns} x {BunnyRows} bunnies, {(long)build.SourceTriangleCount * BunnyInstanceCount:N0} source triangles, one shared geometry asset.");
     }
@@ -150,7 +150,7 @@ internal sealed partial class SceneExampleApp
         var status = ((int)(_patchDistance * 100), _patchTour, _sceneRenderer!.DebugMode, triangles);
         if (_patchStatus != status) {
             _patchStatus = status;
-            var scene = _pipeline == ScenePipeline.Bunny ? $"{BunnyInstanceCount} bunnies | {(Program.GpuTraversal ? "GPU" : "CPU")} LOD | {triangles:N0} triangles | target {BunnyPixelError} px"
+            var scene = _pipeline == ScenePipeline.Bunny ? $"{BunnyInstanceCount} bunnies | {(Program.GpuTraversal ?? true ? "GPU" : "CPU")} LOD | {triangles:N0} triangles | target {BunnyPixelError} px"
                 : $"{_materialInstanceCount} instances | {(_finest ? "Finest geometry" : "Automatic LOD")}";
             var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
                 : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";

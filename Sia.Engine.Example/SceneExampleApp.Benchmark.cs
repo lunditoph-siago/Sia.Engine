@@ -11,7 +11,7 @@ internal sealed partial class SceneExampleApp
     private readonly record struct FrameGc(int Gen0, int Gen1, int Gen2, double PauseMilliseconds);
 
     private sealed record FrameSample(PbrFrameStatistics? Visibility, float RenderScale, PbrStreamingStatistics? Streaming,
-        PbrTextureStreamingStatistics? Textures, PbrGpuTraversalStatistics? GpuTraversal,
+        PbrTextureStreamingStatistics? Textures, PbrGpuTraversalStatistics? GpuTraversal, PbrLightmapStreamingStatistics? Lightmaps,
         long RenderThreadAllocatedBytes, FrameGc Gc);
 
     private sealed record ManagedMemory(long FirstFrameAllocatedBytes, long FirstFrameHeapBytes,
@@ -20,14 +20,15 @@ internal sealed partial class SceneExampleApp
 
     private sealed record Workflow(string OpaquePath, bool BakedEnvironment, bool Finest, float PixelError,
         float ShadowTexelError, uint ShadowResolution, bool SurfaceData, bool DynamicProbes,
-        bool BakedProbes, uint ProbeUpdates, uint ProbeSamples);
+        bool BakedProbes, bool BakedLightmaps, bool PagedLightmaps, uint ProbeUpdates, uint ProbeSamples,
+        bool BakedReflections);
 
     private Workflow? _workflow;
 
     private sealed record BenchmarkReport(string Mode, string Quality, int Width, int Height, int RenderWidth, int RenderHeight,
         string Adapter, string PresentMode, string[] Passes,
         int WarmupFrames, int SampleFrames, bool Moving,
-        AssetChunkCacheStatistics? Chunks, long ManagedHeapBytes, FrameSample[] Frames,
+        AssetChunkCacheStatistics? Chunks, AssetChunkCacheStatistics? LightmapChunks, long ManagedHeapBytes, FrameSample[] Frames,
         bool GpuTimingEnabled, int GpuTimingDropped, int GpuTimingPending, GpuSample[] GpuFrames,
         int TargetFps, int ResolutionChanges, int GraphCompilationCount, Workflow? Workflow, ManagedMemory Memory);
 
@@ -57,7 +58,7 @@ internal sealed partial class SceneExampleApp
         }
         if (_benchmarkFrames > 120) {
             _frameSamples.Add(new(_sceneRenderer?.FrameStatistics, _renderScale, _sceneRenderer?.StreamingStatistics, _sceneRenderer?.TextureStreamingStatistics,
-                _sceneRenderer?.GpuTraversalStatistics, GC.GetAllocatedBytesForCurrentThread() - allocatedStart,
+                _sceneRenderer?.GpuTraversalStatistics, _sceneRenderer?.LightmapStreamingStatistics, GC.GetAllocatedBytesForCurrentThread() - allocatedStart,
                 new(GC.CollectionCount(0) - _gen0Start, GC.CollectionCount(1) - _gen1Start, GC.CollectionCount(2) - _gen2Start,
                     (GC.GetTotalPauseDuration() - _pauseStart).TotalMilliseconds)));
         }
@@ -69,7 +70,7 @@ internal sealed partial class SceneExampleApp
             _presentMode.ToString(),
             _renderGraph!.PreparePlan().Graph.Passes.Select(pass => pass.Name).ToArray(),
             120, Program.BenchmarkFrames, Program.BenchmarkMotion,
-            _materialStream?.Statistics, GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
+            _materialStream?.Statistics, Program.StreamedLightmaps?.Statistics, GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
             _timingDropped, _timingSlots.Count(s => s.Mapping is not null), _gpuSamples.ToArray(),
             Program.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount, _workflow,
             new(_firstFrameAllocatedBytes, _firstFrameHeapBytes, GC.GetTotalAllocatedBytes(false) - _measuredAllocatedStart,

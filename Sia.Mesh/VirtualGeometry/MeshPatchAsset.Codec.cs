@@ -23,9 +23,10 @@ public sealed partial class MeshPatchAsset
             meshlets.Meshlets.Length, meshlets.VertexIndices.Length, meshlets.TriangleIndices.Length,
             meshlets.SourceTriangleIndices.Length];
         var length = headerSize;
-        for (var i = 0; i < counts.Length; i++) { length = checked(length + counts[i] * Strides[i]); }
+        var vertexStride = HasLightmapUV ? 56 : 48;
+        for (var i = 0; i < counts.Length; i++) { length = checked(length + counts[i] * (i == 1 ? vertexStride : Strides[i])); }
         var bytes = new byte[length];
-        "SIAPATC2"u8.CopyTo(bytes);
+        (HasLightmapUV ? "SIAPATC3"u8 : "SIAPATC2"u8).CopyTo(bytes);
         var writer = new Writer(bytes.AsSpan(8));
         writer.Long(length);
         Convert.FromHexString(SourceHash).CopyTo(bytes, 16);
@@ -47,8 +48,9 @@ public sealed partial class MeshPatchAsset
         for (var i = 0; i < counts.Length; i++) {
             writer.Long(offset);
             writer.Int(counts[i]);
-            writer.Int(Strides[i]);
-            offset += (long)counts[i] * Strides[i];
+            var stride = i == 1 ? vertexStride : Strides[i];
+            writer.Int(stride);
+            offset += (long)counts[i] * stride;
         }
         writer.Int(QuadricErrorMetric);
         writer = new(bytes.AsSpan(headerSize));
@@ -66,7 +68,7 @@ public sealed partial class MeshPatchAsset
         }
         foreach (var vertex in geometry.Vertices) {
             cancellationToken.ThrowIfCancellationRequested();
-            writer.Vertex(vertex);
+            writer.Vertex(vertex, HasLightmapUV);
         }
         foreach (var index in geometry.Indices) { writer.UInt(index); }
         foreach (var meshlet in meshlets.Meshlets) {
@@ -105,7 +107,8 @@ public sealed partial class MeshPatchAsset
     {
         cancellationToken.ThrowIfCancellationRequested();
         const int headerSize = HeaderSize;
-        Require(bytes.Length >= headerSize && bytes.StartsWith("SIAPATC2"u8),
+        var lightmap = bytes.StartsWith("SIAPATC3"u8);
+        Require(bytes.Length >= headerSize && (lightmap || bytes.StartsWith("SIAPATC2"u8)),
             "Unsupported patch asset format; recook with the current Quadric cooker.");
         var reader = new Reader(bytes[8..]);
         Require(reader.Long() == bytes.Length, "Invalid patch asset length.");
@@ -130,7 +133,7 @@ public sealed partial class MeshPatchAsset
         for (var i = 0; i < counts.Length; i++) {
             Require(reader.Long() == offset, "Patch sections must form a contiguous ordered stream.");
             counts[i] = reader.Int();
-            var stride = Strides[i];
+            var stride = i == 1 && lightmap ? 56 : Strides[i];
             Require(counts[i] >= 0 && reader.Int() == stride, "Invalid patch section count or stride.");
             offset += (long)counts[i] * stride;
             Require(offset <= bytes.Length, "Patch section exceeds the asset length.");
@@ -152,7 +155,7 @@ public sealed partial class MeshPatchAsset
         var vertices = new MeshVertex[counts[1]];
         for (var i = 0; i < vertices.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
-            vertices[i] = reader.Vertex();
+            vertices[i] = reader.Vertex(lightmap);
         }
         var indices = reader.UIntArray(counts[2]);
         var clusters = new Meshlet[counts[3]];
@@ -192,10 +195,11 @@ public sealed partial class MeshPatchAsset
         public void Float(float value) => Int(BitConverter.SingleToInt32Bits(value));
         public void Vector(float3 value) { Float(value.x); Float(value.y); Float(value.z); }
         public void Box(Aabb value) { Vector(value.Min); Vector(value.Max); }
-        public void Vertex(MeshVertex value)
+        public void Vertex(MeshVertex value, bool lightmap = false)
         {
             Vector(value.Position); Vector(value.Normal); Float(value.UV.x); Float(value.UV.y);
             Float(value.Tangent.x); Float(value.Tangent.y); Float(value.Tangent.z); Float(value.Tangent.w);
+            if (lightmap) { Float(value.LightmapUV.x); Float(value.LightmapUV.y); }
         }
         public void Bytes(ReadOnlySpan<byte> value) { value.CopyTo(_remaining); _remaining = _remaining[value.Length..]; }
     }
@@ -209,16 +213,18 @@ public sealed partial class MeshPatchAsset
         public float Float() => BitConverter.Int32BitsToSingle(Int());
         public float3 Vector() => new(Float(), Float(), Float());
         public Aabb Box() => new(Vector(), Vector());
-        public MeshVertex Vertex()
+        public MeshVertex Vertex(bool lightmap)
         {
             if (BitConverter.IsLittleEndian) {
-                var values = MemoryMarshal.Cast<byte, float>(Bytes(48));
+                var values = MemoryMarshal.Cast<byte, float>(Bytes(lightmap ? 56 : 48));
                 return new(new(values[0], values[1], values[2]), new(values[3], values[4], values[5]), new(values[6], values[7])) {
-                    Tangent = new(values[8], values[9], values[10], values[11])
+                    Tangent = new(values[8], values[9], values[10], values[11]),
+                    LightmapUV = lightmap ? new(values[12], values[13]) : default
                 };
             }
             var vertex = new MeshVertex(Vector(), Vector(), new(Float(), Float()));
-            return vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
+            vertex = vertex with { Tangent = new(Float(), Float(), Float(), Float()) };
+            return lightmap ? vertex with { LightmapUV = new(Float(), Float()) } : vertex;
         }
         public uint[] UIntArray(int count)
         {

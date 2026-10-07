@@ -3,7 +3,7 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering;
 
-public static class IblEnvironmentBaker
+public static partial class IblEnvironmentBaker
 {
     internal static string ShaderSource()
     {

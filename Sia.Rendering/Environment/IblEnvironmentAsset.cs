@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using Sia.Asset;
 using Sia.Math;
 
 namespace Sia.Engine.Rendering;
@@ -31,10 +31,18 @@ public sealed class IblEnvironmentAsset
         BrdfLut = lut;
     }
 
-    public void Write(Stream destination)
+    public void Write(Stream destination) => ChecksummedAsset.Write<IblEnvironmentAsset, Codec>(destination, this);
+
+    public static IblEnvironmentAsset Read(Stream source) => ChecksummedAsset.Read<IblEnvironmentAsset, Codec>(source);
+
+    private readonly struct Codec : IChecksummedAssetCodec<IblEnvironmentAsset>
     {
-        using var payload = new MemoryStream(k_PayloadBytes);
-        using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true)) {
+        public static int HeaderBytes => 0;
+        public static int GetReadSize(ReadOnlySpan<byte> header) => k_PayloadBytes;
+        public static int GetWriteSize(IblEnvironmentAsset value) => k_PayloadBytes;
+
+        public static void WritePayload(BinaryWriter writer, IblEnvironmentAsset value)
+        {
             writer.Write("SIAENV\0\0"u8);
             void Vector(float3 v)
             {
@@ -42,52 +50,42 @@ public sealed class IblEnvironmentAsset
                 writer.Write(v.y);
                 writer.Write(v.z);
             }
-            Vector(Sky.Horizon);
-            Vector(Sky.Zenith);
-            Vector(Sky.Ground);
-            Vector(Sky.SunDirection);
-            Vector(Sky.SunRadiance);
-            writer.Write(Sky.SunExponent);
-            writer.Write(Sky.Intensity);
-            foreach (var c in Coefficients.Span) {
+            Vector(value.Sky.Horizon);
+            Vector(value.Sky.Zenith);
+            Vector(value.Sky.Ground);
+            Vector(value.Sky.SunDirection);
+            Vector(value.Sky.SunRadiance);
+            writer.Write(value.Sky.SunExponent);
+            writer.Write(value.Sky.Intensity);
+            foreach (var c in value.Coefficients.Span) {
                 writer.Write(c.x);
                 writer.Write(c.y);
                 writer.Write(c.z);
                 writer.Write(c.w);
             }
-            foreach (var v in Cube.Span)
+            foreach (var v in value.Cube.Span)
                 writer.Write(BitConverter.HalfToUInt16Bits(v));
-            foreach (var v in BrdfLut.Span)
+            foreach (var v in value.BrdfLut.Span)
                 writer.Write(BitConverter.HalfToUInt16Bits(v));
         }
-        var bytes = payload.GetBuffer().AsSpan(0, (int)payload.Length);
-        destination.Write(bytes);
-        destination.Write(SHA256.HashData(bytes));
-    }
 
-    public static IblEnvironmentAsset Read(Stream source)
-    {
-        var bytes = new byte[k_PayloadBytes];
-        source.ReadExactly(bytes);
-        Span<byte> checksum = stackalloc byte[32];
-        source.ReadExactly(checksum);
-        if (!CryptographicOperations.FixedTimeEquals(checksum, SHA256.HashData(bytes)) || source.ReadByte() != -1)
-            throw new InvalidDataException("Environment checksum mismatch or trailing data.");
-        using var reader = new BinaryReader(new MemoryStream(bytes, writable: false));
-        if (!reader.ReadBytes(8).AsSpan().SequenceEqual("SIAENV\0\0"u8))
-            throw new InvalidDataException("Unsupported environment asset.");
-        float3 Vector() => new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-        var sky = new ProceduralSky { Horizon = Vector(), Zenith = Vector(), Ground = Vector(), SunDirection = Vector(), SunRadiance = Vector(), SunExponent = reader.ReadSingle(), Intensity = reader.ReadSingle() };
-        var sh = new float4[9];
-        for (var i = 0; i < sh.Length; i++)
-            sh[i] = new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-        Half[] Values(int count)
+        public static IblEnvironmentAsset ReadPayload(BinaryReader reader)
         {
-            var result = new Half[count];
-            for (var i = 0; i < count; i++)
-                result[i] = BitConverter.UInt16BitsToHalf(reader.ReadUInt16());
-            return result;
+            if (!reader.ReadBytes(8).AsSpan().SequenceEqual("SIAENV\0\0"u8))
+                throw new InvalidDataException("Unsupported environment asset.");
+            float3 Vector() => new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            var sky = new ProceduralSky { Horizon = Vector(), Zenith = Vector(), Ground = Vector(), SunDirection = Vector(), SunRadiance = Vector(), SunExponent = reader.ReadSingle(), Intensity = reader.ReadSingle() };
+            var sh = new float4[9];
+            for (var i = 0; i < sh.Length; i++)
+                sh[i] = new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Half[] Values(int count)
+            {
+                var result = new Half[count];
+                for (var i = 0; i < count; i++)
+                    result[i] = BitConverter.UInt16BitsToHalf(reader.ReadUInt16());
+                return result;
+            }
+            return new(sky, sh, Values(CubeTexels * 4), Values(LutTexels * 4));
         }
-        return new(sky, sh, Values(CubeTexels * 4), Values(LutTexels * 4));
     }
 }

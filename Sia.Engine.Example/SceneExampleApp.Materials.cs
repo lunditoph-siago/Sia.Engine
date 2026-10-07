@@ -55,13 +55,19 @@ internal sealed partial class SceneExampleApp
     {
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var preset = _qualitySettings;
+        var opaquePath = Program.OpaquePath ?? preset.OpaquePath;
         var settings = preset with {
-            Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
+            Streaming = preset.Streaming with {
+                GpuTraversal = Program.GpuTraversal ?? (opaquePath == PbrOpaquePath.Visibility && preset.Streaming.GpuTraversal)
+            },
             BakedEnvironment = Program.BakedEnvironment,
+            BakedReflections = Program.BakedReflections,
             ExportSurfaceData = Program.ExportSurfaceData,
             BakedProbes = Program.BakedProbes,
+            BakedLightmaps = Program.BakedLightmaps,
+            StreamedLightmaps = Program.StreamedLightmaps,
             DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
-            OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
+            OpaquePath = opaquePath,
             TargetPixelError = _finest ? 0 : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
             ShadowTexelError = _finest ? 0 : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
             GpuTiming = _gpuTimingEnabled
@@ -71,11 +77,18 @@ internal sealed partial class SceneExampleApp
             : new PbrRenderer(in frame, _materialScene!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
         _workflow = new(settings.OpaquePath.ToString(), settings.BakedEnvironment is not null, _finest,
             settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData,
-            settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
-            settings.DynamicSceneGi ? settings.ProbeSamples : 0);
+            settings.DynamicSceneGi, settings.BakedProbes is not null, settings.BakedLightmaps is not null || settings.StreamedLightmaps is not null,
+            settings.StreamedLightmaps is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
+            settings.DynamicSceneGi ? settings.ProbeSamples : 0, settings.BakedReflections is not null);
         InitializeInspectionControls();
         Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
-        Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
+        Console.WriteLine($"Unmapped diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
+        if (settings.BakedLightmaps is { } lightmaps)
+            Console.WriteLine($"Static surface lightmaps: {lightmaps.Resolution} square, {lightmaps.Receivers.Length} receivers; replace diffuse probe/environment irradiance on mapped texels. Direct lighting remains live.");
+        if (settings.StreamedLightmaps is { } pages)
+            Console.WriteLine($"Paged static lightmaps: {pages.Resolution} virtual square, {pages.Receivers.Length} receivers; GPU pool {_sceneRenderer.LightmapStreamingStatistics!.Value.AllocatedBytes} bytes. Missing pages use chart means; direct lighting remains live.");
+        if (settings.BakedReflections is { } capture)
+            Console.WriteLine($"Static reflection capture: point {capture.Position}; box {capture.Bounds.Min} .. {capture.Bounds.Max}. Outside the region uses the environment sky.");
         _materialScene = null;
     }
 

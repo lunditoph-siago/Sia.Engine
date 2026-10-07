@@ -54,18 +54,48 @@ public static partial class Program
     }
 
 #if !BROWSER
-    private static async Task CookStreamAsync(string path, string directory)
+    private static int[] ParseConventionalGeometry(string option, string value)
     {
-        if (Directory.Exists(directory))
+        if (option != "--conventional-geometry")
+            throw new ArgumentException("Expected --conventional-geometry comma-separated source geometry IDs.");
+        var ids = value.Split(',');
+        var result = new int[ids.Length];
+        for (var i = 0; i < ids.Length; i++)
+            if (!int.TryParse(ids[i], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out result[i]) || result[i] < 0)
+                throw new ArgumentException("Conventional geometry IDs must be nonnegative integers.");
+        if (result.Distinct().Count() != result.Length)
+            throw new ArgumentException("Conventional geometry IDs must be unique.");
+        return result;
+    }
+
+    private static async Task CookStreamAsync(string path, string directory, int[] conventional)
+    {
+        var destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        if (Directory.Exists(destination) || File.Exists(destination))
             throw new IOException("Choose a new output directory.");
         var asset = PbrSceneAsset.Decode(await File.ReadAllBytesAsync(path), 1024 * 1024 * 1024);
-        Directory.CreateDirectory(directory);
-        var metadata = await PbrSceneStream.CookAsync(asset, async (chunk, bytes, token) => {
-            await using var file = new FileStream(Path.Combine(directory, chunk.FileName), FileMode.CreateNew, FileAccess.Write);
-            await file.WriteAsync(bytes, token);
-        });
-        await File.WriteAllBytesAsync(Path.Combine(directory, "Bistro.siastream"), metadata);
-        Console.WriteLine($"Cooked scene stream: {directory}");
+        var staging = Path.Combine(Path.GetDirectoryName(destination)!, $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+        if (File.Exists(staging) || Directory.Exists(staging)) throw new IOException("Stream staging path already exists.");
+        Directory.CreateDirectory(staging);
+        try {
+            var metadata = await PbrSceneStream.CookAsync(asset, async (chunk, bytes, token) => {
+                await using var file = new FileStream(Path.Combine(staging, chunk.FileName), FileMode.CreateNew, FileAccess.Write);
+                await file.WriteAsync(bytes, token);
+            }, conventional);
+            await using (var check = await PbrSceneStream.OpenAsync(metadata, AssetChunkSources.Directory(staging))) {
+                if (!check.StaticIdentity.Span.SequenceEqual(PbrSceneTransport.StaticIdentity(asset)))
+                    throw new InvalidDataException("Cooked stream changed the static source domain.");
+                if (!check.LightmapIdentity.Span.SequenceEqual(PbrLightmapAsset.Identity(asset)))
+                    throw new InvalidDataException("Cooked stream changed the complete lightmap source domain.");
+            }
+            await File.WriteAllBytesAsync(Path.Combine(staging, "Bistro.siastream"), metadata);
+            Directory.Move(staging, destination);
+            Console.WriteLine($"Cooked scene stream: {destination}; {conventional.Length} conventional geometry assets.");
+        }
+        finally {
+            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
+        }
     }
 #endif
 }

@@ -13,7 +13,7 @@ public sealed partial class MeshPatchTree
         foreach (var vertex in geometry.Vertices) {
             cancellationToken.ThrowIfCancellationRequested();
             Require(Finite(vertex.Position) && Finite(vertex.Normal) && float.IsFinite(vertex.UV.x) && float.IsFinite(vertex.UV.y)
-                && vertex.HasFiniteTangent,
+                && vertex.HasFiniteTangent && vertex.HasFiniteLightmapUV,
                 "Patch vertex attributes must be finite.");
         }
         foreach (var index in geometry.Indices) { Require(index < geometry.Vertices.Length, "Geometry index is out of range."); }

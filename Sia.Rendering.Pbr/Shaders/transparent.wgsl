@@ -13,12 +13,37 @@ struct GlassVertex {
 
 @vertex
 fn transparent_vertex(
+#if COMPACT_VERTICES
+    @location(0) packed_p: vec4<u32>,
+    @location(1) packed_n: vec4<u32>,
+#else
     @location(0) p: vec4<f32>,
     @location(1) n: vec4<f32>,
-    @location(2) t: vec4<f32>
+    @location(2) t: vec4<f32>,
+#endif
+    @builtin(instance_index) instance_id: u32
 ) -> GlassVertex {
-    let world = vec4<f32>(p.xyz, 1.0);
-    return GlassVertex(frame.vp * world, world.xyz, vec3<f32>(p.w, n.xy), t, n.zw, u32(abs(t.w)) - 1u);
+#if COMPACT_VERTICES
+    let vertex = compact_vertex(packed_p, packed_n, vec3<f32>(0));
+    let p = vec4<f32>(vertex.position, vertex.normal.x);
+    let n = vec4<f32>(vertex.normal.yz, vertex.uv);
+    let t = vertex.tangent;
+#endif
+    var world = vec4<f32>(p.xyz, 1.0);
+#if LOCAL_INSTANCES
+    let instance = instances[instance_id];
+    world = instance.transform * world;
+    return GlassVertex(frame.vp * world, world.xyz,
+        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
+        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, sign(t.w)), n.zw, instance.material.x);
+#else
+#if COMPACT_VERTICES
+    let material = vertex_owner(packed_n.w);
+#else
+    let material = u32(abs(t.w)) - 1u;
+#endif
+    return GlassVertex(frame.vp * world, world.xyz, vec3<f32>(p.w, n.xy), t, n.zw, material);
+#endif
 }
 
 @group(3) @binding(0) var opaque: texture_2d<f32>;
@@ -55,7 +80,7 @@ fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool)
         }
         let background_color = textureLoad(opaque, pixel, 0).rgb;
         let f = 0.04 + 0.96 * pow(1.0 - max(dot(-view, s.normal), 0), 5.0);
-        let reflection = scene_lighting(s.position, s.normal, vec3<f32>(0), 0.0, s.rough, s.emission, s.ao, input.position.xy);
+        let reflection = scene_lighting(s.position, s.normal, vec3<f32>(0), 0.0, s.rough, s.emission, s.ao, input.position.xy, vec3<f32>(0), vec2<f32>(0), vec2<f32>(0));
         color = mix(color, reflection + (1.0 - f) * s.base * background_color, transmission);
     }
     return vec4<f32>(min(color, vec3<f32>(65504)), s.opacity);

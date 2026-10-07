@@ -22,6 +22,11 @@ public sealed class DiffuseProbeGpu : IDisposable
     public Entity TextureView { get; }
     public Entity Header { get; }
     public Entity Tracing { get; }
+    public Entity DynamicTracing { get; }
+    public ulong DynamicTracingCapacityBytes { get; }
+    public Entity DifferenceTexture { get; }
+    public Entity DifferenceTextureView { get; }
+    public Entity ReferenceConfiguration { get; }
 
     public Entity Configuration => _config;
 
@@ -31,23 +36,33 @@ public sealed class DiffuseProbeGpu : IDisposable
 
     public int Count => _shape.Count;
 
-    public static ulong FieldBytes(uint3 dimensions, bool dynamic)
+    public static ulong FieldBytes(uint3 dimensions, bool dynamic, bool difference = false)
     {
         var count = checked((ulong)dimensions.x * dimensions.y * dimensions.z);
         if (dimensions.x < 2 || dimensions.y < 2 || dimensions.z < 2
             || count > DiffuseProbeAsset.MaximumProbes)
             throw new ArgumentOutOfRangeException(nameof(dimensions));
+        if (difference && !dynamic) throw new ArgumentException("A signed difference requires dynamic integration.", nameof(difference));
         return checked((3 + count * 9) * 16 + 48 + count * k_TextureBands * 8
-            + (dynamic ? 176ul : 0));
+            + (dynamic ? 176ul : 0) + (difference ? count * k_TextureBands * 8 + 112 : 0));
     }
 
     public DiffuseProbeGpu(in GpuFrame frame, DiffuseProbeAsset asset,
-        SceneTraceData? tracing = null, ulong maximumBytes = 160ul * 1024 * 1024)
+        SceneTraceData? tracing = null, ulong maximumBytes = 160ul * 1024 * 1024,
+        ulong dynamicTracingBytes = 0, DiffuseProbeLighting? reference = null)
     {
         _gpu = new(frame, maximumBytes);
         _frame = frame;
         _shape = asset;
         try {
+            if (reference is { } lighting) {
+                lighting.Validate();
+                if (tracing is null) throw new ArgumentException("A reference requires dynamic probe integration.", nameof(reference));
+                if (_gpu.Limits.MaxStorageTexturesPerShaderStage < 2)
+                    throw new NotSupportedException("Signed probe transport requires two storage textures.");
+            }
+            if (dynamicTracingBytes != 0 && (tracing is null || dynamicTracingBytes < 32 || dynamicTracingBytes % 16 != 0))
+                throw new ArgumentException("Dynamic tracing needs a static trace scene and an aligned header-sized capacity.", nameof(dynamicTracingBytes));
             if (asset.Dimensions.x > _gpu.Limits.MaxTextureDimension3D
                 || asset.Dimensions.y > _gpu.Limits.MaxTextureDimension3D
                 || asset.Dimensions.z > _gpu.Limits.MaxTextureDimension3D / k_TextureBands)
@@ -69,49 +84,88 @@ public sealed class DiffuseProbeGpu : IDisposable
             view.Dimension = WGPUTextureViewDimension._3D;
             TextureView = _gpu.Own(Wgpu.CreateTextureView(Texture.GetWgpu<WGPUTexture>(), view));
             UploadTexture(asset);
+            if (reference is { } referenceLighting) {
+                texture.Usage |= WGPUTextureUsage.CopySrc;
+                DifferenceTexture = _gpu.Texture(texture, (ulong)asset.Count * k_TextureBands * 8);
+                DifferenceTextureView = _gpu.Own(Wgpu.CreateTextureView(DifferenceTexture.GetWgpu<WGPUTexture>(), view));
+                // Newly allocated WebGPU texture subresources are zero-initialized:
+                // untouched pairs have zero validity and contribute no correction.
+                var referenceValues = new float4[7];
+                referenceLighting.Write(referenceValues.AsSpan(0, 5), referenceValues.AsSpan(5, 2));
+                ReferenceConfiguration = _gpu.Upload<float4>(referenceValues, WGPUBufferUsage.Uniform);
+            }
             if (tracing is null) return;
             if (_gpu.Limits.MaxComputeInvocationsPerWorkgroup < 64 || _gpu.Limits.MaxComputeWorkgroupStorageSize < 9216)
                 throw new NotSupportedException("Probe integration requires 64 compute lanes and 9216 bytes of workgroup storage.");
             if (!asset.SceneIdentity.Span.SequenceEqual(tracing.Identity.Span))
                 throw new ArgumentException("Probe volume and trace scene identities disagree.");
             Tracing = _gpu.Upload<float4>(tracing.Packed.Span, WGPUBufferUsage.Storage);
+            if (dynamicTracingBytes != 0) {
+                DynamicTracing = _gpu.Buffer(dynamicTracingBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
+                DynamicTracingCapacityBytes = dynamicTracingBytes;
+                UpdateDynamicTracing(null);
+            }
             _config = _gpu.Buffer(176, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
-            var layout = GpuBinding.Layout(_gpu, [
+            var entries = new List<WGPUBindGroupLayoutEntry> {
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 176),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float, WGPUTextureViewDimension._3D)
-            ]);
-            _group = GpuBinding.Group(_gpu, layout, [
+            };
+            if (DynamicTracing.IsValid) entries.Add(GpuBinding.Buffer(4, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
+            if (DifferenceTexture.IsValid) {
+                entries.Add(GpuBinding.Buffer(5, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 112));
+                entries.Add(GpuBinding.StorageTexture(6, WGPUTextureFormat.RGBA16Float, WGPUTextureViewDimension._3D));
+            }
+            var layout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(entries));
+            var bindings = new List<WGPUBindGroupEntry> {
                 GpuBinding.Buffer(0, _config), GpuBinding.Buffer(1, Tracing), GpuBinding.Buffer(2, Buffer),
                 GpuBinding.Texture(3, TextureView.GetWgpu<WGPUTextureView>())
-            ]);
+            };
+            if (DynamicTracing.IsValid) bindings.Add(GpuBinding.Buffer(4, DynamicTracing));
+            if (DifferenceTexture.IsValid) {
+                bindings.Add(GpuBinding.Buffer(5, ReferenceConfiguration));
+                bindings.Add(GpuBinding.Texture(6, DifferenceTextureView.GetWgpu<WGPUTextureView>()));
+            }
+            _group = GpuBinding.Group(_gpu, layout, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(bindings));
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, layout);
-            var source = RenderingShaderSource.Compile(RenderingShaderSource.ReadModule("rendering/Baking/probes")!);
+            var source = RenderingShaderSource.Compile(RenderingShaderSource.ReadModule("rendering/Baking/probes")!,
+                new Dictionary<string, string> {
+                    ["DYNAMIC_TRACE"] = DynamicTracing.IsValid ? "true" : "false",
+                    ["REFERENCE_LIGHTING"] = DifferenceTexture.IsValid ? "true" : "false"
+                });
             var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, source, "scene-probe-transport"));
             _pipeline = CreatePipeline(_gpu, pipelineLayout, shader);
         }
         catch { _gpu.Dispose(); throw; }
     }
 
+    /// <summary>Replaces only the bounded actor trace buffer on the owning queue; null removes all actor occlusion.</summary>
+    public ulong UpdateDynamicTracing(SceneTraceData? tracing)
+    {
+        if (!DynamicTracing.IsValid) throw new InvalidOperationException("No dynamic trace capacity was reserved.");
+        var bytes = tracing is null ? 32ul : checked((ulong)tracing.Packed.Length * 16);
+        if (bytes > DynamicTracingCapacityBytes)
+            throw new ArgumentException("Dynamic transport exceeds its reserved capacity.", nameof(tracing));
+        if (tracing is null) Wgpu.WriteBuffer<float4>(_gpu.Queue, DynamicTracing.GetWgpu<WGPUBuffer>(), 0, [float4.zero, float4.zero]);
+        else Wgpu.WriteBuffer<float4>(_gpu.Queue, DynamicTracing.GetWgpu<WGPUBuffer>(), 0, tracing.Packed.Span);
+        return bytes;
+    }
+
     public void Prepare(ProceduralSky sky, float3 towardLight, float3 lightRadiance,
         uint updates, uint samples = 64, float maximumDistance = 1000)
     {
         if (!Dynamic) throw new InvalidOperationException("A baked probe field has no integration pipeline.");
-        sky.Validate();
-        if (updates == 0 || updates > Count || samples is < 16 or > 1024
-            || !float.IsFinite(maximumDistance) || maximumDistance <= 0
-            || !float.IsFinite(math.lengthsq(towardLight)) || math.lengthsq(towardLight) < 1e-12f
-            || !float.IsFinite(lightRadiance.x) || !float.IsFinite(lightRadiance.y) || !float.IsFinite(lightRadiance.z)
-            || lightRadiance.x < 0 || lightRadiance.y < 0 || lightRadiance.z < 0)
-            throw new ArgumentException("Invalid probe integration budget or lighting.");
+        var lighting = new DiffuseProbeLighting(sky, towardLight, lightRadiance, maximumDistance);
+        lighting.Validate();
+        if (updates == 0 || updates > Count || samples is < 16 or > 1024)
+            throw new ArgumentException("Invalid probe integration budget.");
         var values = new float4[] {
-            new(sky.Horizon, sky.Intensity), new(sky.Zenith, sky.SunExponent), new(sky.Ground, 0),
-            new(math.normalize(sky.SunDirection), 0), new(sky.SunRadiance, 0),
+            default, default, default, default, default,
             new(_shape.Origin, _shape.Dimensions.x), new(_shape.Step, _shape.Dimensions.y),
-            new(_shape.Dimensions.z, Count, 0, 0), new(math.normalize(towardLight), maximumDistance),
-            new(lightRadiance, 0), new(_cursor, updates, samples, 0)
+            new(_shape.Dimensions.z, Count, 0, 0), default, default, new(_cursor, updates, samples, 0)
         };
+        lighting.Write(values.AsSpan(0, 5), values.AsSpan(8, 2));
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _config.GetWgpu<WGPUBuffer>(), 0, values);
         _cursor = (_cursor + updates) % (uint)Count;
         _updates = updates;

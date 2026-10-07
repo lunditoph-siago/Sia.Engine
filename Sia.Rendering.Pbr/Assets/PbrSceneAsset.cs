@@ -22,7 +22,11 @@ public sealed record PbrMaterialAsset(
     float Transmission = 0,
     float Thickness = 0);
 
-public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform);
+public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform)
+{
+    /// <summary>Excluded from static transport baking; permits rigid runtime updates.</summary>
+    public bool Dynamic { get; init; }
+}
 
 public sealed partial class PbrSceneAsset
 {
@@ -30,6 +34,7 @@ public sealed partial class PbrSceneAsset
     public ReadOnlyMemory<PbrMaterialAsset> Materials { get; }
     public ReadOnlyMemory<PbrSceneInstance> Instances { get; }
     public string Attribution { get; }
+    internal bool HasDynamicInstances { get; }
 
     private PbrSceneAsset(MeshPatchAsset[] geometry, PbrMaterialAsset[] materials, PbrSceneInstance[] instances, string attribution)
     {
@@ -37,6 +42,7 @@ public sealed partial class PbrSceneAsset
         Materials = materials;
         Instances = instances;
         Attribution = attribution;
+        HasDynamicInstances = instances.Any(instance => instance.Dynamic);
     }
 
     public static PbrSceneAsset Create(ReadOnlySpan<MeshPatchAsset> geometry, ReadOnlySpan<PbrMaterialAsset> materials,
@@ -82,14 +88,17 @@ public sealed partial class PbrSceneAsset
             if ((uint)instance.Geometry >= (uint)geometry.Length || (uint)instance.Material >= (uint)materials.Length) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "The scene instance references a missing geometry or material.");
             }
-            var t = instance.Transform;
-            var determinant = math.determinant(t);
-            if (!math.all(math.isfinite(t.c0)) || !math.all(math.isfinite(t.c1)) || !math.all(math.isfinite(t.c2))
-                || !math.all(math.isfinite(t.c3)) || !float.IsFinite(determinant) || determinant <= 1e-12f
-                || t.c0.w != 0 || t.c1.w != 0 || t.c2.w != 0 || t.c3.w != 1) {
-                throw new ArgumentException("Scene instances require finite affine transforms with positive determinant.", nameof(instances));
-            }
+            ValidateTransform(instance.Transform);
         }
         return new(geometry.ToArray(), materials.ToArray(), instances.ToArray(), attribution);
+    }
+
+    internal static void ValidateTransform(float4x4 t)
+    {
+        var determinant = math.determinant(t);
+        if (!math.all(math.isfinite(t.c0)) || !math.all(math.isfinite(t.c1)) || !math.all(math.isfinite(t.c2))
+            || !math.all(math.isfinite(t.c3)) || !float.IsFinite(determinant) || determinant <= 1e-12f
+            || t.c0.w != 0 || t.c1.w != 0 || t.c2.w != 0 || t.c3.w != 1)
+            throw new ArgumentException("Scene instances require finite affine transforms with positive determinant.", nameof(t));
     }
 }

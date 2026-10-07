@@ -15,6 +15,9 @@
 @group(3) @binding(4) var normal_roughness: texture_storage_2d<rgba16float, write>;
 @group(3) @binding(5) var base_metallic: texture_storage_2d<rgba8unorm, write>;
 #endif
+#if SCENE_REFLECTIONS
+@group(3) @binding(7) var reflection_inputs: texture_storage_2d<rgba32float, write>;
+#endif
 
 @compute @workgroup_size(8, 8)
 fn background(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -26,7 +29,7 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
         var color = vec3<f32>(0.02);
         if (visible != 0u) {
             color = vec3<f32>(1.0, 0.0, 1.0);
-            if (visible <= frame.geometry.z) {
+            if (valid_triangle_id(visible)) {
                 color = triangle_debug_color(visible - 1u);
             }
         }
@@ -45,6 +48,10 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(normal_roughness, vec2<i32>(id.xy), vec4<f32>(0.0));
     textureStore(base_metallic, vec2<i32>(id.xy), vec4<f32>(0.0));
 #endif
+#if SCENE_REFLECTIONS
+    textureStore(reflection_inputs, vec2<i32>(id.xy), vec4<f32>(0, 0, 0, 1));
+    textureStore(reflection_inputs, vec2<i32>(id.xy + vec2<u32>(frame.size.x, 0u)), vec4<f32>(0));
+#endif
 }
 
 fn resolve_pixel(pixel: vec2<u32>) {
@@ -52,7 +59,7 @@ fn resolve_pixel(pixel: vec2<u32>) {
         return;
     }
     let id = textureLoad(ids, vec2<i32>(pixel), 0).x;
-    if (id == 0u || id > frame.geometry.z) {
+    if (!valid_triangle_id(id)) {
         return;
     }
     if (materials[triangle_material(id - 1u)].indices.y != batch.x) {
@@ -67,6 +74,23 @@ fn resolve_pixel(pixel: vec2<u32>) {
     }
     textureStore(normal_roughness, vec2<i32>(pixel), data.normal_roughness);
     textureStore(base_metallic, vec2<i32>(pixel), data.base_metallic);
+#endif
+#if SCENE_REFLECTIONS
+    var weight = vec3<f32>(0);
+    var reflection_depth = 1.0;
+    if (surface.valid) {
+        let view = unit(frame.eye.xyz - surface.position);
+        let brdf = sample_brdf_lut(brdf_lut, brdf_sampler, max(dot(surface.normal, view), 1e-4), surface.rough);
+        weight = (mix(vec3<f32>(.04), surface.base, surface.metal) * brdf.x + vec3<f32>(brdf.y)) * surface.ao;
+        // Compatibility permits neither fragment nor compute textureLoad of depth.
+        // The resolved surface already lies on the rasterized triangle at this pixel.
+        let clip = frame.vp * vec4<f32>(surface.position, 1);
+        reflection_depth = clip.z / clip.w;
+    }
+    textureStore(reflection_inputs, vec2<i32>(pixel), vec4<f32>(weight, reflection_depth));
+    var receiver = vec4<f32>(0);
+    if (surface.valid) { receiver = vec4<f32>(surface.position, f32(receiver_instance_index(id - 1u) + 1u)); }
+    textureStore(reflection_inputs, vec2<i32>(pixel + vec2<u32>(frame.size.x, 0u)), receiver);
 #endif
     var color = vec3<f32>(0.0);
     if (surface.valid) {
