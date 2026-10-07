@@ -59,7 +59,7 @@ public interface ISceneTraceTriangleSource
     SceneTraceTriangle this[int index] { get; }
 }
 
-public sealed class SceneTraceData
+public sealed partial class SceneTraceData
 {
     private readonly record struct Centroid(double X, double Y, double Z);
     private readonly record struct TriangleBounds(float MinX, float MinY, float MinZ, float MaxX, float MaxY, float MaxZ)

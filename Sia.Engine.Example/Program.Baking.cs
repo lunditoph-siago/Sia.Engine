@@ -101,6 +101,9 @@ public static partial class Program
                 if (!check.LightmapIdentity.Span.SequenceEqual(stream.SceneIdentity.Span)
                     || !check.StaticIdentity.Span.SequenceEqual(PbrSceneTransport.StaticIdentity(baked.Scene)))
                     throw new InvalidDataException("Mixed stream changed the mapped bake domain.");
+                var trace = PbrSceneTransport.BuildStatic(check);
+                await using var output = new FileStream(Path.Combine(staging, "static.siatrace"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                trace.Write(output);
             }
             await File.WriteAllBytesAsync(Path.Combine(staging, "Bistro.siastream"), mixed);
             mixed = null!;
@@ -109,7 +112,8 @@ public static partial class Program
             // Reuse the existing GPU bake; publish it atomically with the matching mapped scene and pages.
             BakeProbes(Path.Combine(staging, "scene.siapbr"), Path.Combine(staging, "probes.siaprobe"));
             BakeEnvironment(settings.Sky.Intensity.ToString(CultureInfo.InvariantCulture), Path.Combine(staging, "environment.siaenv"));
-            var inputs = new SceneInputs("scene.siapbr", "Bistro.siastream", "environment.siaenv", "lightmaps.sialmst", "probes.siaprobe");
+            var inputs = new SceneInputs("scene.siapbr", "Bistro.siastream", "environment.siaenv", "lightmaps.sialmst", "probes.siaprobe",
+                StaticTransport: "static.siatrace");
             await File.WriteAllBytesAsync(Path.Combine(staging, "scene.siascene"), inputs.Encode());
             Directory.Move(staging, destination);
             Console.WriteLine($"Paged lightmaps baked: {stream.Receivers.Length} receivers; {stream.Resolution} virtual square; {stream.Pages.Length} pages; {chunks} chunks/{chunkBytes} bytes; metadata {metadataByteCount} bytes; mapped scene {sceneByteCount} bytes; {watch.Elapsed.TotalSeconds:F3}s; {destination}");

@@ -21,10 +21,12 @@ public static partial class Program
     internal static IblEnvironmentAsset? BakedEnvironment { get; private set; }
     internal static PbrReflectionCaptureAsset? BakedReflections { get; private set; }
     internal static DiffuseProbeAsset? BakedProbes { get; private set; }
+    internal static SceneTraceData? StaticTransport { get; private set; }
     internal static PbrLightmapAsset? BakedLightmaps { get; private set; }
     internal static PbrLightmapStream? StreamedLightmaps { get; private set; }
     internal static bool? DynamicSceneGi { get; private set; }
     internal static string? ProbesPath { get; private set; }
+    internal static string? StaticTransportPath { get; private set; }
     internal static string? LightmapsPath { get; private set; }
     internal static string? EnvironmentPath { get; private set; }
     internal static string? ReflectionsPath { get; private set; }
@@ -64,6 +66,9 @@ public static partial class Program
             }
             else if (args[i] == "--probes") {
                 ProbesPath = args[i + 1];
+            }
+            else if (args[i] == "--static-transport") {
+                StaticTransportPath = args[i + 1];
             }
             else if (args[i] == "--lightmaps") {
                 LightmapsPath = args[i + 1];

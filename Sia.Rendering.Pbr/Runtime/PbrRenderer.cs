@@ -40,6 +40,8 @@ public sealed record PbrRendererSettings
     public IblEnvironmentAsset? BakedEnvironment { get; init; }
     public PbrReflectionCaptureAsset? BakedReflections { get; init; }
     public DiffuseProbeAsset? BakedProbes { get; init; }
+    /// <summary>Optional canonical static BVH, used by dynamic GI; live actors retain their separate trace.</summary>
+    public SceneTraceData? StaticTransport { get; init; }
     public PbrLightmapAsset? BakedLightmaps { get; init; }
     public PbrLightmapStream? StreamedLightmaps { get; init; }
     public PbrTextureStreamingSettings LightmapStreaming { get; init; } = new() { MipBias = 0 };
@@ -54,6 +56,16 @@ public sealed record PbrRendererSettings
     public uint3 ProbeDimensions { get; init; } = new(4, 4, 4);
     public Aabb? ProbeBounds { get; init; }
     public ulong SceneGiBytes { get; init; } = 160ul * 1024 * 1024;
+
+    internal SceneTraceData? GetStaticTransport(ReadOnlySpan<byte> identity, ulong maximumBytes)
+    {
+        if (!DynamicSceneGi || StaticTransport is not { } trace) return null;
+        if (identity.Length != 32 || !trace.Identity.Span.SequenceEqual(identity))
+            throw new ArgumentException("Prepared static transport belongs to different scene geometry/materials.", nameof(StaticTransport));
+        if ((ulong)trace.Packed.Length * 16 > maximumBytes)
+            throw new ArgumentException("Prepared static transport exceeds its GI or device buffer budget.", nameof(StaticTransport));
+        return trace;
+    }
 
     public PbrRendererSettings Resolve(RenderCapabilities capabilities)
     {
@@ -243,14 +255,16 @@ public sealed class PbrRenderer :
                 var traceBudget = Settings.DynamicSceneGi
                     ? System.Math.Min(Settings.SceneGiBytes - probeBytes - _dynamicTraceBytes,
                         System.Math.Min(limits.MaxStorageBufferBindingSize, limits.MaxBufferSize)) : 0;
-                ReadOnlyMemory<byte> staticIdentity = Settings.BakedProbes is null && !scene.HasDynamicInstances ? ReadOnlyMemory<byte>.Empty
+                ReadOnlyMemory<byte> staticIdentity = Settings.BakedProbes is null && !scene.HasDynamicInstances
+                    && (!Settings.DynamicSceneGi || Settings.StaticTransport is null) ? ReadOnlyMemory<byte>.Empty
                     : stream is null ? PbrSceneTransport.StaticIdentity(scene) : stream.StaticIdentity;
                 var staticBake = !staticIdentity.IsEmpty && Settings.BakedProbes is { } baked
                     && baked.SceneIdentity.Span.SequenceEqual(staticIdentity.Span);
-                var staticDomain = staticBake || scene.HasDynamicInstances;
+                var staticDomain = staticBake || scene.HasDynamicInstances || Settings.StaticTransport is not null;
                 var tracing = Settings.DynamicSceneGi
-                    ? stream is null ? staticDomain ? PbrSceneTransport.BuildStatic(scene, traceBudget) : PbrSceneTransport.Build(scene, traceBudget)
-                        : staticDomain ? PbrSceneTransport.BuildStatic(stream, traceBudget) : PbrSceneTransport.Build(stream, traceBudget) : null;
+                    ? Settings.GetStaticTransport(staticIdentity.Span, traceBudget)
+                        ?? (stream is null ? staticDomain ? PbrSceneTransport.BuildStatic(scene, traceBudget) : PbrSceneTransport.Build(scene, traceBudget)
+                            : staticDomain ? PbrSceneTransport.BuildStatic(stream, traceBudget) : PbrSceneTransport.Build(stream, traceBudget)) : null;
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
                 ReadOnlyMemory<byte> identity = tracing is not null ? tracing.Identity

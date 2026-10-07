@@ -233,14 +233,14 @@ try {
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   const forwardedOptions = [
-    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'lightmaps', 'environment', 'reflections',
+    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'lightmaps', 'environment', 'reflections', 'static-transport',
     'render-scale', 'width', 'height', 'gpu-timing', 'gpu-traversal', 'target-fps',
     'benchmark-frames', 'benchmark-motion', 'debug', 'distance', 'lod', 'camera',
   ];
   for (const name of forwardedOptions) {
     if (parameters.has(name)) {
       const value = parameters.get(name);
-      args.push('--' + name, ['lightmaps', 'probes', 'environment', 'reflections'].includes(name)
+      args.push('--' + name, ['lightmaps', 'probes', 'environment', 'reflections', 'static-transport'].includes(name)
         ? new URL(value, location.href).href : value);
     }
   }

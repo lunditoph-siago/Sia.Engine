@@ -54,6 +54,7 @@ public static partial class Program
                 EnvironmentPath ??= inputs.Environment;
                 LightmapsPath ??= inputs.Lightmaps;
                 ProbesPath ??= inputs.Probes;
+                StaticTransportPath ??= inputs.StaticTransport;
                 ReflectionsPath ??= inputs.Reflections;
                 Console.WriteLine($"Scene description selected: {Quality}; {(lodOverride.HasValue || Quality == RenderQuality.Low ? "resident" : "mixed stream")}; shared baked inputs.");
             }
@@ -66,6 +67,8 @@ public static partial class Program
                 BakedReflections = await LoadReflectionCaptureAsync(ReflectionsPath, streamHttp);
             if (ProbesPath is not null)
                 BakedProbes = await LoadProbesAsync(ProbesPath, streamHttp);
+            if (StaticTransportPath is not null && (DynamicSceneGi ?? PbrRendererSettings.ForQuality(Quality).DynamicSceneGi))
+                StaticTransport = await LoadStaticTransportAsync(StaticTransportPath, streamHttp);
             var paged = LightmapsPath?.Split('?')[0].EndsWith(".sialmst", StringComparison.OrdinalIgnoreCase) == true;
             await using var lightmapStream = paged ? await OpenLightmapStreamAsync(LightmapsPath!, streamHttp) : null;
             StreamedLightmaps = lightmapStream;
@@ -111,6 +114,6 @@ public static partial class Program
 #endif
             return 1;
         }
-        finally { StreamedLightmaps = null; }
+        finally { StreamedLightmaps = null; StaticTransport = null; }
     }
 }

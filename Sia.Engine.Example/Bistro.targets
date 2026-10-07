@@ -72,7 +72,7 @@
       <_BistroBundlePublishRoot Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">$(PublishDir)/wwwroot/Assets</_BistroBundlePublishRoot>
     </PropertyGroup>
     <ItemGroup>
-      <_BistroBundleFiles Include="@(_BistroBundleRequired);$(BistroStreamDirectory)/*.chunk" />
+      <_BistroBundleFiles Include="@(_BistroBundleRequired);$(BistroStreamDirectory)/*.chunk;$(BistroStreamDirectory)/*.siatrace" />
     </ItemGroup>
     <Copy SourceFiles="@(_BistroBundleFiles)" DestinationFolder="$(_BistroBundlePublishRoot)/Stream" SkipUnchangedFiles="true" />
     <DownloadFile Condition="!Exists('$(_BistroLicensePath)')"

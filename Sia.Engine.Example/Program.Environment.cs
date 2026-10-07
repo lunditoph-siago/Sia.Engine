@@ -40,6 +40,10 @@ public static partial class Program
             static bytes => AssetInput.Decode(bytes, DiffuseProbeAsset.Read));
     }
 
+    private static Task<SceneTraceData> LoadStaticTransportAsync(string path, HttpClient http)
+        => AssetInput.LoadBoundedAsync(path, http, 128 * 1024 * 1024 + 84,
+            static bytes => SceneTraceData.Decode(bytes));
+
     private static Task<IblEnvironmentAsset> LoadEnvironmentAsync(string path, HttpClient http)
         => AssetInput.LoadExactAsync(path, http, IblEnvironmentAsset.EncodedBytes, IblEnvironmentAsset.Read);
 }

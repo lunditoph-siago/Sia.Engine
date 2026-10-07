@@ -64,6 +64,7 @@ internal sealed partial class SceneExampleApp
             BakedReflections = Program.BakedReflections,
             ExportSurfaceData = Program.ExportSurfaceData,
             BakedProbes = Program.BakedProbes,
+            StaticTransport = Program.StaticTransport,
             BakedLightmaps = Program.BakedLightmaps,
             StreamedLightmaps = Program.StreamedLightmaps,
             DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
@@ -79,7 +80,8 @@ internal sealed partial class SceneExampleApp
             settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData,
             settings.DynamicSceneGi, settings.BakedProbes is not null, settings.BakedLightmaps is not null || settings.StreamedLightmaps is not null,
             settings.StreamedLightmaps is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
-            settings.DynamicSceneGi ? settings.ProbeSamples : 0, settings.BakedReflections is not null);
+            settings.DynamicSceneGi ? settings.ProbeSamples : 0, settings.BakedReflections is not null,
+            settings.DynamicSceneGi && settings.StaticTransport is not null);
         InitializeInspectionControls();
         Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
         Console.WriteLine($"Unmapped diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");

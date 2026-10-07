@@ -34,6 +34,30 @@ public sealed class ChecksummedAssetTests
     }
 
     [Fact]
+    public void CallerBudgetIsCheckedBeforeReadingThePayload()
+    {
+        using var empty = new MemoryStream();
+        Assert.Throws<InvalidDataException>(() => ChecksummedAsset.Read<int, RejectDecode>(empty, 3));
+        Assert.Equal(0, empty.Position);
+        Assert.Throws<ArgumentOutOfRangeException>(() => ChecksummedAsset.Read<int, RejectDecode>(empty, -1));
+    }
+
+    [Fact]
+    public void ExistingBufferReaderHonorsItsSliceAndValidatesBeforeDecoding()
+    {
+        using var encoded = new MemoryStream();
+        ChecksummedAsset.Write<int, WordCodec>(encoded, 4);
+        var bytes = encoded.ToArray();
+        byte[] padded = [99, .. bytes, 88];
+        var slice = padded.AsMemory(1, bytes.Length);
+        Assert.Equal(12345, ChecksummedAsset.Read<int, WordCodec>(slice, 4));
+        Assert.Throws<InvalidDataException>(() => ChecksummedAsset.Read<int, RejectDecode>(slice, 3));
+        Assert.Throws<InvalidDataException>(() => ChecksummedAsset.Read<int, RejectDecode>(padded, 4));
+        padded[1] ^= 1;
+        Assert.Throws<InvalidDataException>(() => ChecksummedAsset.Read<int, RejectDecode>(slice, 4));
+    }
+
+    [Fact]
     public void InvalidWriterLengthsFailBeforeChangingTheDestination()
     {
         using var destination = new MemoryStream();

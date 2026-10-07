@@ -80,7 +80,7 @@ public sealed class SceneInputsTests
     }
 
     [Theory]
-    [InlineData("Version", "2")]
+    [InlineData("Version", "3")]
     [InlineData("Version", "\"1\"")]
     [InlineData("Version", "null")]
     [InlineData("Resident", "null")]
@@ -95,6 +95,29 @@ public sealed class SceneInputsTests
         json[field] = JsonNode.Parse(value);
         Assert.Throws<InvalidDataException>(() => SceneInputs.Decode(Encoding.UTF8.GetBytes(json.ToJsonString())));
     }
+
+    [Fact]
+    public void PreparedTransportUsesVersionTwoAndResolvesAlongsideOtherAssets()
+    {
+        var inputs = Inputs with { StaticTransport = "tracing/static.siatrace" };
+        var encoded = inputs.Encode();
+        Assert.Equal(2, JsonNode.Parse(encoded)!["Version"]!.GetValue<int>());
+        Assert.Equal(inputs, SceneInputs.Decode(encoded));
+        var resolved = inputs.Resolve("https://example.invalid/scenes/scene.siascene");
+        Assert.Equal("https://example.invalid/scenes/tracing/static.siatrace", resolved.StaticTransport);
+        var versionOne = JsonNode.Parse(encoded)!; versionOne["Version"] = 1;
+        Assert.Throws<InvalidDataException>(() => SceneInputs.Decode(Encoding.UTF8.GetBytes(versionOne.ToJsonString())));
+        versionOne["Version"] = 2; versionOne["StaticTransport"] = null;
+        Assert.Throws<InvalidDataException>(() => SceneInputs.Decode(Encoding.UTF8.GetBytes(versionOne.ToJsonString())));
+        Assert.Null(SceneInputs.Decode(Inputs.Encode()).StaticTransport);
+    }
+
+    [Theory]
+    [InlineData("../static.siatrace")]
+    [InlineData("static.siapbr")]
+    [InlineData("https://elsewhere.invalid/static.siatrace")]
+    public void InvalidPreparedTransportReferenceIsRejected(string path)
+        => Assert.Throws<InvalidDataException>(() => (Inputs with { StaticTransport = path }).Encode());
 
     [Theory]
     [InlineData("Version")]
