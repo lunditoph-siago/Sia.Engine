@@ -17,6 +17,12 @@ fn raster_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
     return RasterVertex(frame.vp * world_corner(ordinal, index % 3u), ordinal);
 }
 
+@vertex
+fn conventional_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
+    let ordinal = index / 3u;
+    return RasterVertex(frame.vp * world_corner(ordinal, index % 3u), ordinal | CONVENTIONAL_TRIANGLE_BIT);
+}
+
 @fragment
 fn raster_fragment(input: RasterVertex) -> @location(0) u32 {
     return input.ordinal + 1u;
@@ -59,7 +65,7 @@ fn stream_vertex(
         return RasterVertex(vec4<f32>(0.0, 0.0, 0.0, 1.0), 0u);
     }
     let ordinal = record * STREAM_WORK_BLOCK_TRIANGLES + local;
-    let position = instances[work.y].transform * world_corner(work.x + local, index % 3u);
+    let position = instances[work.y].transform * local_corner(work.x + local, index % 3u);
     return RasterVertex(frame.vp * position, ordinal);
 #else
     return RasterVertex(vec4<f32>(0.0), 0u);
@@ -79,7 +85,7 @@ fn stream_shadow_vertex(
     if (local >= work.z) {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
-    let position = instances[work.y].transform * world_corner(work.x + local, index % 3u);
+    let position = instances[work.y].transform * local_corner(work.x + local, index % 3u);
     return shadow_matrix(stream_selection.output.z) * position;
 #else
     return vec4<f32>(0.0);
@@ -88,9 +94,19 @@ fn stream_shadow_vertex(
 
 @vertex
 fn shadow_vertex(
+#if COMPACT_VERTICES
+    @location(0) vertex: vec4<u32>,
+#else
     @location(0) p: vec4<f32>,
+#endif
     @builtin(instance_index) packed: u32
 ) -> @builtin(position) vec4<f32> {
-    let position = vec4<f32>(p.xyz, 1.0);
+#if COMPACT_VERTICES
+    let p = bitcast<vec4<f32>>(vertex);
+#endif
+    var position = vec4<f32>(p.xyz, 1.0);
+#if LOCAL_INSTANCES
+    position = instances[packed >> 3u].transform * position;
+#endif
     return shadow_matrix(packed & 7u) * position;
 }

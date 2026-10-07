@@ -12,10 +12,9 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe partial class PbrView
 {
-    private void Timestamp(WgpuReactiveRenderGraphPassContext context)
+    private void Timestamp(WgpuReactiveRenderGraphPassContext context, uint point)
     {
         if (!_owner.SampleGpuTiming) return;
-        var point = (uint)(context.Pass.Name[^1] - '0');
         var writes = new WGPUPassTimestampWrites {
             QuerySet = (WGPUQuerySet*)_queries.GetWgpu<WGPUQuerySet>().DangerousGetHandle(),
             BeginningOfPassWriteIndex = point * 2,

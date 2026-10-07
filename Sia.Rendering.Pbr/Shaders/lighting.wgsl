@@ -14,6 +14,9 @@ fn scene_lighting(
     emission: vec3<f32>,
     ao: f32,
     pixel: vec2<f32>,
+    lightmap: vec3<f32>,
+    lightmap_dx: vec2<f32>,
+    lightmap_dy: vec2<f32>,
 ) -> vec3<f32> {
     let view = unit(frame.eye.xyz - position);
     let view_z = (frame.view * vec4<f32>(position, 1.0)).z;
@@ -68,9 +71,9 @@ fn scene_lighting(
         }
         color += attenuation * direct_lighting(normal, view, direction, radiance.rgb, base, metal, rough);
     }
-    return color + get_indirect_lighting(position, normal, view, base, metal, rough) * ao + emission;
+    return color + get_indirect_lighting(position, normal, view, base, metal, rough, lightmap, lightmap_dx, lightmap_dy) * ao + emission;
 }
 
 fn shade(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
-    return scene_lighting(surface.position, surface.normal, surface.base, surface.metal, surface.rough, surface.emission, surface.ao, pixel);
+    return scene_lighting(surface.position, surface.normal, surface.base, surface.metal, surface.rough, surface.emission, surface.ao, pixel, surface.lightmap, surface.lightmap_dx, surface.lightmap_dy);
 }

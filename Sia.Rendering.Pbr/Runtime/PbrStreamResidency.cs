@@ -26,10 +26,15 @@ public readonly record struct PbrStreamingStatistics(
     long Evictions,
     ulong Revision,
     PageSchedulerStatistics Requests,
-    int DeferredGroups);
+    int DeferredGroups,
+    int AdmissionDeferredPages = 0);
 
 internal sealed partial class PbrStreamResidency : IAsyncDisposable
 {
+    internal delegate void VertexPacker(Span<float4> vertices, StreamGeometryPage page, int instance);
+    private readonly VertexPacker? _packVertices;
+    private readonly bool _localInstances;
+    private readonly Dictionary<int, int> _geometryInstances = [];
     private readonly record struct Key(int Instance, int Page);
 
     private sealed class Resident(StreamPageAllocation allocation, bool root, long lastUsed)
@@ -94,6 +99,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     private readonly long _rootBytes;
     private uint _uploaded;
     private int _deferredGroups;
+    private int _admissionDeferredPages;
     private bool _stopped;
     private Task? _stopTask;
 
@@ -103,17 +109,22 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     public PbrStreamingStatistics Statistics => new(
         _arena.Bytes, _arena.UsedBytes, _rootBytes, _arena.StagingBytes, _uploaded,
-        _resident.Count, _installs, _evictions, Revision, _requests.Statistics, _deferredGroups);
+        _resident.Count, _installs, _evictions, Revision, _requests.Statistics, _deferredGroups, _admissionDeferredPages);
 
     internal bool IsStopped => _stopped;
 
-    public PbrStreamResidency(PbrSceneStream source, StreamPageArena arena, PbrStreamingSettings settings, int[] materialBatches)
+    public PbrStreamResidency(PbrSceneStream source, StreamPageArena arena, PbrStreamingSettings settings, int[] materialBatches,
+        VertexPacker? packVertices = null, bool localInstances = false)
     {
         if (settings.UploadBytesPerFrame < 16 || settings.UploadBytesPerFrame % 16 != 0)
             throw new ArgumentOutOfRangeException(nameof(settings), "Streaming upload budget must be positive and 16-byte aligned.");
         if (settings.MaximumSelectionNodesPerView < 1024)
             throw new ArgumentOutOfRangeException(nameof(settings), "Selection must allow at least one complete packed root group.");
         (_source, _arena, _settings) = (source, arena, settings);
+        _packVertices = packVertices;
+        _localInstances = localInstances;
+        if (packVertices is not null && settings.GpuTraversal)
+            for (var i = 0; i < source.Instances.Length; i++) _geometryInstances.TryAdd(source.Instances.Span[i].AssetIndex, i);
         _pages = [.. source.PageTable.Values];
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
         _requests = new(source.ReadPageAsync, settings.MaximumRequests, settings.DecodedBytes);
@@ -145,9 +156,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         var page = source.ResidentRoots[id];
                         if (!arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out var allocation))
                             throw new InvalidOperationException("Resident roots cannot fit in the geometry arena.");
-                        var upload = arena.Prepare(page, allocation,
-                            settings.GpuTraversal ? float4x4.identity : instance.Transform,
-                            settings.GpuTraversal ? 1 : instance.MaterialIndex + 1);
+                        var upload = Prepare(page, allocation, i,
+                            settings.GpuTraversal || localInstances ? float4x4.identity : instance.Transform,
+                            settings.GpuTraversal ? 1 : localInstances ? i + 1 : instance.MaterialIndex + 1);
                         while (!upload.Complete) arena.Advance(upload, uint.MaxValue);
                         _resident.Add(key, new(allocation, true, 0));
                         _rootBytes += page.Bytes.Length;
@@ -228,6 +239,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _used.Clear();
         _uploaded = 0;
         _deferredGroups = 0;
+        _admissionDeferredPages = 0;
     }
 
     public void Select(float4x4 vp, uint width, uint height, float error, FrustumCuller culler,
@@ -327,13 +339,15 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             var projected = float.IsFinite(raw) ? raw : float.MaxValue;
             if (node.ChildCount > 0 && (error == 0 || projected > error)) {
                 var complete = true;
-                for (var c = node.Children; c < node.Children + node.ChildCount; c++)
+                for (var c = node.Children; c < node.Children + node.ChildCount; c++) {
+                    if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
                     foreach (var part in tree.Nodes[c].Pages) {
                         var key = PageKey(instanceIndex, part.Id);
                         Demand(key, projected);
                         if (_resident.ContainsKey(key)) Touch(key);
                         else complete = false;
                     }
+                }
                 if (complete) {
                     for (var c = node.Children; c < node.Children + node.ChildCount; c++) Visit(instanceIndex, tree, c);
                     return;
@@ -343,7 +357,18 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         }
     }
 
-    private Key PageKey(int instance, string id) => new(_settings.GpuTraversal ? -1 : instance, _pageIndices[id]);
+    private Key PageKey(int instance, string id) => new(_settings.GpuTraversal
+        ? _packVertices is null ? -1 : _geometryInstances[_source.Instances.Span[instance].AssetIndex] : instance, _pageIndices[id]);
+
+    private StreamPageArena.Upload Prepare(StreamGeometryPage page, StreamPageAllocation allocation, int instance,
+        float4x4 transform, int magnitude)
+    {
+        try {
+            return _arena.Prepare(page, allocation, transform, magnitude, _packVertices is null ? null
+                : (vertices, input) => _packVertices(vertices, input, instance));
+        }
+        catch { _arena.Free(allocation); throw; }
+    }
 
     private void Touch(Key key)
     {
@@ -376,15 +401,13 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             _upload = null;
         }
         _missingPages.Clear();
-        _demands.Clear();
         foreach (var pair in _wanted) {
             if (_resident.ContainsKey(pair.Key)) continue;
             if (_missingPages.TryGetValue(pair.Key.Page, out var group))
                 _missingPages[pair.Key.Page] = (System.Math.Max(group.Priority, pair.Value), group.Remaining + 1);
             else _missingPages.Add(pair.Key.Page, (pair.Value, 1));
         }
-        foreach (var pair in _missingPages)
-            _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].Bytes, pair.Value.Priority));
+        GatherAdmissibleDemands();
         _requests.Update(_demands);
         // Sort only the bounded ready set, rather than every demanded page each upload.
         _ready.Clear();
@@ -416,10 +439,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     var material = 1;
                     if (!_settings.GpuTraversal) {
                         var instance = _source.Instances.Span[candidate.Key.Instance];
-                        transform = instance.Transform;
-                        material = instance.MaterialIndex + 1;
+                        transform = _localInstances ? float4x4.identity : instance.Transform;
+                        material = _localInstances ? candidate.Key.Instance + 1 : instance.MaterialIndex + 1;
                     }
-                    _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform, material));
+                    _upload = new(candidate.Key, Prepare(page!, allocation, candidate.Key.Instance, transform, material));
                     break;
                 }
                 if (_upload is null) break;
@@ -435,14 +458,39 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             _missingPages[active.Key.Page] = (Priority, Remaining - 1);
             if (Remaining == 1) _requests.Acknowledge(_pages[active.Key.Page].Id);
         }
+        // Reservation/publication or attempted eviction can change the allocatable
+        // ranges. Release now-unplaceable ready reads so smaller demands can progress;
+        // the scheduler retains canceled running reads until they are terminal.
+        GatherAdmissibleDemands();
+        _requests.Update(_demands);
     }
+
+    private void GatherAdmissibleDemands()
+    {
+        _demands.Clear();
+        _admissionDeferredPages = 0;
+        var vertices = _arena.MaximumFreeVertices;
+        var triangles = _arena.MaximumFreeTriangles;
+        var canEvict = false;
+        foreach (var pair in _resident)
+            if (CanEvict(pair.Key, pair.Value)) { canEvict = true; break; }
+        foreach (var pair in _missingPages) {
+            if (pair.Value.Remaining == 0) continue;
+            var page = _pages[pair.Key];
+            if (_upload?.Key.Page == pair.Key || canEvict || page.Vertices <= vertices && page.Triangles <= triangles)
+                _demands.Add(new(page.Id, page.Bytes, pair.Value.Priority));
+            else _admissionDeferredPages++;
+        }
+    }
+
+    private bool CanEvict(Key key, Resident page) => !page.Root && !_used.Contains(key) && !_wanted.ContainsKey(key);
 
     private bool Reserve(StreamGeometryPage page, out StreamPageAllocation allocation)
     {
         if (_arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out allocation)) return true;
         _evictionCandidates.Clear();
         foreach (var pair in _resident)
-            if (!pair.Value.Root && !_used.Contains(pair.Key) && !_wanted.ContainsKey(pair.Key))
+            if (CanEvict(pair.Key, pair.Value))
                 _evictionCandidates.Add(new(pair.Key, pair.Value, _evictionCandidates.Count));
         _evictionCandidates.Sort(static (a, b) => {
             var age = a.Page.LastUsed.CompareTo(b.Page.LastUsed);

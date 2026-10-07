@@ -233,16 +233,23 @@ try {
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   const forwardedOptions = [
-    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'environment',
+    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'lightmaps', 'environment', 'reflections', 'static-transport',
     'render-scale', 'width', 'height', 'gpu-timing', 'gpu-traversal', 'target-fps',
     'benchmark-frames', 'benchmark-motion', 'debug', 'distance', 'lod', 'camera',
   ];
   for (const name of forwardedOptions) {
-    if (parameters.has(name)) args.push('--' + name, parameters.get(name));
+    if (parameters.has(name)) {
+      const value = parameters.get(name);
+      args.push('--' + name, ['lightmaps', 'probes', 'environment', 'reflections', 'static-transport'].includes(name)
+        ? new URL(value, location.href).href : value);
+    }
   }
   if (pipeline === 'pbr') {
-    const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
-    if (!parameters.has('scene')) {
+    const description = canvas.dataset.bistroScene;
+    const bundled = description?.endsWith('.siascene') === true;
+    const scene = new URL(parameters.get('scene') ?? (bundled ? description
+      : finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
+    if (!parameters.has('scene') && !bundled) {
       const hash = finest ? canvas.dataset.bistroFinestSha256 : canvas.dataset.bistroSha256;
       scene.searchParams.set('sha256', hash);
     }

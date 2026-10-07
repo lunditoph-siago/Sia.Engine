@@ -13,28 +13,48 @@ public sealed class StreamGeometryPage
     public ReadOnlyMemory<byte> Bytes { get; }
     public int VertexCount { get; }
     public int TriangleCount { get; }
+    public bool HasLightmapUV { get; }
+    public int EncodedVertexBytes => HasLightmapUV ? 56 : 48;
 
     public ReadOnlySpan<float4> Vertices => MemoryMarshal.Cast<byte, float4>(Bytes.Span.Slice(16, VertexCount * 48));
 
-    public ReadOnlySpan<uint> Indices => MemoryMarshal.Cast<byte, uint>(Bytes.Span[(16 + (VertexCount * 48))..]);
+    public ReadOnlySpan<uint> Indices => MemoryMarshal.Cast<byte, uint>(Bytes.Span.Slice(16 + VertexCount * 48, TriangleCount * 12));
 
-    private StreamGeometryPage(ReadOnlyMemory<byte> bytes, int vertices, int triangles)
-        => (Bytes, VertexCount, TriangleCount) = (bytes, vertices, triangles);
+    /// <summary>Independent bake coordinates retained as a page sidecar; absent on legacy pages.</summary>
+    public ReadOnlySpan<float> LightmapCoordinates => HasLightmapUV
+        ? MemoryMarshal.Cast<byte, float>(Bytes.Span[(16 + VertexCount * 48 + TriangleCount * 12)..]) : [];
+
+    public float2 GetLightmapUV(int vertex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(vertex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(vertex, VertexCount);
+        if (!HasLightmapUV) throw new InvalidOperationException("The page has no lightmap coordinates.");
+        var coordinates = LightmapCoordinates;
+        return new(coordinates[vertex * 2], coordinates[vertex * 2 + 1]);
+    }
+
+    private StreamGeometryPage(ReadOnlyMemory<byte> bytes, int vertices, int triangles, bool lightmap)
+        => (Bytes, VertexCount, TriangleCount, HasLightmapUV) = (bytes, vertices, triangles, lightmap);
 
     public static StreamGeometryPage Decode(ReadOnlyMemory<byte> bytes)
     {
-        if (!BitConverter.IsLittleEndian || bytes.Length is < 28 or > MaximumBytes || !bytes.Span[..8].SequenceEqual("SIAPAGE\0"u8))
+        var lightmap = bytes.Span.StartsWith("SIAPAGE1"u8);
+        if (!BitConverter.IsLittleEndian || bytes.Length is < 28 or > MaximumBytes
+            || (!lightmap && !bytes.Span[..8].SequenceEqual("SIAPAGE\0"u8)))
             throw new InvalidDataException("Invalid streaming geometry page.");
         var vertices = BinaryPrimitives.ReadInt32LittleEndian(bytes.Span[8..]);
         var triangles = BinaryPrimitives.ReadInt32LittleEndian(bytes.Span[12..]);
-        if (vertices <= 0 || triangles <= 0 || 16L + (vertices * 48L) + (triangles * 12L) != bytes.Length)
+        if (vertices <= 0 || triangles <= 0 || 16L + (vertices * (lightmap ? 56L : 48L)) + (triangles * 12L) != bytes.Length)
             throw new InvalidDataException("Streaming page reservation disagrees with its payload.");
-        var page = new StreamGeometryPage(bytes, vertices, triangles);
+        var page = new StreamGeometryPage(bytes, vertices, triangles, lightmap);
         foreach (var v in page.Vertices)
             if (!float.IsFinite(v.x) || !float.IsFinite(v.y) || !float.IsFinite(v.z) || !float.IsFinite(v.w))
                 throw new InvalidDataException("Nonfinite streaming vertex.");
         foreach (var index in page.Indices)
             if (index >= vertices) throw new InvalidDataException("Streaming triangle index is out of range.");
+        foreach (var uv in page.LightmapCoordinates)
+            if (!float.IsFinite(uv))
+                throw new InvalidDataException("Nonfinite streaming lightmap coordinate.");
         return page;
     }
 
@@ -60,10 +80,11 @@ public sealed class StreamGeometryPage
             }
             mapped[i] = value;
         }
-        var length = 16L + (unique.Count * 48L) + (mapped.Length * 4L);
+        var lightmap = unique.Any(v => v.LightmapUV.x != 0 || v.LightmapUV.y != 0);
+        var length = 16L + (unique.Count * (lightmap ? 56L : 48L)) + (mapped.Length * 4L);
         if (length > MaximumBytes) throw new ArgumentException("Geometry page exceeds its cooked byte limit.");
         var bytes = new byte[(int)length];
-        "SIAPAGE\0"u8.CopyTo(bytes);
+        (lightmap ? "SIAPAGE1"u8 : "SIAPAGE\0"u8).CopyTo(bytes);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(8), unique.Count);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(12), indices.Length / 3);
         var packed = MemoryMarshal.Cast<byte, float4>(bytes.AsSpan(16, unique.Count * 48));
@@ -74,6 +95,13 @@ public sealed class StreamGeometryPage
             packed[(unique.Count * 2) + i] = v.Tangent;
         }
         MemoryMarshal.AsBytes(mapped.AsSpan()).CopyTo(bytes.AsSpan(16 + (unique.Count * 48)));
+        if (lightmap) {
+            var coordinates = MemoryMarshal.Cast<byte, float>(bytes.AsSpan(16 + unique.Count * 48 + mapped.Length * 4));
+            for (var i = 0; i < unique.Count; i++) {
+                coordinates[i * 2] = unique[i].LightmapUV.x;
+                coordinates[i * 2 + 1] = unique[i].LightmapUV.y;
+            }
+        }
         return Decode(bytes);
     }
 }

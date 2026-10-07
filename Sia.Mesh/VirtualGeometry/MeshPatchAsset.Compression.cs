@@ -68,7 +68,8 @@ public sealed partial class MeshPatchAsset
         CancellationToken cancellationToken)
     {
         const int headerSize = HeaderSize;
-        Require(bytes.Length >= headerSize && bytes.StartsWith("SIAPATC2"u8),
+        var lightmap = bytes.StartsWith("SIAPATC3"u8);
+        Require(bytes.Length >= headerSize && (lightmap || bytes.StartsWith("SIAPATC2"u8)),
             "Unsupported patch asset format; recook with the current Quadric cooker.");
         Require(output.Length == bytes.Length, "Invalid patch shuffle output length.");
         bytes[..headerSize].CopyTo(output);
@@ -77,7 +78,7 @@ public sealed partial class MeshPatchAsset
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = bytes[(152 + section * 16)..];
             var count = BinaryPrimitives.ReadInt32LittleEndian(descriptor[8..]);
-            var stride = Strides[section];
+            var stride = section == 1 && lightmap ? 56 : Strides[section];
             Require(BinaryPrimitives.ReadInt64LittleEndian(descriptor) == offset && count >= 0
                 && BinaryPrimitives.ReadInt32LittleEndian(descriptor[12..]) == stride
                 && (long)count * stride <= bytes.Length - offset, "Invalid compressed patch section.");

@@ -150,7 +150,7 @@ public sealed partial class MeshPatchTree
         for (var i = 0; i < ids.Length; i++) {
             var v = vertices[i];
             if (!float.IsFinite(v.Normal.x) || !float.IsFinite(v.Normal.y) || !float.IsFinite(v.Normal.z)
-                || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y) || !v.HasFiniteTangent) {
+                || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y) || !v.HasFiniteTangent || !v.HasFiniteLightmapUV) {
                 throw new ArgumentException("Patch attributes must be finite.", nameof(vertices));
             }
             var identity = Identity(v);
@@ -176,7 +176,8 @@ public sealed partial class MeshPatchTree
     private static VertexIdentity Identity(MeshVertex vertex) => new(
         vertex.Position.x, vertex.Position.y, vertex.Position.z,
         vertex.Normal.x, vertex.Normal.y, vertex.Normal.z, vertex.UV.x, vertex.UV.y,
-        vertex.Tangent.x, vertex.Tangent.y, vertex.Tangent.z, vertex.Tangent.w);
+        vertex.Tangent.x, vertex.Tangent.y, vertex.Tangent.z, vertex.Tangent.w,
+        vertex.LightmapUV.x, vertex.LightmapUV.y);
 
     private sealed class VertexIndexComparer(MeshVertex[] vertices) : IEqualityComparer<int>
     {
@@ -226,5 +227,5 @@ public sealed partial class MeshPatchTree
 
     private readonly record struct BuildPatch(MeshData Geometry, float LocalError, int Parent, int ChildOffset, int ChildCount);
     private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V,
-        float Tx, float Ty, float Tz, float Tw);
+        float Tx, float Ty, float Tz, float Tw, float Lu, float Lv);
 }

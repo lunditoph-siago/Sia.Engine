@@ -7,7 +7,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class PbrSceneStream
 {
-    internal sealed record PageInfo(string Id, int Bytes, int Vertices, int Triangles);
+    internal sealed record PageInfo(string Id, int Bytes, int Vertices, int Triangles, int VertexBytes = 48);
 
     internal sealed record PagePart(string Id, int First, int Count);
 
@@ -34,9 +34,27 @@ public sealed partial class PbrSceneStream
         HierarchyInfo[] Hierarchies,
         Instance[] Instances,
         TextureInfo[] Textures,
-        int[][] TextureMaps);
+        int[][] TextureMaps,
+        int Version = 0,
+        byte[]? StaticIdentity = null,
+        int SourceInstanceCount = 0,
+        int[]? OpaqueSourceInstances = null,
+        int[]? BootstrapSourceInstances = null,
+        byte[]? LightmapIdentity = null,
+        int[]? StaticSourceInstances = null);
 
     public ReadOnlyMemory<byte> Identity { get; }
+    /// <summary>Canonical static bake domain; empty for legacy metadata requiring recooking.</summary>
+    public ReadOnlyMemory<byte> StaticIdentity { get; }
+    /// <summary>Full static geometry and derived bake coordinates; empty for streams requiring recooking for surface lightmaps.</summary>
+    public ReadOnlyMemory<byte> LightmapIdentity { get; }
+    public int SourceInstanceCount { get; }
+    /// <summary>Maps stream opaque slots to authored source slots.</summary>
+    public ReadOnlyMemory<int> OpaqueSourceInstances { get; }
+    /// <summary>Maps resident bootstrap slots to authored source slots.</summary>
+    public ReadOnlyMemory<int> BootstrapSourceInstances { get; }
+    /// <summary>Authored source slot to canonical static ordinal; -1 denotes a dynamic slot.</summary>
+    public ReadOnlyMemory<int> StaticSourceInstances { get; }
 
     internal HierarchyInfo[] Hierarchies { get; }
     internal Dictionary<string, StreamGeometryPage> ResidentRoots { get; } = [with(StringComparer.Ordinal)];
@@ -50,6 +68,12 @@ public sealed partial class PbrSceneStream
         Bootstrap = bootstrap;
         Instances = instances;
         Identity = header.Identity;
+        StaticIdentity = header.StaticIdentity ?? [];
+        LightmapIdentity = header.LightmapIdentity ?? [];
+        SourceInstanceCount = header.SourceInstanceCount;
+        OpaqueSourceInstances = header.OpaqueSourceInstances ?? [];
+        BootstrapSourceInstances = header.BootstrapSourceInstances ?? [];
+        StaticSourceInstances = header.StaticSourceInstances ?? Enumerable.Range(0, header.SourceInstanceCount).ToArray();
         Hierarchies = header.Hierarchies;
         ResidentRoots = roots;
         PageTable = header.Pages.ToDictionary(p => p.Id, StringComparer.Ordinal);
@@ -80,6 +104,7 @@ public sealed partial class PbrSceneStream
         var h = JsonSerializer.Deserialize(metadata.Span, StreamJsonContext.Default.Header)
             ?? throw new InvalidDataException("Missing hierarchy metadata.");
         metadata = default; // Do not retain decoded JSON through bootstrap I/O.
+        ValidateSourceMetadata(h);
         if (h.Identity is not { Length: 32 } || h.Manifest is null
             || h.Pages is not { Length: > 0 and <= 1000000 } || h.Hierarchies is not { Length: > 0 and <= 4096 }
             || h.Instances is not { Length: > 0 and <= 1000000 } || h.Materials is null || h.MaterialBytes is <= 0 or > 64 * 1024 * 1024)
@@ -89,7 +114,8 @@ public sealed partial class PbrSceneStream
         var pages = new Dictionary<string, PageInfo>(StringComparer.Ordinal);
         foreach (var page in h.Pages) {
             if (page is null || string.IsNullOrEmpty(page.Id) || page.Vertices <= 0 || page.Triangles <= 0
-                || page.Bytes > StreamGeometryPage.MaximumBytes || page.Bytes != 16L + (page.Vertices * 48L) + (page.Triangles * 12L)
+                || page.VertexBytes is not (48 or 56) || (h.Version == 0 && page.VertexBytes != 48)
+                || page.Bytes > StreamGeometryPage.MaximumBytes || page.Bytes != 16L + (page.Vertices * (long)page.VertexBytes) + (page.Triangles * 12L)
                 || !pages.TryAdd(page.Id, page) || manifest.GetChunk(page.Id).Length > SceneStreamBlock.MaximumEncodedLength(page.Bytes))
                 throw new InvalidDataException("Invalid streamed page descriptor.");
         }
@@ -151,6 +177,16 @@ public sealed partial class PbrSceneStream
             }
             if (offset != materialBytes.Length) throw new InvalidDataException("Bootstrap length mismatch.");
             var bootstrap = await Task.Run(() => PbrSceneAsset.Decode(materialBytes, 256 * 1024 * 1024, cancellationToken), cancellationToken);
+            if (h.Version >= 1 && h.BootstrapSourceInstances!.Length != bootstrap.Instances.Length)
+                throw new InvalidDataException("Bootstrap source-instance mapping length mismatch.");
+            if (h.Version < 2 && bootstrap.Instances.ToArray().Any(i => !bootstrap.Materials.Span[i.Material].AlphaBlend))
+                throw new InvalidDataException("Conventional opaque bootstrap requires hybrid stream version 2.");
+            if (h.Version < 4 && bootstrap.HasDynamicInstances)
+                throw new InvalidDataException("Dynamic bootstrap requires stream version 4.");
+            if (h.Version == 4)
+                for (var i = 0; i < bootstrap.Instances.Length; i++)
+                    if (bootstrap.Instances.Span[i].Dynamic != (h.StaticSourceInstances![h.BootstrapSourceInstances![i]] < 0))
+                        throw new InvalidDataException("Bootstrap mobility disagrees with the canonical static mapping.");
             var roots = new Dictionary<string, StreamGeometryPage>(StringComparer.Ordinal);
             foreach (var id in rootIds) {
                 using var lease = await cache.AcquireAsync(manifest.GetChunk(id), cancellationToken: cancellationToken);
@@ -177,8 +213,42 @@ public sealed partial class PbrSceneStream
 
     private static void ValidatePage(StreamGeometryPage page, PageInfo info)
     {
-        if (page.Bytes.Length != info.Bytes || page.VertexCount != info.Vertices || page.TriangleCount != info.Triangles)
+        if (page.Bytes.Length != info.Bytes || page.VertexCount != info.Vertices || page.TriangleCount != info.Triangles
+            || page.EncodedVertexBytes != info.VertexBytes)
             throw new InvalidDataException("Stream payload disagrees with metadata reservation.");
+    }
+
+    private static void ValidateSourceMetadata(Header h)
+    {
+        if (h.Version == 0) {
+            if (h.StaticIdentity is not null || h.LightmapIdentity is not null || h.SourceInstanceCount != 0
+                || h.OpaqueSourceInstances is not null || h.BootstrapSourceInstances is not null || h.StaticSourceInstances is not null)
+                throw new InvalidDataException("Legacy stream metadata cannot declare unversioned static-source mappings.");
+            return;
+        }
+        if (h.Version is not (1 or 2 or 3 or 4) || h.StaticIdentity is not { Length: 32 }
+            || (h.Version >= 3 ? h.LightmapIdentity is not { Length: 32 } : h.LightmapIdentity is not null)
+            || (h.Version == 4 ? h.StaticSourceInstances is null || h.StaticSourceInstances.Length != h.SourceInstanceCount : h.StaticSourceInstances is not null)
+            || h.SourceInstanceCount is <= 0 or > 1000000
+            || h.OpaqueSourceInstances is null || h.Instances is null
+            || h.OpaqueSourceInstances.Length != h.Instances.Length
+            || h.BootstrapSourceInstances is null || h.BootstrapSourceInstances.Length > h.SourceInstanceCount)
+            throw new InvalidDataException("Invalid static-source stream metadata or unsupported version.");
+        var seen = new HashSet<int>();
+        foreach (var slot in h.OpaqueSourceInstances.Concat(h.BootstrapSourceInstances))
+            if ((uint)slot >= (uint)h.SourceInstanceCount || !seen.Add(slot))
+                throw new InvalidDataException("Invalid or duplicate authored source-instance slot.");
+        if (h.Version >= 3 && seen.Count != h.SourceInstanceCount)
+            throw new InvalidDataException("Stream source-instance mappings must cover the complete authored scene.");
+        if (h.Version == 4) {
+            var next = 0;
+            foreach (var slot in h.StaticSourceInstances!)
+                if (slot != -1 && slot != next++)
+                    throw new InvalidDataException("Static ordinals must be dense and follow authored source order.");
+            foreach (var slot in h.OpaqueSourceInstances)
+                if (h.StaticSourceInstances[slot] < 0)
+                    throw new InvalidDataException("Dynamic instances cannot use virtual stream geometry.");
+        }
     }
 
     internal async Task<StreamGeometryPage> ReadPageAsync(string id, CancellationToken cancellationToken)

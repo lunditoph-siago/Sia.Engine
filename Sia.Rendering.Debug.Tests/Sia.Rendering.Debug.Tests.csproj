@@ -8,9 +8,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../Sia.Engine.Example/GpuTimestampClock.cs" Link="Example/GpuTimestampClock.cs" />
+    <Compile Include="../Sia.Engine.Example/RenderResolutionController.cs" Link="Example/RenderResolutionController.cs" />
+    <Compile Include="../Sia.Engine.Example/AssetInput.cs" Link="Example/AssetInput.cs" />
+    <Compile Include="../Sia.Engine.Example/SceneInputs.cs" Link="Example/SceneInputs.cs" />
+    <Compile Include="../Sia.Engine.Example/Program.Environment.cs" Link="Example/Program.Environment.cs" />
+    <Compile Include="../Sia.Engine.Example/Program.ReflectionCaptures.cs" Link="Example/Program.ReflectionCaptures.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
     <ProjectReference Include="../Sia.Rendering.Debug/Sia.Rendering.Debug.csproj" />
+    <ProjectReference Include="../Sia.Rendering.Pbr/Sia.Rendering.Pbr.csproj" />
   </ItemGroup>
 </Project>

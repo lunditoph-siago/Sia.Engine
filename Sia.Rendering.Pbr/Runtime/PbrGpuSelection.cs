@@ -69,7 +69,8 @@ internal sealed class PbrGpuSelection : IDisposable
                 + ((ulong)hierarchy.NodeCapacity * 3));
             Work = _gpu.Buffer(checked(workRecords * (ulong)Unsafe.SizeOf<uint4>()),
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
-            Arguments = _gpu.Buffer(80, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
+            // Preserve the first20 draw/counter/dispatch words;32 quota words follow.
+            Arguments = _gpu.Buffer(208, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             // A writable counter buffer cannot also supply this dispatch's indirect arguments.
             DispatchArguments = _gpu.Buffer(16, WGPUBufferUsage.Indirect | WGPUBufferUsage.CopyDst);
             Feedback = _gpu.Buffer(FeedbackBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
@@ -196,6 +197,10 @@ internal sealed class PbrGpuSelection : IDisposable
             pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
             try {
                 Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+                Wgpu.SetComputePipeline(pass, (even ? _hierarchy.AssessEven : _hierarchy.AssessOdd).GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+                Wgpu.SetComputePipeline(pass, _hierarchy.PrepareRefinement.GetWgpu<WGPUComputePipeline>());
+                Wgpu.DispatchWorkgroups(pass, 1);
                 Wgpu.SetComputePipeline(pass, (even ? _hierarchy.TraverseEven : _hierarchy.TraverseOdd).GetWgpu<WGPUComputePipeline>());
                 Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
             }

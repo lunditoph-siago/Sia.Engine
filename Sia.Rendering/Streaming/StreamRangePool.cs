@@ -12,6 +12,15 @@ public sealed class StreamRangePool
     public uint Capacity { get; }
     public uint Used { get; private set; }
 
+    /// <summary>Largest currently allocatable range; querying does not reserve or move storage.</summary>
+    public uint MaximumFreeRange {
+        get {
+            uint maximum = 0;
+            foreach (var range in _free) maximum = System.Math.Max(maximum, range.Count);
+            return maximum;
+        }
+    }
+
     public StreamRangePool(uint capacity)
     {
         ArgumentOutOfRangeException.ThrowIfZero(capacity);

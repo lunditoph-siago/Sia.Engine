@@ -13,6 +13,7 @@ namespace Sia.Engine.Rendering.Pbr;
 internal sealed unsafe partial class PbrView
 {
     private readonly ulong[] _shadowGeometryRevision = new ulong[k_ShadowLayers];
+    private readonly ulong[] _shadowInstanceRevision = new ulong[k_ShadowLayers];
 
     private void SetShadow(int layer, float4x4 matrix)
     {
@@ -23,13 +24,14 @@ internal sealed unsafe partial class PbrView
         _sceneData[at + 3] = matrix.c3;
         _shadowActive[layer] = true;
         var revision = _owner.Scene.Streaming?.Revision ?? 0;
-        _shadowDirty[layer] = !_shadowValid[layer] || !_shadowMatrices[layer].Equals(matrix) || _shadowGeometryRevision[layer] != revision;
+        _shadowDirty[layer] = !_shadowValid[layer] || !_shadowMatrices[layer].Equals(matrix)
+            || _shadowGeometryRevision[layer] != revision || _shadowInstanceRevision[layer] != _owner.Scene.Revision;
+        _shadowInstanceRevision[layer] = _owner.Scene.Revision;
         _shadowGeometryRevision[layer] = revision;
         _shadowMatrices[layer] = matrix;
         if (_selection is not null) {
             _selection.Configure(layer, matrix, _owner.Settings.ShadowResolution, _owner.Settings.ShadowResolution,
                 _owner.Settings.ShadowTexelError, (uint)_owner.Settings.Streaming.MaximumSelectionNodesPerView);
-            return;
         }
         // Cached depth still needs view demand and residency protection every frame.
         if (!_shadowDirty[layer] && _owner.Scene.Streaming is null) return;
@@ -37,15 +39,25 @@ internal sealed unsafe partial class PbrView
         var list = _shadowDraws[layer];
         list.Clear();
         if (_owner.Scene.Streaming is { } streaming) {
-            streaming.Select(matrix, _owner.Settings.ShadowResolution, _owner.Settings.ShadowResolution,
-                _owner.Settings.ShadowTexelError, culler, list);
-            CompactStreamDraws(list);
+            if (_selection is null) {
+                streaming.Select(matrix, _owner.Settings.ShadowResolution, _owner.Settings.ShadowResolution,
+                    _owner.Settings.ShadowTexelError, culler, list);
+                CompactStreamDraws(list);
+            }
         }
         else {
             var resolution = _owner.Settings.ShadowResolution;
             var projection = ProjectedGeometryError.PrepareLodProjection(matrix, resolution, resolution);
             foreach (var draw in _owner.Scene.Opaque)
-                if (culler.Intersects(draw.Bounds))
+                if (_owner.Scene.IsEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
+                    AddRange(list, SelectGeometry(draw, matrix, projection, resolution, resolution,
+                        _owner.Settings.ShadowTexelError));
+        }
+        if (_owner.Scene.Conventional.Length > 0) {
+            var resolution = _owner.Settings.ShadowResolution;
+            var projection = ProjectedGeometryError.PrepareLodProjection(matrix, resolution, resolution);
+            foreach (var draw in _owner.Scene.Conventional)
+                if (_owner.Scene.IsEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
                     AddRange(list, SelectGeometry(draw, matrix, projection, resolution, resolution,
                         _owner.Settings.ShadowTexelError));
         }

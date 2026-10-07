@@ -13,6 +13,7 @@ public sealed partial class PbrSceneAsset
 
     public byte[] Encode(CancellationToken cancellationToken = default)
     {
+        var dynamicInstances = HasDynamicInstances;
         var textures = new List<PbrTextureData>();
         var textureIndices = new Dictionary<PbrTextureData, int>(ReferenceEqualityComparer.Instance);
         foreach (var material in Materials.Span) {
@@ -75,6 +76,7 @@ public sealed partial class PbrSceneAsset
                 Column(writer, instance.Transform.c1);
                 Column(writer, instance.Transform.c2);
                 Column(writer, instance.Transform.c3);
+                if (dynamicInstances) writer.Write(instance.Dynamic);
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
@@ -85,7 +87,7 @@ public sealed partial class PbrSceneAsset
             compressed.Write(raw);
         }
         var result = output.ToArray();
-        "SIAPBR\0\0"u8.CopyTo(result);
+        (dynamicInstances ? "SIAPBR\0\x01"u8 : "SIAPBR\0\0"u8).CopyTo(result);
         BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(8), raw.Length);
         BinaryPrimitives.WriteInt64LittleEndian(result.AsSpan(12), result.Length);
         SHA256.HashData(raw).CopyTo(result, 20);
@@ -98,7 +100,9 @@ public sealed partial class PbrSceneAsset
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(maximumDecodedBytes);
-        Require(bytes.Length > k_HeaderSize && bytes[..8].SequenceEqual("SIAPBR\0\0"u8), "Invalid PBR scene header.");
+        Require(bytes.Length > k_HeaderSize && bytes[..7].SequenceEqual("SIAPBR\0"u8) && bytes[7] <= 1,
+            "Invalid PBR scene header or unsupported version.");
+        var dynamicInstances = bytes[7] == 1;
         var length = BinaryPrimitives.ReadInt32LittleEndian(bytes[8..]);
         Require(length >= 13 && length <= maximumDecodedBytes && BinaryPrimitives.ReadInt64LittleEndian(bytes[12..]) == bytes.Length,
             "Invalid PBR scene length or decoded byte budget.");
@@ -173,9 +177,14 @@ public sealed partial class PbrSceneAsset
                 materials[i] = new(parameters, Texture(), Texture(), Texture(), Texture(), Texture(), normalScale, occlusionStrength,
                     doubleSided, alphaBlend, opacity, transmission, thickness);
             }
-            var instances = new PbrSceneInstance[Count(reader, 72, 1000000)];
+            var instances = new PbrSceneInstance[Count(reader, dynamicInstances ? 73 : 72, 1000000)];
             for (var i = 0; i < instances.Length; i++) {
                 instances[i] = new(reader.ReadInt32(), reader.ReadInt32(), new float4x4(Column(reader), Column(reader), Column(reader), Column(reader)));
+                if (dynamicInstances) {
+                    var flag = reader.ReadByte();
+                    Require(flag <= 1, "Invalid dynamic instance flag.");
+                    instances[i] = instances[i] with { Dynamic = flag == 1 };
+                }
             }
             Require(stream.Position == stream.Length, "Unexpected data after PBR scene records.");
             return Create(geometry, materials, instances, attribution);

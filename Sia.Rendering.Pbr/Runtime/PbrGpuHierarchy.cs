@@ -34,6 +34,9 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public Entity SeedRoots { get; }
     public Entity PrepareEven { get; }
     public Entity PrepareOdd { get; }
+    public Entity AssessEven { get; }
+    public Entity AssessOdd { get; }
+    public Entity PrepareRefinement { get; }
     public Entity TraverseEven { get; }
     public Entity TraverseOdd { get; }
     public Entity PrepareExpansion { get; }
@@ -88,6 +91,9 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
             SeedRoots = Compute(shader, pipelineLayout, "seed_roots");
             PrepareEven = Compute(shader, pipelineLayout, "prepare_even");
             PrepareOdd = Compute(shader, pipelineLayout, "prepare_odd");
+            AssessEven = Compute(shader, pipelineLayout, "assess_even");
+            AssessOdd = Compute(shader, pipelineLayout, "assess_odd");
+            PrepareRefinement = Compute(shader, pipelineLayout, "prepare_refinement");
             TraverseEven = Compute(shader, pipelineLayout, "traverse_even");
             TraverseOdd = Compute(shader, pipelineLayout, "traverse_odd");
             PrepareExpansion = Compute(shader, pipelineLayout, "prepare_expansion");

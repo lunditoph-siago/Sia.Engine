@@ -38,6 +38,7 @@ public sealed class StreamPageArena : IDisposable
     private readonly StreamRangePool _vertices, _triangles;
     private readonly byte[] _staging = new byte[StreamGeometryPage.MaximumBytes - 16];
     private Upload? _current;
+    private readonly ulong _vertexTailBytes;
 
     public Entity Vertices { get; }
     public Entity Topology { get; }
@@ -48,21 +49,36 @@ public sealed class StreamPageArena : IDisposable
 
     public uint TriangleCapacity => _triangles.Capacity;
 
+    public uint MaximumFreeVertices => _vertices.MaximumFreeRange;
+    public uint MaximumFreeTriangles => _triangles.MaximumFreeRange;
+
+    public uint VertexBytes { get; }
+    public ulong VertexDataBytes => VertexStorageBytes(VertexCapacity, VertexBytes);
+
     public ulong Bytes => _gpu.Bytes;
 
-    public ulong UsedBytes => ((ulong)_vertices.Used * 48) + ((ulong)_triangles.Used * 12);
+    public ulong UsedBytes => ((ulong)_vertices.Used * VertexBytes) + ((ulong)_triangles.Used * 12) + _vertexTailBytes
+        + VertexDataBytes - (ulong)VertexCapacity * VertexBytes;
 
-    public StreamPageArena(in GpuFrame frame, uint vertexCapacity, uint triangleCapacity, ulong budget)
+    /// <summary>Optionally reserves an aligned metadata tail after the three vertex planes, within the same owner and budget.</summary>
+    public StreamPageArena(in GpuFrame frame, uint vertexCapacity, uint triangleCapacity, ulong budget, ulong vertexTailBytes = 0, uint vertexBytes = 48)
     {
+        if (vertexTailBytes % 16 != 0) throw new ArgumentOutOfRangeException(nameof(vertexTailBytes));
+        if (vertexBytes is not (36 or 40 or 48)) throw new ArgumentOutOfRangeException(nameof(vertexBytes));
+        VertexBytes = vertexBytes;
+        _vertexTailBytes = vertexTailBytes;
         _gpu = new(frame, budget);
         _vertices = new(vertexCapacity);
         _triangles = new(triangleCapacity);
         try {
-            Vertices = _gpu.Buffer((ulong)vertexCapacity * 48, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
+            Vertices = _gpu.Buffer(checked(VertexDataBytes + vertexTailBytes), WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
             Topology = _gpu.Buffer((ulong)triangleCapacity * 12, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
         }
         catch { _gpu.Dispose(); throw; }
     }
+
+    internal static ulong VertexStorageBytes(uint capacity, uint vertexBytes)
+        => ((ulong)capacity * vertexBytes + 15) & ~15ul;
 
     public bool TryReserve(uint vertices, uint triangles, out StreamPageAllocation allocation)
     {
@@ -78,12 +94,15 @@ public sealed class StreamPageArena : IDisposable
         return true;
     }
 
-    public Upload Prepare(StreamGeometryPage page, StreamPageAllocation allocation, float4x4 transform, float tangentMagnitude = 1)
+    /// <summary>The optional packer transforms the staged vertex planes in place before upload; it must not retain the reused staging memory.</summary>
+    public Upload Prepare(StreamGeometryPage page, StreamPageAllocation allocation, float4x4 transform, float tangentMagnitude = 1,
+        System.Buffers.SpanAction<float4, StreamGeometryPage>? packVertices = null)
     {
         Validate(allocation);
         if (_current is { Complete: false, Released: false })
             throw new InvalidOperationException("Complete or abort the current page upload first.");
         if (page.VertexCount != allocation.Vertices.Count || page.TriangleCount != allocation.Triangles.Count
+            || (VertexBytes != 48 && packVertices is null)
             || !float.IsFinite(tangentMagnitude) || tangentMagnitude <= 0)
             throw new ArgumentException("Invalid geometry upload allocation.");
         var normal = math.transpose(math.inverse(transform));
@@ -102,6 +121,7 @@ public sealed class StreamPageArena : IDisposable
         var indices = MemoryMarshal.Cast<byte, uint>(_staging.AsSpan(page.VertexCount * 48, page.TriangleCount * 12));
         var sourceIndices = page.Indices;
         RelocateIndices(sourceIndices, indices, allocation.Vertices.Offset);
+        packVertices?.Invoke(packed, page);
         return _current = new(allocation, _staging);
     }
 
@@ -131,14 +151,19 @@ public sealed class StreamPageArena : IDisposable
         uint written = 0;
         while (!upload.Complete) {
             var vertex = upload.Plane < 3;
-            var stride = vertex ? 16u : 4u;
+            var stride = vertex ? upload.Plane == 2 ? VertexBytes - 32 : 16u : 4u;
             var length = vertex ? (int)upload.Allocation.Vertices.Count : upload.Indices.Length;
             var count = (int)System.Math.Min((maximumBytes - written) / stride, (uint)(length - upload.Offset));
             if (count == 0) break;
             if (vertex) {
-                var offset = (((ulong)upload.Plane * VertexCapacity) + upload.Allocation.Vertices.Offset + (uint)upload.Offset) * 16;
-                Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), offset,
-                    upload.Vertices.Slice((upload.Plane * length) + upload.Offset, count));
+                var first = upload.Allocation.Vertices.Offset + (uint)upload.Offset;
+                var offset = upload.Plane == 2 ? (ulong)VertexCapacity * 32 + (ulong)first * stride
+                    : ((ulong)upload.Plane * VertexCapacity + first) * 16;
+                if (stride < 16)
+                    Wgpu.WriteBuffer<uint>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), offset,
+                        MemoryMarshal.Cast<float4, uint>(upload.Vertices).Slice(length * 8 + upload.Offset * (int)(stride / 4), count * (int)(stride / 4)));
+                else Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), offset,
+                        upload.Vertices.Slice((upload.Plane * length) + upload.Offset, count));
             }
             else Wgpu.WriteBuffer<uint>(_gpu.Queue, Topology.GetWgpu<WGPUBuffer>(),
                 (((ulong)upload.Allocation.Triangles.Offset * 3) + (uint)upload.Offset) * 4, upload.Indices.Slice(upload.Offset, count));

@@ -13,6 +13,8 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
 
     private readonly GpuResources _gpu;
     private readonly Entity _cube, _lut;
+    public Entity CapturedCube { get; }
+    public Entity CapturedCubeView { get; }
     private ProceduralSky? _source;
     private readonly IblEnvironmentAsset? _baked;
 
@@ -27,10 +29,10 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
 
     public ulong Bytes => _gpu.Bytes;
 
-    public IblEnvironmentGpu(in GpuFrame frame, IblEnvironmentAsset? baked = null)
+    public IblEnvironmentGpu(in GpuFrame frame, IblEnvironmentAsset? baked = null, IblEnvironmentAsset? reflections = null)
     {
         _baked = baked;
-        _gpu = new(frame, 2 * 1024 * 1024);
+        _gpu = new(frame, (reflections is null ? 2ul : 3ul) * 1024 * 1024);
         try {
             var desc = WGPUTextureDescriptor.Default;
             desc.Dimension = WGPUTextureDimension._2D;
@@ -50,6 +52,15 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
             var view = WGPUTextureViewDescriptor.Default;
             view.Dimension = WGPUTextureViewDimension.Cube;
             CubeView = _gpu.Own(Wgpu.CreateTextureView(_cube.GetWgpu<WGPUTexture>(), view));
+            if (reflections is not null) {
+                if (baked is null || reflections.Sky != baked.Sky)
+                    throw new ArgumentException("A reflection capture requires a matching baked environment.", nameof(reflections));
+                if (OperatingSystem.IsBrowser()) desc.NextInChain = &bindingDimension.Chain;
+                CapturedCube = _gpu.Texture(desc, 1048560);
+                desc.NextInChain = null;
+                CapturedCubeView = _gpu.Own(Wgpu.CreateTextureView(CapturedCube.GetWgpu<WGPUTexture>(), view));
+                UploadCube(CapturedCube, reflections);
+            }
             desc.Size = new() {
                 Width = LutSize,
                 Height = LutSize,
@@ -62,7 +73,8 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
             sampler.AddressModeU = sampler.AddressModeV = sampler.AddressModeW = WGPUAddressMode.ClampToEdge;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.MipmapFilter = WGPUMipmapFilterMode.Linear;
-            sampler.LodMaxClamp = Mips - 1;
+            // The PBR frame shares this sampler with lightmaps/probes. Each view
+            // clamps to its own levels; keep the default sampler's broader LOD range.
             Sampler = _gpu.Own(Wgpu.CreateSampler(_gpu.Device, sampler));
             Sh = _gpu.Buffer(9 * 16, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             if (baked is not null) {
@@ -152,18 +164,23 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
     {
         Wgpu.WriteBuffer<float4>(_gpu.Queue, Sh.GetWgpu<WGPUBuffer>(), 0, asset.Coefficients.Span);
         Write(_lut, 0, 0, LutSize, asset.BrdfLut.Span);
+        UploadCube(_cube, asset);
+    }
+
+    private void UploadCube(Entity cube, IblEnvironmentAsset asset)
+    {
         var offset = 0;
         for (var mip = 0; mip < Mips; mip++) {
             var size = Size >> mip;
             var length = size * size * 4;
             for (var face = 0; face < 6; face++) {
-                Write(_cube, mip, face, size, asset.Cube.Span.Slice(offset, length));
+                Write(cube, mip, face, size, asset.Cube.Span.Slice(offset, length));
                 offset += length;
             }
         }
     }
 
-    private static float3 Sample(uint index, float roughness, float3 n)
+    internal static float3 Sample(uint index, float roughness, float3 n)
     {
         var bits = index;
         bits = (bits << 16) | (bits >> 16);

@@ -22,7 +22,7 @@ fn reset_feedback(@builtin(global_invocation_id) id: vec3<u32>) {
 
 @compute @workgroup_size(1)
 fn reset_draws() {
-    for (var i = 0u; i < 20u; i++) { atomicStore(&args[i], 0u); }
+    for (var i = 0u; i < 52u; i++) { atomicStore(&args[i], 0u); }
     atomicStore(&args[0], STREAM_WORK_BLOCK_TRIANGLES * 3u);
     atomicStore(&args[4], STREAM_WORK_BLOCK_TRIANGLES * 3u);
     atomicStore(&args[6], selection.output.x * STREAM_WORK_BLOCK_TRIANGLES * 3u);
@@ -35,10 +35,34 @@ fn touch(n: Node) {
     }
 }
 
-fn children_ready(n: Node, priority: f32) -> bool {
+struct WorldBounds { center: vec3<f32>, extent: vec3<f32> }
+
+fn node_world_bounds(n: Node, instance: Instance) -> WorldBounds {
+    let local_center = (n.lo.xyz + n.hi.xyz) * 0.5;
+    let local_extent = (n.hi.xyz - n.lo.xyz) * 0.5;
+    let center = (instance.transform * vec4<f32>(local_center, 1.0)).xyz;
+    let extent = abs(instance.transform[0].xyz) * local_extent.x
+        + abs(instance.transform[1].xyz) * local_extent.y
+        + abs(instance.transform[2].xyz) * local_extent.z;
+    return WorldBounds(center, extent);
+}
+
+fn node_visible(n: Node, instance: Instance) -> bool {
+    let bounds = node_world_bounds(n, instance);
+    return bounds_visible(bounds.center - bounds.extent, bounds.center + bounds.extent, selection.vp);
+}
+
+struct ChildReadiness { visible: u32, ready: bool }
+
+fn children_ready(n: Node, instance: Instance, priority: f32) -> ChildReadiness {
     var ready = true;
+    var visible = 0u;
     for (var c = 0u; c < n.links.y; c++) {
         let child = nodes[n.links.x + c];
+        // Each view demands only children that its own traversal could visit.
+        // Feedback remains unioned across views; visible ancestors stay protected.
+        if (!node_visible(child, instance)) { continue; }
+        visible++;
         for (var p = 0u; p < child.links.w; p++) {
             let part = parts[child.links.z + p];
             let page = residency[part.x];
@@ -49,7 +73,7 @@ fn children_ready(n: Node, priority: f32) -> bool {
             else if (page.z == 0u) { atomicOr(&feedback[part.x * 2u + 1u], 1u); }
         }
     }
-    return ready;
+    return ChildReadiness(visible, ready);
 }
 
 fn emit(node: u32, n: Node, instance: u32, side: u32) {
@@ -100,6 +124,7 @@ fn seed_roots(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 fn prepare_level(odd: bool) {
+    for (var i = 20u; i < 52u; i++) { atomicStore(&args[i], 0u); }
     let count = min(atomicLoad(&args[select(13u, 14u, odd)]), frontier_capacity());
     atomicStore(&args[select(14u, 13u, odd)], 0u);
     let groups = (count + 63u) / 64u;
@@ -113,21 +138,24 @@ fn prepare_even() { prepare_level(false); }
 @compute @workgroup_size(1)
 fn prepare_odd() { prepare_level(true); }
 
-fn visit(index: u32, odd: bool) {
+fn error_bin(error: f32) -> u32 {
+    // One octave per bin, from 2^-8 pixels to 2^23; positive float bits
+    // preserve order without a logarithm. Extreme errors saturate safely.
+    let exponent = bitcast<u32>(max(error, 1.0e-20)) >> 23u;
+    return min(exponent - min(exponent, 119u), 31u);
+}
+
+fn assess(index: u32, odd: bool) {
     let count = min(atomicLoad(&args[select(13u, 14u, odd)]), frontier_capacity());
     if (index >= count) { return; }
     let at = frontier_base(odd) + index;
     let entry = work[at];
-    let side = entry.z;
     let current = entry.x;
     let instance = instances[entry.y];
     let n = nodes[current];
-    let local_center = (n.lo.xyz + n.hi.xyz) * 0.5;
-    let local_extent = (n.hi.xyz - n.lo.xyz) * 0.5;
-    let center = (instance.transform * vec4<f32>(local_center, 1.0)).xyz;
-    let extent = abs(instance.transform[0].xyz) * local_extent.x
-        + abs(instance.transform[1].xyz) * local_extent.y
-        + abs(instance.transform[2].xyz) * local_extent.z;
+    let bounds = node_world_bounds(n, instance);
+    let center = bounds.center;
+    let extent = bounds.extent;
     let spatial_error = min(n.lo.w * bitcast<f32>(instance.material.y), 1.0e30);
     var error = -1.0;
     if (selection.forward_pixels.w > 0.0) {
@@ -138,35 +166,104 @@ fn visit(index: u32, odd: bool) {
     } else {
         error = bounds_pixel_error(center - extent, center + extent, spatial_error, selection.vp, selection.screen.xy);
     }
+    work[at].w = 0u;
     if (error >= 0.0) {
         touch(n);
+        work[at].w = 1u; // Complete parent/leaf fallback.
         if (n.links.y > 0u && (selection.screen.z == 0.0 || error > selection.screen.z)) {
-            if (children_ready(n, error)) {
-                let visited = atomicAdd(&args[8], n.links.y);
-                if (visited <= selection.table.w && n.links.y <= selection.table.w - visited) {
-                    let first = atomicAdd(&args[select(14u, 13u, odd)], n.links.y);
-                    let capacity = frontier_capacity();
-                    if (first <= capacity && n.links.y <= capacity - first) {
-                        let next = frontier_base(!odd) + first;
-                        for (var c = 0u; c < n.links.y; c++) {
-                            work[next + c] = vec4<u32>(n.links.x + c, entry.y, side, 0u);
-                        }
-                        return;
-                    }
-                    atomicAdd(&args[10], 1u);
-                }
-                atomicAdd(&args[9], 1u);
+            let children = children_ready(n, instance, error);
+            if (children.ready) {
+                if (children.visible == 0u) { work[at].w = 0u; return; }
+                let bin = error_bin(error);
+                atomicAdd(&args[20u + bin], children.visible);
+                work[at].w = (children.visible << 6u) | (bin + 2u);
             }
             else { atomicAdd(&args[11], 1u); }
         }
-        emit(current, n, entry.y, side);
     }
+}
+
+@compute @workgroup_size(1)
+fn prepare_refinement() {
+    var remaining = selection.table.w - min(atomicLoad(&args[8]), selection.table.w);
+    var complete_bins = 0u;
+    for (var i = 32u; i > 0u; i--) {
+        let at = 20u + i - 1u;
+        let cost = atomicLoad(&args[at]);
+        let quota = min(cost, remaining);
+        if (quota == cost) { complete_bins |= 1u << (i - 1u); }
+        atomicStore(&args[at], quota);
+        remaining -= quota;
+    }
+    // Fully admitted bins need no per-node compare/exchange loop. Only the
+    // partially admitted boundary bin competes for its remaining whole groups.
+    atomicStore(&args[19], complete_bins);
+}
+
+fn reserve_refinement(bin: u32, count: u32) -> bool {
+    if ((atomicLoad(&args[19]) & (1u << bin)) != 0u) {
+        atomicAdd(&args[8], count);
+        return true;
+    }
+    loop {
+        let available = atomicLoad(&args[20u + bin]);
+        if (count > available) { return false; }
+        let exchanged = atomicCompareExchangeWeak(&args[20u + bin], available, available - count);
+        if (exchanged.exchanged) {
+            atomicAdd(&args[8], count);
+            return true;
+        }
+    }
+    return false;
+}
+
+fn visit(index: u32, odd: bool) {
+    let count = min(atomicLoad(&args[select(13u, 14u, odd)]), frontier_capacity());
+    if (index >= count) { return; }
+    let entry = work[frontier_base(odd) + index];
+    if (entry.w == 0u) { return; }
+    let current = entry.x;
+    let n = nodes[current];
+    let side = entry.z;
+    if (entry.w != 1u) {
+        let visible = entry.w >> 6u;
+        let bin = (entry.w & 63u) - 2u;
+        if (reserve_refinement(bin, visible)) {
+            let first = atomicAdd(&args[select(14u, 13u, odd)], visible);
+            let capacity = frontier_capacity();
+            if (first <= capacity && visible <= capacity - first) {
+                let next = frontier_base(!odd) + first;
+                var written = 0u;
+                let instance = instances[entry.y];
+                for (var c = 0u; c < n.links.y; c++) {
+                    if (!node_visible(nodes[n.links.x + c], instance)) { continue; }
+                    work[next + written] = vec4<u32>(n.links.x + c, entry.y, side, 0u);
+                    written++;
+                }
+                return;
+            }
+            atomicAdd(&args[10], 1u);
+        }
+        atomicAdd(&args[9], 1u);
+    }
+    emit(current, n, entry.y, side);
+}
+
+@compute @workgroup_size(64)
+fn assess_even(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    assess((group.y * 65535u + group.x) * 64u + lane, false);
+}
+
+@compute @workgroup_size(64)
+fn assess_odd(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    assess((group.y * 65535u + group.x) * 64u + lane, true);
 }
 
 @compute @workgroup_size(64)
 fn traverse_even(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     visit((group.y * 65535u + group.x) * 64u + lane, false);
 }
+
 @compute @workgroup_size(64)
 fn traverse_odd(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     visit((group.y * 65535u + group.x) * 64u + lane, true);

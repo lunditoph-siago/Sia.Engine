@@ -7,10 +7,21 @@ namespace Sia.Engine.Rendering.Pbr;
 public static partial class PbrSceneTransport
 {
     public static SceneTraceData Build(PbrSceneAsset scene, ulong maximumBytes = 128ul * 1024 * 1024, bool finest = false)
+        => BuildCore(scene, maximumBytes, finest, Identity(scene, finest));
+
+    /// <summary>Builds offline transport from static instances only, with a canonical static-domain identity.</summary>
+    public static SceneTraceData BuildStatic(PbrSceneAsset scene, ulong maximumBytes = 128ul * 1024 * 1024, bool finest = false)
+        => BuildCore(StaticSource(scene), maximumBytes, finest, StaticIdentity(scene, finest));
+
+    private static SceneTraceData BuildCore(PbrSceneAsset scene, ulong maximumBytes, bool finest, byte[] identity)
+        => BuildCore(scene, scene.Instances.Span, maximumBytes, finest, identity);
+
+    private static SceneTraceData BuildCore(PbrSceneAsset scene, ReadOnlySpan<PbrSceneInstance> instances,
+        ulong maximumBytes, bool finest, ReadOnlySpan<byte> identity)
     {
         ArgumentNullException.ThrowIfNull(scene);
         long capacity = 0;
-        foreach (var instance in scene.Instances.Span) {
+        foreach (var instance in instances) {
             if (scene.Materials.Span[instance.Material].AlphaBlend) continue;
             var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
             foreach (var node in tree.Nodes.Span[..(finest ? tree.Nodes.Length : tree.RootCount)]) {
@@ -20,27 +31,18 @@ public static partial class PbrSceneTransport
         }
         if (capacity == 0 || capacity > 4_000_000 || ((ulong)capacity * 16) + 32 > maximumBytes)
             throw new InvalidOperationException("Scene transport exceeds its configured build budget or triangle limit.");
-        var identity = Identity(scene, finest);
         var triangles = GC.AllocateUninitializedArray<SceneTraceTriangle>((int)capacity);
         var count = 0;
-        foreach (var instance in scene.Instances.Span) {
+        foreach (var instance in instances) {
             var material = scene.Materials.Span[instance.Material];
             if (material.AlphaBlend) continue; // no alpha-mask representation exists yet
             var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
-            var albedo = material.Parameters.BaseColor * Average(material.BaseColor);
-            var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
-            albedo *= 1 - MathF.Min(1, MathF.Max(0, metal));
-            var emission = material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive);
+            var surface = Surface(material);
             foreach (var node in tree.Nodes.Span[..(finest ? tree.Nodes.Length : tree.RootCount)]) {
                 if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
                 var indices = tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3);
-                for (var i = 0; i < indices.Length; i += 3) {
-                    var a = math.mul(instance.Transform, new float4(tree.Vertices[(int)indices[i]].Position, 1)).xyz;
-                    var b = math.mul(instance.Transform, new float4(tree.Vertices[(int)indices[i + 1]].Position, 1)).xyz;
-                    var c = math.mul(instance.Transform, new float4(tree.Vertices[(int)indices[i + 2]].Position, 1)).xyz;
-                    if (math.lengthsq(math.cross(b - a, c - a)) < 1e-16f) continue;
-                    triangles[count++] = new(a, b, c, albedo, emission, material.DoubleSided);
-                }
+                foreach (var triangle in Triangles(tree.Vertices, indices, instance.Transform, surface))
+                    triangles[count++] = triangle;
             }
         }
         return new(triangles.AsSpan(0, count), maximumBytes, identity);
@@ -81,7 +83,7 @@ public static partial class PbrSceneTransport
             Record(new(material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive), material.AlphaBlend ? 1 : 0));
         }
         foreach (var instance in scene.Instances.Span) {
-            Record(new(instance.Geometry, instance.Material, 0, 0));
+            Record(new(instance.Geometry, instance.Material, instance.Dynamic ? 1 : 0, 0));
             Record(instance.Transform.c0);
             Record(instance.Transform.c1);
             Record(instance.Transform.c2);
