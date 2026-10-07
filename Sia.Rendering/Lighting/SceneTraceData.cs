@@ -49,9 +49,33 @@ public readonly record struct SceneTraceTriangle
     }
 }
 
+/// <summary>
+/// Borrowed, repeatable triangle input. Count and indexed values must stay stable
+/// throughout construction; the completed trace retains none of the source.
+/// </summary>
+public interface ISceneTraceTriangleSource
+{
+    int Count { get; }
+    SceneTraceTriangle this[int index] { get; }
+}
+
 public sealed class SceneTraceData
 {
     private readonly record struct Centroid(double X, double Y, double Z);
+    private readonly record struct TriangleBounds(float MinX, float MinY, float MinZ, float MaxX, float MaxY, float MaxZ)
+    {
+        public TriangleBounds(float3 minimum, float3 maximum)
+            : this(minimum.x, minimum.y, minimum.z, maximum.x, maximum.y, maximum.z) { }
+        public float3 Minimum => new(MinX, MinY, MinZ);
+        public float3 Maximum => new(MaxX, MaxY, MaxZ);
+    }
+
+    private readonly ref struct SpanTriangles(ReadOnlySpan<SceneTraceTriangle> triangles) : ISceneTraceTriangleSource
+    {
+        private readonly ReadOnlySpan<SceneTraceTriangle> _triangles = triangles;
+        public int Count => _triangles.Length;
+        public SceneTraceTriangle this[int index] => _triangles[index];
+    }
 
     public ReadOnlyMemory<float4> Packed { get; }
     public ReadOnlyMemory<byte> Identity { get; }
@@ -69,18 +93,49 @@ public sealed class SceneTraceData
         ReadOnlySpan<SceneTraceTriangle> triangles,
         ulong maximumBytes = 128ul * 1024 * 1024,
         ReadOnlySpan<byte> sceneIdentity = default)
+        : this(BuildPacked(new SpanTriangles(triangles), maximumBytes, sceneIdentity), sceneIdentity) { }
+
+    /// <summary>Builds from a borrowed indexed value source without a full triangle snapshot.</summary>
+    public static SceneTraceData Create<TSource>(TSource triangles,
+        ulong maximumBytes = 128ul * 1024 * 1024, ReadOnlySpan<byte> sceneIdentity = default)
+        where TSource : struct, ISceneTraceTriangleSource, allows ref struct
+        => new(BuildPacked(triangles, maximumBytes, sceneIdentity), sceneIdentity);
+
+    private SceneTraceData((float4[] Packed, int Triangles) built, ReadOnlySpan<byte> sceneIdentity)
     {
-        if (triangles.Length == 0 || triangles.Length > 4_000_000)
+        Packed = built.Packed;
+        Bounds = new(built.Packed[2].xyz, built.Packed[3].xyz);
+        Identity = sceneIdentity.IsEmpty ? SHA256.HashData(MemoryMarshal.AsBytes(built.Packed.AsSpan())) : sceneIdentity.ToArray();
+        TriangleCount = built.Triangles;
+    }
+
+    private static (float4[] Packed, int Triangles) BuildPacked<TSource>(TSource triangles,
+        ulong maximumBytes, ReadOnlySpan<byte> sceneIdentity)
+        where TSource : struct, ISceneTraceTriangleSource, allows ref struct
+    {
+        var count = triangles.Count;
+        if (count is < 1 or > 4_000_000)
             throw new ArgumentException("Transport requires 1..4000000 triangles.", nameof(triangles));
         if (!sceneIdentity.IsEmpty && sceneIdentity.Length != 32)
             throw new ArgumentException("Scene identity must contain 32 bytes.", nameof(sceneIdentity));
-        var nodeCount = NodeCount(triangles.Length);
-        var minimumBytes = checked((2ul + ((ulong)nodeCount * 3) + (ulong)triangles.Length + 5) * 16);
+        var nodeRecords = checked(NodeCount(count) * 3);
+        var minimumBytes = checked((2ul + (ulong)nodeRecords + (ulong)count + 5) * 16);
         if (minimumBytes > maximumBytes)
             throw new ArgumentException("Transport cannot fit its configured packed budget.", nameof(maximumBytes));
+        // Deduplication tables die before the hierarchy scratch is allocated.
+        var packed = PackGeometry(triangles, count, nodeRecords, maximumBytes);
+        var ordered = BuildHierarchy(triangles, count, packed.AsSpan(2, nodeRecords));
+        ReorderTriangles(packed.AsSpan(2 + nodeRecords, count), ordered);
+        return (packed, count);
+    }
+
+    private static float4[] PackGeometry<TSource>(TSource triangles, int count, int nodeRecords, ulong maximumBytes)
+        where TSource : struct, ISceneTraceTriangleSource, allows ref struct
+    {
         var surfaces = new Dictionary<(float3 Albedo, float3 Emission, bool DoubleSided), int>();
         var vertices = new Dictionary<(float X, float Y, float Z), int>();
-        foreach (ref readonly var t in triangles) {
+        for (var i = 0; i < count; i++) {
+            var t = triangles[i];
             var ab = t.B - t.A;
             var ac = t.C - t.A;
             var area2 = math.lengthsq(math.cross(ab, ac));
@@ -99,23 +154,19 @@ public sealed class SceneTraceData
             vertices.TryAdd((t.B.x, t.B.y, t.B.z), vertices.Count);
             vertices.TryAdd((t.C.x, t.C.y, t.C.z), vertices.Count);
         }
-        var nodeRecords = checked(nodeCount * 3);
-        var recordCount = checked(2 + nodeRecords + triangles.Length + vertices.Count + (surfaces.Count * 2));
+        var recordCount = checked(2 + nodeRecords + count + vertices.Count + (surfaces.Count * 2));
         var packedBytes = checked((ulong)recordCount * 16);
         if (packedBytes > maximumBytes)
             throw new ArgumentException($"Packed transport needs {packedBytes} bytes; budget {maximumBytes}.");
         var nodeOffset = 2;
         var triangleOffset = nodeOffset + nodeRecords;
-        var vertexOffset = triangleOffset + triangles.Length;
+        var vertexOffset = triangleOffset + count;
         var surfaceOffset = vertexOffset + vertices.Count;
         var packed = GC.AllocateUninitializedArray<float4>(recordCount);
-        // Allocate the final contiguous buffer before BVH scratch, and fill nodes in place.
-        packed[0] = new(nodeCount, triangleOffset, triangles.Length, surfaceOffset);
+        packed[0] = new(nodeRecords / 3, triangleOffset, count, surfaceOffset);
         packed[1] = new(vertexOffset, 0, 0, 0);
-        var ordered = BuildHierarchy(triangles, packed.AsSpan(nodeOffset, nodeRecords));
-        Bounds = new(packed[nodeOffset].xyz, packed[nodeOffset + 1].xyz);
-        for (var i = 0; i < ordered.Length; i++) {
-            ref readonly var t = ref triangles[ordered[i]];
+        for (var i = 0; i < count; i++) {
+            var t = triangles[i];
             packed[triangleOffset + i] = new(
                 vertices[(t.A.x, t.A.y, t.A.z)],
                 vertices[(t.B.x, t.B.y, t.B.z)],
@@ -130,18 +181,19 @@ public sealed class SceneTraceData
             packed[offset] = new(Albedo, DoubleSided ? 1 : 0);
             packed[offset + 1] = new(Emission, 0);
         }
-        Packed = packed;
-        Identity = sceneIdentity.IsEmpty ? SHA256.HashData(MemoryMarshal.AsBytes(packed.AsSpan())) : sceneIdentity.ToArray();
-        TriangleCount = triangles.Length;
+        return packed;
     }
 
-    private static int[] BuildHierarchy(ReadOnlySpan<SceneTraceTriangle> triangles, Span<float4> nodes)
+    private static int[] BuildHierarchy<TSource>(TSource triangles, int count, Span<float4> nodes)
+        where TSource : struct, ISceneTraceTriangleSource, allows ref struct
     {
-        // Centroids and comparer closures are needed only while sorting the hierarchy.
-        var centroids = GC.AllocateUninitializedArray<Centroid>(triangles.Length);
-        var indices = new int[triangles.Length];
-        for (var i = 0; i < triangles.Length; i++) {
-            ref readonly var t = ref triangles[i];
+        // Cache only bounds/centroids; indexed sources need not repeat world transforms per node.
+        var bounds = GC.AllocateUninitializedArray<TriangleBounds>(count);
+        var centroids = GC.AllocateUninitializedArray<Centroid>(count);
+        var indices = new int[count];
+        for (var i = 0; i < count; i++) {
+            var t = triangles[i];
+            bounds[i] = new(math.min(t.A, math.min(t.B, t.C)), math.max(t.A, math.max(t.B, t.C)));
             centroids[i] = new((double)t.A.x + t.B.x + t.C.x,
                 (double)t.A.y + t.B.y + t.C.y, (double)t.A.z + t.B.z + t.C.z);
             indices[i] = i;
@@ -166,13 +218,30 @@ public sealed class SceneTraceData
             (a, b) => Compare(a, b, 2)
         };
         var nextNode = 0;
-        BuildNodes(triangles, indices, nodes, comparers, 0, indices.Length, ref nextNode);
+        BuildNodes(bounds, indices, nodes, comparers, 0, indices.Length, ref nextNode);
         Debug.Assert(nextNode == nodes.Length);
         // Recursive sorts partition contiguous ranges; final indices already have leaf order.
         return indices;
     }
 
-    private static void BuildNodes(ReadOnlySpan<SceneTraceTriangle> input, Span<int> indices,
+    private static void ReorderTriangles(Span<float4> triangles, Span<int> order)
+    {
+        // Destination-to-source permutation, using each cycle once and one saved record.
+        for (var i = 0; i < order.Length; i++) {
+            if (order[i] < 0) continue;
+            var saved = triangles[i];
+            var current = i;
+            while (true) {
+                var next = order[current];
+                order[current] = ~next;
+                if (next == i) { triangles[current] = saved; break; }
+                triangles[current] = triangles[next];
+                current = next;
+            }
+        }
+    }
+
+    private static void BuildNodes(ReadOnlySpan<TriangleBounds> input, Span<int> indices,
         Span<float4> nodes, Comparison<int>[] comparers, int start, int count, ref int nextNode)
     {
         var node = nextNode;
@@ -182,8 +251,8 @@ public sealed class SceneTraceData
         var end = start + count;
         for (var i = start; i < end; i++) {
             ref readonly var t = ref input[indices[i]];
-            lo = math.min(lo, math.min(t.A, math.min(t.B, t.C)));
-            hi = math.max(hi, math.max(t.A, math.max(t.B, t.C)));
+            lo = math.min(lo, t.Minimum);
+            hi = math.max(hi, t.Maximum);
         }
         if (count > 8) {
             var extentX = (double)hi.x - lo.x;

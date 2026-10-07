@@ -35,6 +35,16 @@ public static partial class PbrSceneTransport
     private static TransportTriangles<float4, PackedPosition> Triangles(ReadOnlySpan<float4> vertices,
         ReadOnlySpan<uint> indices, float4x4 transform, TransportSurface surface) => new(vertices, indices, transform, surface);
 
+    private static SceneTraceTriangle Triangle<TVertex, TPosition>(ReadOnlySpan<TVertex> vertices,
+        ReadOnlySpan<uint> indices, int offset, float4x4 transform, TransportSurface surface)
+        where TVertex : unmanaged
+        where TPosition : struct, ITransportPosition<TVertex>
+        => new(
+            math.mul(transform, new float4(TPosition.Get(in vertices[(int)indices[offset]]), 1)).xyz,
+            math.mul(transform, new float4(TPosition.Get(in vertices[(int)indices[offset + 1]]), 1)).xyz,
+            math.mul(transform, new float4(TPosition.Get(in vertices[(int)indices[offset + 2]]), 1)).xyz,
+            surface.Albedo, surface.Emission, surface.DoubleSided);
+
     // Stack-only traversal borrows the source; selection, destinations and budget effects stay at the call site.
     private ref struct TransportTriangles<TVertex, TPosition>(ReadOnlySpan<TVertex> vertices,
         ReadOnlySpan<uint> indices, float4x4 transform, TransportSurface surface)
@@ -50,12 +60,10 @@ public static partial class PbrSceneTransport
         public bool MoveNext()
         {
             while (_offset < _indices.Length) {
-                var a = math.mul(transform, new float4(TPosition.Get(in _vertices[(int)_indices[_offset]]), 1)).xyz;
-                var b = math.mul(transform, new float4(TPosition.Get(in _vertices[(int)_indices[_offset + 1]]), 1)).xyz;
-                var c = math.mul(transform, new float4(TPosition.Get(in _vertices[(int)_indices[_offset + 2]]), 1)).xyz;
+                var triangle = Triangle<TVertex, TPosition>(_vertices, _indices, _offset, transform, surface);
                 _offset += 3;
-                if (math.lengthsq(math.cross(b - a, c - a)) < 1e-16f) continue;
-                Current = new(a, b, c, surface.Albedo, surface.Emission, surface.DoubleSided);
+                if (math.lengthsq(math.cross(triangle.B - triangle.A, triangle.C - triangle.A)) < 1e-16f) continue;
+                Current = triangle;
                 return true;
             }
             return false;

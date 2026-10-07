@@ -40,6 +40,9 @@ public sealed class SceneTracePackingTests
         Assert.Equal(count, trace.TriangleCount);
         Assert.Equal(hash, Convert.ToHexString(SHA256.HashData(MemoryMarshal.AsBytes(packed))));
         Assert.Equal(hash, Convert.ToHexString(trace.Identity.Span));
+        var composed = SceneTraceData.Create(new ReversedTriangles(triangles.Reverse().ToArray()));
+        Assert.Equal(hash, Convert.ToHexString(composed.Identity.Span));
+        Assert.Equal(trace.Packed.ToArray(), composed.Packed.ToArray());
         var lo = new float3(float.PositiveInfinity);
         var hi = new float3(float.NegativeInfinity);
         foreach (var triangle in triangles) {
@@ -50,6 +53,49 @@ public sealed class SceneTracePackingTests
         Assert.Equal(hi, trace.Bounds.Max);
         Assert.Equal(packed[0].x, packed[2].w); // Root escape covers all nodes.
         Assert.Equal(0, packed[3].w); // First triangle in the root's subtree.
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(4_000_001)]
+    public void InvalidSourceCountIsRejectedBeforeReading(int count)
+        => Assert.Throws<ArgumentException>(() => SceneTraceData.Create(new UnreadableTriangles(count)));
+
+    [Fact]
+    public void InvalidIdentityIsRejectedBeforeReading()
+        => Assert.Throws<ArgumentException>(() => SceneTraceData.Create(new UnreadableTriangles(1), sceneIdentity: new byte[31]));
+
+    [Fact]
+    public void ImpossibleBudgetIsRejectedBeforeReading()
+        => Assert.Throws<ArgumentException>(() => SceneTraceData.Create(new UnreadableTriangles(1), maximumBytes: 1));
+
+    [Fact]
+    public void CompletedTraceOwnsPackedDataAndIdentity()
+    {
+        var triangles = CreateTriangles(17, 0);
+        var identity = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        var expectedIdentity = identity.ToArray();
+        var expected = new SceneTraceData(triangles);
+        var storage = triangles.Reverse().ToArray();
+        var actual = SceneTraceData.Create(new ReversedTriangles(storage), sceneIdentity: identity);
+        Array.Clear(storage);
+        Array.Clear(identity);
+        Assert.Equal(expected.Packed.ToArray(), actual.Packed.ToArray());
+        Assert.Equal(expectedIdentity, actual.Identity.ToArray());
+    }
+
+    private readonly struct UnreadableTriangles(int count) : ISceneTraceTriangleSource
+    {
+        public int Count => count;
+        public SceneTraceTriangle this[int index] => throw new InvalidOperationException("Source was read before validation.");
+    }
+
+    private readonly ref struct ReversedTriangles(ReadOnlySpan<SceneTraceTriangle> triangles) : ISceneTraceTriangleSource
+    {
+        private readonly ReadOnlySpan<SceneTraceTriangle> _triangles = triangles;
+        public int Count => _triangles.Length;
+        public SceneTraceTriangle this[int index] => _triangles[_triangles.Length - 1 - index];
     }
 
     private static SceneTraceTriangle[] CreateTriangles(int count, int axis)
