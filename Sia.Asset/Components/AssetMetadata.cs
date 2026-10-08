@@ -12,6 +12,7 @@ public record struct AssetMetadata()
     public required Type AssetType { get; init; }
     public AssetLife AssetLife { get; init; }
     public IAssetRecord? AssetSource { get; init; }
+    public AssetId? Id { get; internal set; }
 
     public readonly IReadOnlySet<Entity> Referrers =>
         _referrers ?? (IReadOnlySet<Entity>)ImmutableHashSet<Entity>.Empty;
@@ -61,30 +62,7 @@ public record struct AssetMetadata()
     public readonly Entity? FindReferrer<TAsset>(bool recurse = false)
         where TAsset : struct
     {
-        if (_referrers == null) {
-            return null;
-        }
-
-        var assetType = typeof(TAsset);
-
-        if (recurse) {
-            foreach (var referrer in _referrers) {
-                ref var meta = ref referrer.Get<AssetMetadata>();
-                if (meta.AssetType.IsAssignableTo(assetType)) {
-                    return referrer;
-                }
-                if (meta._referrers != null) {
-                    return meta.FindReferrer<TAsset>(recurse: true);
-                }
-            }
-        }
-        else {
-            foreach (var referrer in _referrers) {
-                if (referrer.Get<AssetMetadata>().AssetType.IsAssignableTo(assetType)) {
-                    return referrer;
-                }
-            }
-        }
+        foreach (var entity in GetReferrers<TAsset>(recurse)) return entity;
         return null;
     }
 
@@ -94,62 +72,12 @@ public record struct AssetMetadata()
 
     public readonly IEnumerable<Entity> GetReferrers<TAsset>(bool recurse = false)
         where TAsset : struct
-    {
-        if (_referrers == null) {
-            yield break;
-        }
-
-        var assetType = typeof(TAsset);
-
-        if (recurse) {
-            foreach (var referrer in _referrers) {
-                var meta = referrer.Get<AssetMetadata>();
-                if (meta.AssetType.IsAssignableTo(assetType)) {
-                    yield return referrer;
-                }
-                if (meta._referrers != null) {
-                    foreach (var found in meta.GetReferrers<TAsset>(recurse: true)) {
-                        yield return found;
-                    }
-                }
-            }
-        }
-        else {
-            foreach (var referrer in _referrers) {
-                if (referrer.Get<AssetMetadata>().AssetType.IsAssignableTo(assetType)) {
-                    yield return referrer;
-                }
-            }
-        }
-    }
+        => Enumerate<TAsset>(_referrers, recurse, referrers: true);
 
     public readonly Entity? FindDependent<TAsset>(bool recurse = false)
         where TAsset : struct
     {
-        if (_dependents == null) {
-            return null;
-        }
-
-        var assetType = typeof(TAsset);
-
-        if (recurse) {
-            foreach (var dependent in _dependents) {
-                ref var meta = ref dependent.Get<AssetMetadata>();
-                if (meta.AssetType.IsAssignableTo(assetType)) {
-                    return dependent;
-                }
-                if (meta._dependents != null) {
-                    return meta.FindDependent<TAsset>(recurse: true);
-                }
-            }
-        }
-        else {
-            foreach (var dependent in _dependents) {
-                if (dependent.Get<AssetMetadata>().AssetType.IsAssignableTo(assetType)) {
-                    return dependent;
-                }
-            }
-        }
+        foreach (var entity in GetDependents<TAsset>(recurse)) return entity;
         return null;
     }
 
@@ -159,31 +87,32 @@ public record struct AssetMetadata()
 
     public readonly IEnumerable<Entity> GetDependents<TAsset>(bool recurse = false)
         where TAsset : struct
+        => Enumerate<TAsset>(_dependents, recurse, referrers: false);
+
+    private static IEnumerable<Entity> Enumerate<TAsset>(
+        HashSet<Entity>? neighbors, bool recurse, bool referrers)
+        where TAsset : struct
     {
-        if (_dependents == null) {
+        if (neighbors is null) yield break;
+        var assetType = typeof(TAsset);
+        if (!recurse) {
+            foreach (var entity in neighbors) {
+                if (entity.IsValid && entity.Get<AssetMetadata>().AssetType.IsAssignableTo(assetType))
+                    yield return entity;
+            }
             yield break;
         }
 
-        var assetType = typeof(TAsset);
-
-        if (recurse) {
-            foreach (var dependent in _dependents) {
-                var meta = dependent.Get<AssetMetadata>();
-                if (meta.AssetType.IsAssignableTo(assetType)) {
-                    yield return dependent;
-                }
-                if (meta._dependents != null) {
-                    foreach (var found in meta.GetDependents<TAsset>(recurse: true)) {
-                        yield return found;
-                    }
-                }
-            }
-        }
-        else {
-            foreach (var dependent in _dependents) {
-                if (dependent.Get<AssetMetadata>().AssetType.IsAssignableTo(assetType)) {
-                    yield return dependent;
-                }
+        // Iterative depth-first traversal visits shared nodes and cycles once.
+        var pending = new Stack<Entity>(neighbors.Reverse());
+        var visited = new HashSet<Entity>();
+        while (pending.TryPop(out var entity)) {
+            if (!entity.IsValid || !visited.Add(entity)) continue;
+            var metadata = entity.Get<AssetMetadata>();
+            if (metadata.AssetType.IsAssignableTo(assetType)) yield return entity;
+            var next = referrers ? metadata._referrers : metadata._dependents;
+            if (next is not null) {
+                foreach (var neighbor in next.Reverse()) pending.Push(neighbor);
             }
         }
     }
