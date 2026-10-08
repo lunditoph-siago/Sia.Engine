@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
     <PackageId>Sia.Asset</PackageId>
-    <PackageDescription>Unified typed asset loading and content ownership</PackageDescription>
+    <PackageDescription>Asset module for Sia.NET</PackageDescription>
     <Author>Phlamcenth Sicusa</Author>
     <Company>Lunditöph Siagö</Company>
     <RepositoryUrl>https://github.com/lunditoph-siago/Sia.Engine</RepositoryUrl>
@@ -15,7 +15,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Sia.Asset.Tests" />
+    <PackageReference Include="Sia" Version="2.1.5" />
+    <PackageReference Include="Sia.Prelude" Version="2.1.5" />
+    <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" />
   </ItemGroup>
 
 </Project>
