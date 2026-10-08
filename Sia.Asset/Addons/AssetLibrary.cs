@@ -37,21 +37,30 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         base.OnInitialize(world);
 
         Listen((Entity e, in WorldEvents.Remove cmd) => {
-            ref var meta = ref e.Get<AssetMetadata>();
-            DestroyAssetRecursively(e, ref meta);
+            ref var meta = ref e.GetOrNullRef<AssetMetadata>();
+            if (Unsafe.IsNullRef(ref meta)) return;
+            ReleaseDependencies(e, ref meta);
         });
     }
 
-    private void DestroyAssetRecursively(in Entity entity, ref AssetMetadata meta)
+    private void ReleaseDependencies(in Entity entity, ref AssetMetadata meta)
     {
+        foreach (var referrer in meta.Referrers.ToArray()) {
+            if (referrer.IsValid) referrer.Unrefer(entity);
+        }
         foreach (var referred in meta.Dependents.ToArray()) {
+            if (!referred.IsValid) continue;
             entity.Unrefer(referred);
 
             ref var refereeMeta = ref referred.Get<AssetMetadata>();
             if (refereeMeta.AssetLife == AssetLife.Automatic
                     && refereeMeta.Referrers.Count == 0) {
-                DestroyAssetRecursively(referred, ref refereeMeta);
-                referred.Destroy();
+                World.Dispatcher.RunAfterSend(() => {
+                    if (!referred.IsValid) return;
+                    ref var current = ref referred.Get<AssetMetadata>();
+                    if (current.AssetLife == AssetLife.Automatic && current.Referrers.Count == 0)
+                        referred.Destroy();
+                });
             }
         }
     }
@@ -98,7 +107,6 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         var key = new ObjectKey<IAssetRecord>(record);
         if (!_entities.TryGetValue(key, out var entity)) {
             entity = CreateEntity(record, life);
-            _entities.Add(key, entity);
         }
         return entity;
     }
