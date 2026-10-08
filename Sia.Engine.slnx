@@ -12,7 +12,6 @@
   <Project Path="Sia.Asset/Sia.Asset.csproj" />
   <Project Path="Sia.Asset.CodeGenerators/Sia.Asset.CodeGenerators.csproj" />
   <Folder Name="/tests/">
-    <Project Path="Sia.Asset.Tests/Sia.Asset.Tests.csproj" />
     <Project Path="Sia.Mesh.Tests/Sia.Mesh.Tests.csproj" />
     <Project Path="Sia.Rendering.Debug.Tests/Sia.Rendering.Debug.Tests.csproj" />
   </Folder>
