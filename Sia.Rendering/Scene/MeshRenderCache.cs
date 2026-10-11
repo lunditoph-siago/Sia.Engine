@@ -42,8 +42,9 @@ public abstract class MeshRenderCache<TMaterial, TInstance> : IAddon
 
     protected abstract TInstance Convert(in MeshSceneInstance<TMaterial> instance);
 
-    public void Refresh()
+    public void Refresh(MeshRegistry registry)
     {
+        ArgumentNullException.ThrowIfNull(registry);
         _entities.Clear();
         _meshes.Clear();
         _bounds.Clear();
@@ -52,7 +53,7 @@ public abstract class MeshRenderCache<TMaterial, TInstance> : IAddon
         _world.Query(s_Matcher, _entities, static (in items, entity) => items.Add(entity));
         foreach (var entity in _entities) {
             _seen.Add(entity);
-            var mesh = entity.Get<Mesh.Mesh>().Handle;
+            var mesh = registry.RegisterRaster(entity.Get<Mesh.Mesh>().Asset);
             var transform = entity.Get<GlobalTransform>().Affine;
             var bounds = entity.Get<WorldBounds>().World;
             var material = entity.Get<TMaterial>();
