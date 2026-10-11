@@ -10,11 +10,13 @@ public abstract record AssetRefer<TAssetRecord>
     public sealed record Entity(Sia.Entity Value) : AssetRefer<TAssetRecord>;
     public sealed record Name(string Value) : AssetRefer<TAssetRecord>;
     public sealed record Matcher(AssetMatcher Value) : AssetRefer<TAssetRecord>;
+    public sealed record Id(AssetId Value) : AssetRefer<TAssetRecord>;
 
     public static implicit operator AssetRefer<TAssetRecord>(TAssetRecord record) => new Record(record);
     public static implicit operator AssetRefer<TAssetRecord>(Sia.Entity entity) => new Entity(entity);
     public static implicit operator AssetRefer<TAssetRecord>(string name) => new Name(name);
     public static implicit operator AssetRefer<TAssetRecord>(AssetMatcher matcher) => new Matcher(matcher);
+    public static implicit operator AssetRefer<TAssetRecord>(AssetId id) => new Id(id);
 
     public Sia.Entity? Find(World world)
     {
@@ -32,6 +34,10 @@ public abstract record AssetRefer<TAssetRecord>
     private Sia.Entity? DoFind(World world)
     {
         switch (this) {
+            case Id(var id): {
+                var assetLib = world.GetAddon<AssetLibrary>();
+                return assetLib.TryGet<TAssetRecord>(id, out var entity) ? entity : null;
+            }
             case Record(var record): {
                 var assetLib = world.GetAddon<AssetLibrary>();
                 return assetLib.TryGet(record, out var entity) ? entity : null;

@@ -14,11 +14,17 @@ public static class EmbeddedLoader
     
     public static T Load<T>(TypedPath<T> path, Assembly assembly)
         where T : ILoadable<T>
-        => T.Load(GetStream(path, assembly), path);
+    {
+        using var stream = GetStream(path, assembly);
+        return T.Load(stream, path);
+    }
 
     public static T Load<T, TOptions>(TypedPath<T> path, TOptions options, Assembly assembly)
         where T : ILoadable<T, TOptions>
-        => T.Load(GetStream(path, assembly), options, path);
+    {
+        using var stream = GetStream(path, assembly);
+        return T.Load(stream, options, path);
+    }
 
     public static T LoadInternal<T>(TypedPath<T> path)
         where T : ILoadable<T>
@@ -30,11 +36,17 @@ public static class EmbeddedLoader
     
     public static T LoadInternal<T>(TypedPath<T> path, Assembly assembly)
         where T : ILoadable<T>
-        => T.Load(GetStream(GetInternalName(path, assembly), assembly), path);
+    {
+        using var stream = GetStream(GetInternalName(path, assembly), assembly);
+        return T.Load(stream, path);
+    }
 
     public static T LoadInternal<T, TOptions>(TypedPath<T> path, TOptions options, Assembly assembly)
         where T : ILoadable<T, TOptions>
-        => T.Load(GetStream(GetInternalName(path, assembly), assembly), options, path);
+    {
+        using var stream = GetStream(GetInternalName(path, assembly), assembly);
+        return T.Load(stream, options, path);
+    }
 
     private static string GetInternalName(string path, Assembly assembly)
         => assembly.FullName![0..assembly.FullName!.IndexOf(',')] + ".Embedded." + path;
