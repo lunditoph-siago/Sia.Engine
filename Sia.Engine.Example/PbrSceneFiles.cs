@@ -12,7 +12,10 @@ internal static partial class PbrSceneFiles
     internal abstract record Prepared(AssetId Id, PbrSceneRecord Scene,
         IReadOnlyDictionary<AssetId, MeshManifestRecord> Meshes,
         IReadOnlyDictionary<AssetId, PbrMaterialRecord> Materials,
-        IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures);
+        IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures)
+    {
+        internal long EncodedBytes { get; init; }
+    }
 
     internal sealed record Prepared<TProduct>(AssetId Id, PbrSceneRecord Scene,
         IReadOnlyDictionary<AssetId, MeshManifestRecord> Meshes, IReadOnlyDictionary<AssetId, TProduct> Products,
@@ -116,15 +119,15 @@ internal static partial class PbrSceneFiles
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
-        return new(id, scene, meshes, products, materials, textures);
+        return new(id, scene, meshes, products, materials, textures) { EncodedBytes = total };
     }
 
     // Must run synchronously on the target World's owner context after preparation.
     // Each use owns an anonymous root; scene identity and selected assets can be shared.
-    internal static (Entity Root, PbrSceneAsset Scene, Guid[] SourceInstances) AcquireVirtual(World world, Prepared<MeshVirtualRecord> prepared)
+    internal static (Entity Root, PbrVirtualScene Scene, Guid[] SourceInstances) AcquireVirtual(World world, Prepared<MeshVirtualRecord> prepared)
     {
         AssetLibrary.RegisterAsset<MeshVirtualAsset, MeshVirtualRecord>();
-        return Acquire<MeshVirtualRecord, PbrSceneAsset>(world, prepared, static (w, s) => {
+        return Acquire<MeshVirtualRecord, PbrVirtualScene>(world, prepared, static (w, s) => {
             var scene = PbrSceneComposition.ResolveVirtual(s,
                 r => r.Find(w)?.Get<MeshManifestAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<MeshVirtualAsset>().Data ?? throw new AssetNotFoundException(),

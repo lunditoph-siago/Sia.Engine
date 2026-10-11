@@ -71,5 +71,7 @@ Native and browser use the same default descriptor. Low loads Raster; Medium/Hig
 load Virtual. Bunny is pre-cooked, with one shared Mesh and 135 instances. `--scene`
 can select an explicit reference scene; `--lod finest` selects zero error within the
 chosen representation. GPU quality/performance and streaming-page residency require
-separate rendering acceptance. Explicit legacy PBR aggregate/stream inputs remain
-available during their later migration.
+separate rendering acceptance. Explicit scene inputs must use `.siascene`;
+probe baking selects independent
+BVH products through the same acquired-record entry. Original PLY/FBX source data
+remain authoring inputs. There is no old-format conversion or compatibility loader.

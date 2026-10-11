@@ -38,18 +38,15 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     public SceneExampleApp(ScenePipeline pipeline,
         VisibilityDebugMode? debugMode = null, float? distance = null,
-        PbrSceneAsset? materialScene = null, bool finest = false,
+        bool finest = false,
         (float3 Eye, float3 Target)? camera = null,
-        PbrSceneStream? streaming = null, PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null)
+        PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null)
     {
         _pipeline = pipeline;
         _renderScale = Program.RenderScale;
         _resolutionController = Program.TargetFps == 0 ? null : new(800d / Program.TargetFps, Program.RenderScale);
-        _materialScene = materialScene;
         _referenceScene = references;
         _preparedLighting = lighting;
-        _materialStream = streaming;
-        _materialInstanceCount = (materialScene?.Instances.Length ?? 0) + (streaming?.Instances.Length ?? 0);
         _finest = finest;
         _initialCamera = camera;
         _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny

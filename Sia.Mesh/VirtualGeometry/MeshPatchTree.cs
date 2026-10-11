@@ -21,8 +21,7 @@ public sealed partial class MeshPatchTree
     public ulong PayloadBytes => CalculatePayloadBytes([Nodes.Length, VertexCount, _geometry.Indices.Length,
         MeshletCount, MeshletVertexCount, _meshlets.TriangleIndices.Length, _meshlets.SourceTriangleIndices.Length], HasBakeUvs);
 
-    // Section-count order is shared with the Patch codec. Callers validate incoming counts first.
-    internal static ulong CalculatePayloadBytes(ReadOnlySpan<int> counts, bool bakeUvs) =>
+    private static ulong CalculatePayloadBytes(ReadOnlySpan<int> counts, bool bakeUvs) =>
         (ulong)counts[0] * (ulong)Unsafe.SizeOf<MeshPatchNode>()
         + (ulong)counts[1] * (ulong)(MeshVertex.Stride + (bakeUvs ? 8 : 0))
         + (ulong)counts[2] * sizeof(uint) + (ulong)counts[3] * (ulong)Unsafe.SizeOf<Meshlet>()
@@ -183,27 +182,6 @@ public sealed partial class MeshPatchTree
             ids[i] = id;
         }
         return ids;
-    }
-
-    private static int[] VertexIds(MeshData geometry)
-    {
-        var vertices = geometry.Vertices;
-        var ids = new int[vertices.Length];
-        var identities = new Dictionary<int, int>(vertices.Length, new VertexIndexComparer(geometry));
-        for (var i = 0; i < ids.Length; i++) {
-            ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, i, out var exists);
-            if (!exists) { id = identities.Count - 1; }
-            ids[i] = id;
-        }
-        return ids;
-    }
-
-    private sealed class VertexIndexComparer(MeshData geometry) : IEqualityComparer<int>
-    {
-        private MeshVertexIdentity Identity(int index) => MeshVertexIdentity.Create(geometry.Vertices[index],
-            geometry.HasBakeUvs ? geometry.BakeUvs[index] : default);
-        public bool Equals(int a, int b) => Identity(a).Equals(Identity(b));
-        public int GetHashCode(int index) => Identity(index).GetHashCode();
     }
 
     private static Dictionary<(int, int), int> Boundary(ReadOnlySpan<uint> indices, ReadOnlySpan<int> ids)

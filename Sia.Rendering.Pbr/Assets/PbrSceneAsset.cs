@@ -24,8 +24,11 @@ public sealed record PbrMaterialAsset(
 
 public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform);
 
-public sealed partial class PbrSceneAsset
+/// <summary>Transient resident rendering input for procedural callers; it has no persistence format or asset loader.</summary>
+public sealed class PbrSceneAsset
 {
+    private static PbrTextureData?[] Maps(PbrMaterialAsset material)
+        => [material.BaseColor, material.Normal, material.MetallicRoughness, material.Occlusion, material.Emissive];
     public ReadOnlyMemory<byte> TransportIdentity { get; private init; }
     public ReadOnlyMemory<MeshPatchAsset> Geometry { get; }
     public ReadOnlyMemory<PbrMaterialAsset> Materials { get; }
