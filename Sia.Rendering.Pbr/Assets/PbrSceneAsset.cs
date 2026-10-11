@@ -26,6 +26,7 @@ public readonly record struct PbrSceneInstance(int Geometry, int Material, float
 
 public sealed partial class PbrSceneAsset
 {
+    public ReadOnlyMemory<byte> TransportIdentity { get; private init; }
     public ReadOnlyMemory<MeshPatchAsset> Geometry { get; }
     public ReadOnlyMemory<PbrMaterialAsset> Materials { get; }
     public ReadOnlyMemory<PbrSceneInstance> Instances { get; }
@@ -42,17 +43,34 @@ public sealed partial class PbrSceneAsset
     public static PbrSceneAsset Create(ReadOnlySpan<MeshPatchAsset> geometry, ReadOnlySpan<PbrMaterialAsset> materials,
         ReadOnlySpan<PbrSceneInstance> instances, string attribution = "")
     {
+        Validate(geometry, materials, instances, attribution);
+        return new(geometry.ToArray(), materials.ToArray(), instances.ToArray(), attribution);
+    }
+
+    internal static PbrSceneAsset AdoptResolved(MeshPatchAsset[] geometry, PbrMaterialAsset[] materials, PbrSceneInstance[] instances, string attribution, byte[] transportIdentity)
+    {
+        Validate(geometry, materials, instances, attribution);
+        return new(geometry, materials, instances, attribution) { TransportIdentity = transportIdentity };
+    }
+
+    private static void Validate(ReadOnlySpan<MeshPatchAsset> geometry, ReadOnlySpan<PbrMaterialAsset> materials,
+        ReadOnlySpan<PbrSceneInstance> instances, string attribution)
+    {
+        foreach (var mesh in geometry) ArgumentNullException.ThrowIfNull(mesh);
+        ValidateTables(geometry.Length, materials, instances, attribution);
+    }
+
+    internal static void ValidateTables(int geometryCount, ReadOnlySpan<PbrMaterialAsset> materials,
+        ReadOnlySpan<PbrSceneInstance> instances, string attribution)
+    {
         ArgumentNullException.ThrowIfNull(attribution);
         if (attribution.Length > 16384) {
             throw new ArgumentException("PBR scene attribution is too long.", nameof(attribution));
         }
-        if (geometry.Length > 4096 || materials.Length > 4096 || instances.Length > 1000000) {
+        if (geometryCount > 4096 || materials.Length > 4096 || instances.Length > 1000000) {
             throw new ArgumentException("PBR scene record counts exceed the asset format limits.");
         }
         var textures = new HashSet<PbrTextureData>(ReferenceEqualityComparer.Instance);
-        foreach (var mesh in geometry) {
-            ArgumentNullException.ThrowIfNull(mesh);
-        }
         foreach (var material in materials) {
             ArgumentNullException.ThrowIfNull(material);
             foreach (var texture in Maps(material)) {
@@ -60,18 +78,9 @@ public sealed partial class PbrSceneAsset
                     textures.Add(texture);
                 }
             }
-            var p = material.Parameters;
-            if (!math.all(math.isfinite(p.BaseColor)) || !math.all(math.isfinite(p.EmissiveColor))
-                || !float.IsFinite(p.EmissiveStrength) || p.EmissiveStrength < 0
-                || !float.IsFinite(p.Metallic) || p.Metallic is < 0 or > 1 || !float.IsFinite(p.Roughness) || p.Roughness is < 0 or > 1
-                || !float.IsFinite(material.NormalScale)
-                || !float.IsFinite(material.Opacity) || material.Opacity is < 0 or > 1
-                || !float.IsFinite(material.Transmission) || material.Transmission is < 0 or > 1
-                || !float.IsFinite(material.Thickness) || material.Thickness is < 0 or > 10
-                || (material.Transmission > 0 && !material.AlphaBlend)
-                || !float.IsFinite(material.OcclusionStrength) || material.OcclusionStrength is < 0 or > 1
-                || material.BaseColor is { Srgb: false } || material.Emissive is { Srgb: false }
-                || material.Normal is { Srgb: true } || material.MetallicRoughness is { Srgb: true } || material.Occlusion is { Srgb: true }) {
+            if (!PbrMaterialValidation.ParametersValid(material.Parameters, material.NormalScale, material.OcclusionStrength,
+                    material.AlphaBlend, material.Opacity, material.Transmission, material.Thickness)
+                || !PbrMaterialValidation.TexturesValid(material.BaseColor, material.Normal, material.MetallicRoughness, material.Occlusion, material.Emissive)) {
                 throw new ArgumentException("Invalid PBR material parameters or texture color spaces.", nameof(materials));
             }
         }
@@ -79,17 +88,12 @@ public sealed partial class PbrSceneAsset
             throw new ArgumentException("PBR scene texture count exceeds the asset format limit.", nameof(materials));
         }
         foreach (var instance in instances) {
-            if ((uint)instance.Geometry >= (uint)geometry.Length || (uint)instance.Material >= (uint)materials.Length) {
+            if ((uint)instance.Geometry >= (uint)geometryCount || (uint)instance.Material >= (uint)materials.Length) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "The scene instance references a missing geometry or material.");
             }
-            var t = instance.Transform;
-            var determinant = math.determinant(t);
-            if (!math.all(math.isfinite(t.c0)) || !math.all(math.isfinite(t.c1)) || !math.all(math.isfinite(t.c2))
-                || !math.all(math.isfinite(t.c3)) || !float.IsFinite(determinant) || determinant <= 1e-12f
-                || t.c0.w != 0 || t.c1.w != 0 || t.c2.w != 0 || t.c3.w != 1) {
+            if (!PbrSceneData.ValidTransform(instance.Transform)) {
                 throw new ArgumentException("Scene instances require finite affine transforms with positive determinant.", nameof(instances));
             }
         }
-        return new(geometry.ToArray(), materials.ToArray(), instances.ToArray(), attribution);
     }
 }
