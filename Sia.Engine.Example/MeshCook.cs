@@ -138,7 +138,7 @@ internal static partial class MeshCook
         }
     }
 
-    private static Recipe ReadRecipe(string path)
+    internal static Recipe ReadRecipe(string path)
     {
         using var file = File.OpenRead(path);
         if (file.Length > MaximumRecipeBytes) throw new InvalidDataException("Mesh recipe exceeds 64 KiB.");

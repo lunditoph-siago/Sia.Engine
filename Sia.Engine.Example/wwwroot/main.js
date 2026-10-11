@@ -1,9 +1,9 @@
 import { createBrowserInput } from './browser-input.js';
+import { defaultScene } from './example-content.js';
 
 const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
 const pipeline = parameters.get('pipeline') ?? 'pbr';
-const finest = parameters.get('lod') === 'finest';
 const inspection = document.getElementById('inspection');
 const settingsToggle = document.getElementById('settings-toggle');
 const distanceControl = document.getElementById('inspection-distance');
@@ -177,7 +177,7 @@ if (pipeline === 'bunny') {
   document.getElementById('bunny-credit').hidden = false;
   document.getElementById('credits').hidden = false;
 }
-if (pipeline === 'pbr') {
+if (pipeline === 'pbr' || pipeline === 'bunny') {
   document.getElementById('quality-controls').hidden = false;
   document.getElementById('inspection-distance-row').hidden = true;
   document.getElementById('camera-speed-row').hidden = false;
@@ -240,12 +240,8 @@ try {
   for (const name of forwardedOptions) {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
   }
-  if (pipeline === 'pbr') {
-    const scene = new URL(parameters.get('scene') ?? (finest ? 'Assets/BistroFinest.siapbr' : 'Assets/Bistro.siapbr'), location.href);
-    if (!parameters.has('scene')) {
-      const hash = finest ? canvas.dataset.bistroFinestSha256 : canvas.dataset.bistroSha256;
-      scene.searchParams.set('sha256', hash);
-    }
+  if (pipeline === 'pbr' || pipeline === 'bunny') {
+    const scene = new URL(parameters.get('scene') ?? await defaultScene(pipeline, location.href), location.href);
     args.push('--scene', scene.href);
   }
   setLoadingState('Starting engine runtime', NaN);

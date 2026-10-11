@@ -20,6 +20,22 @@ import bpy
 MAXIMUM_BYTES = 128 * 1024 * 1024
 
 
+def require_deterministic_threads():
+    """Blender's parallel Mikk tangent accumulation can change float32 bytes.
+
+    A Blender-wide thread override is a startup option, not scene render state.
+    Reject the CLI invocation before emitting canonical source data.
+    """
+    options = sys.argv[:sys.argv.index("--")] if "--" in sys.argv else sys.argv
+    script_options = ("--python", "-P", "--python-expr", "--python-console")
+    first_script = next((index for index, value in enumerate(options) if value in script_options), len(options))
+    options = options[:first_script]
+    overrides = [options[index + 1] if index + 1 < len(options) else None
+                 for index, value in enumerate(options) if value in ("--threads", "-t")]
+    if not overrides or overrides[-1] != "1":
+        raise ValueError("Canonical source CLI requires Blender --threads 1 before --python")
+
+
 def _floats(values):
     if not all(math.isfinite(value) for value in values):
         raise ValueError("Source attributes must be finite")
@@ -32,6 +48,37 @@ def _floats(values):
 def _basis(vector):
     # Proper rotation from Blender Z-up to engine Y-up; winding/sign are unchanged.
     return vector[0], vector[2], -vector[1]
+
+
+def _triangulated_corners(mesh, texture_uv, bake_uv):
+    """Retain Blender's tessellation and corner data before tangent generation.
+
+    calc_tangents accepts only tris/quads. Reconstruct only a temporary Mesh;
+    a topology modifier/BMesh roundtrip would lose authored split normals.
+    """
+    result = bpy.data.meshes.new("SiaTangentTriangles")
+    try:
+        triangles = list(mesh.loop_triangles)
+        result.from_pydata([tuple(vertex.co) for vertex in mesh.vertices], [],
+                           [tuple(triangle.vertices) for triangle in triangles])
+        corners = [corner for triangle in triangles for corner in triangle.loops]
+        for polygon, triangle in zip(result.polygons, triangles):
+            polygon.material_index = triangle.material_index
+            polygon.use_smooth = True
+        for name in dict.fromkeys((texture_uv, bake_uv)):
+            if name is None:
+                continue
+            source = mesh.uv_layers[name].data
+            layer = result.uv_layers.new(name=name)
+            for index, corner in enumerate(corners):
+                layer.data[index].uv = source[corner].uv
+        normals = [tuple(mesh.corner_normals[corner].vector) for corner in corners]
+        result.normals_split_custom_set(normals)
+        result.calc_loop_triangles()
+        return result, normals
+    except BaseException:
+        bpy.data.meshes.remove(result)
+        raise
 
 
 def export_source(obj, output, texture_uv="TextureUV", bake_uv=None,
@@ -60,6 +107,8 @@ def export_source(obj, output, texture_uv="TextureUV", bake_uv=None,
         raise FileNotFoundError("Source output requires an existing parent directory")
 
     mesh = obj.data.copy()
+    owned = [mesh]
+    preserved_normals = None
     try:
         mesh.calc_loop_triangles()
         triangle_count = len(mesh.loop_triangles)
@@ -68,6 +117,9 @@ def export_source(obj, output, texture_uv="TextureUV", bake_uv=None,
         # Reject impossible encoded/owned payloads before tangent/corner allocation.
         if 77 + 48 + triangle_count * 12 + 12 + (8 if bake_uv is not None else 0) > maximum_bytes:
             raise ValueError("Source exceeds its payload byte limit")
+        if any(len(polygon.vertices) > 4 for polygon in mesh.polygons):
+            mesh, preserved_normals = _triangulated_corners(mesh, texture_uv, bake_uv)
+            owned.append(mesh)
         mesh.calc_tangents(uvmap=texture_uv)
         uv = mesh.uv_layers[texture_uv].data
         bake = mesh.uv_layers[bake_uv].data if bake_uv is not None else None
@@ -92,9 +144,21 @@ def export_source(obj, output, texture_uv="TextureUV", bake_uv=None,
                 slot, first = triangle.material_index, len(indices)
             for corner in triangle.loops:
                 loop = mesh.loops[corner]
+                normal, tangent = mesh.corner_normals[corner].vector, loop.tangent
+                if preserved_normals is not None:
+                    # Blender packs custom normals again in the temporary Mesh.
+                    # Encode the original corner values and project its Mikk
+                    # tangent onto that normal so quantization cannot accumulate.
+                    normal = preserved_normals[corner]
+                    norm_squared = sum(value * value for value in normal)
+                    projection = sum(n * t for n, t in zip(normal, tangent)) / norm_squared if norm_squared else 0
+                    tangent = tuple(t - n * projection for n, t in zip(normal, tangent))
+                    length = math.sqrt(sum(value * value for value in tangent))
+                    if length:
+                        tangent = tuple(value / length for value in tangent)
                 values = (*_basis(mesh.vertices[loop.vertex_index].co),
-                          *_basis(mesh.corner_normals[corner].vector), *uv[corner].uv,
-                          *_basis(loop.tangent), loop.bitangent_sign)
+                          *_basis(normal), *uv[corner].uv,
+                          *_basis(tangent), loop.bitangent_sign)
                 record = _floats(values)
                 baked = _floats(tuple(bake[corner].uv)) if bake is not None else b""
                 key = record + baked
@@ -137,10 +201,12 @@ def export_source(obj, output, texture_uv="TextureUV", bake_uv=None,
             raise
         return digest.hexdigest().upper()
     finally:
-        bpy.data.meshes.remove(mesh)
+        for temporary in reversed(owned):
+            bpy.data.meshes.remove(temporary)
 
 
 def main():
+    require_deterministic_threads()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--object", required=True, help="Authored static Mesh object name")
     parser.add_argument("--output", required=True, type=Path, help="New canonical .siaasset file")

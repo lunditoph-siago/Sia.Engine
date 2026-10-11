@@ -32,7 +32,7 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void InitializeScene()
     {
-        if (_pipeline == ScenePipeline.Pbr) {
+        if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) {
             _qualitySettings = PbrRendererSettings.ForQuality(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
             Console.WriteLine($"Render quality: {Program.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
         }
@@ -63,7 +63,7 @@ internal sealed unsafe partial class SceneExampleApp
         BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
-            InitializePatchLod();
+            InitializeBunnyRendering();
             return;
         }
 
@@ -96,8 +96,7 @@ internal sealed unsafe partial class SceneExampleApp
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             CameraMatrices.Identity));
-        if (_pipeline == ScenePipeline.Bunny) { return; }
-        if (_pipeline == ScenePipeline.Pbr) { BuildMaterialScene(); return; }
+        if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) { BuildMaterialScene(); return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
         var groundMeshAsset = CreateRasterMesh(groundMesh);

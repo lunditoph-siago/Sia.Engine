@@ -1,6 +1,6 @@
 const scope = new URL(self.registration.scope);
-const cacheName = 'sia-bistro-assets:' + scope.pathname;
-const paths = new Set(['Bistro.siapbr', 'BistroFinest.siapbr'].map(name => new URL('Assets/' + name, scope).pathname));
+const cacheName = 'sia-content-assets:' + scope.pathname;
+const contentRoot = new URL('Assets/Content/', scope).pathname;
 
 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
@@ -8,8 +8,9 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   const url = new URL(request.url);
   if (url.origin !== scope.origin || (request.cache === 'only-if-cached' && request.mode !== 'same-origin')) return;
-  const scene = request.method === 'GET' && paths.has(url.pathname) && !request.headers.has('Range')
-    && /^[a-f0-9]{64}$/i.test(url.searchParams.get('sha256') ?? '');
+  const scene = request.method === 'GET' && url.pathname.startsWith(contentRoot) && !request.headers.has('Range')
+    && /^[a-f0-9]{64}\/[a-f0-9]{32}\.(siaasset|siascene)$/.test(url.pathname.slice(contentRoot.length))
+    && !url.search;
   const response = scene ? loadScene(request) : fetch(request).then(response => ({ response }));
   event.respondWith(response.then(result => isolatedResponse(result.response)));
   event.waitUntil(response.then(result => result.cached));

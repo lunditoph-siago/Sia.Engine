@@ -36,7 +36,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private readonly ScenePipeline _pipeline;
     private static string? _gpuError;
 
-    public SceneExampleApp(ScenePipeline pipeline, MeshPatchAsset? patchAsset = null,
+    public SceneExampleApp(ScenePipeline pipeline,
         VisibilityDebugMode? debugMode = null, float? distance = null,
         PbrSceneAsset? materialScene = null, bool finest = false,
         (float3 Eye, float3 Target)? camera = null,
@@ -45,7 +45,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _pipeline = pipeline;
         _renderScale = Program.RenderScale;
         _resolutionController = Program.TargetFps == 0 ? null : new(800d / Program.TargetFps, Program.RenderScale);
-        _patchAsset = patchAsset;
         _materialScene = materialScene;
         _referenceScene = references;
         _preparedLighting = lighting;

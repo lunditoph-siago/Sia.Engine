@@ -54,7 +54,28 @@ def _image(socket, texture_uv):
     return node
 
 
-def _metadata(material, texture_uv):
+def _metallic_roughness(shader, texture_uv, supplied):
+    metallic, roughness = shader.inputs["Metallic"], shader.inputs["Roughness"]
+    if not metallic.is_linked and not roughness.is_linked:
+        return supplied, float(metallic.default_value), float(roughness.default_value)
+    if supplied is not None or not metallic.is_linked or not roughness.is_linked:
+        raise ValueError("Packed metallic/roughness requires paired Blue/Green links or explicit image with constant factors")
+    nodes = []
+    for socket, channel in ((metallic, "Blue"), (roughness, "Green")):
+        link = socket.links[0]
+        node = link.from_node
+        if node.type != "SEPARATE_COLOR" or node.mode != "RGB" or link.from_socket.name != channel:
+            raise ValueError("Packed metallic/roughness requires Separate Color RGB Blue/Green channels")
+        image = _image(node.inputs["Color"], texture_uv)
+        if image is None:
+            raise ValueError("Packed metallic/roughness requires a direct Image Texture")
+        nodes.append(image.image)
+    if nodes[0] != nodes[1]:
+        raise ValueError("Metallic and roughness must reference the same packed Image")
+    return nodes[0], 1.0, 1.0
+
+
+def _metadata(material, texture_uv, metallic_roughness=None, occlusion=None):
     if material is None or material.node_tree is None or not texture_uv:
         raise ValueError("Select a node-based Material and its primary UV channel")
     material_id = _id(material)
@@ -84,6 +105,7 @@ def _metadata(material, texture_uv):
 
     color = _image(shader.inputs["Base Color"], texture_uv)
     emission = _image(shader.inputs["Emission Color"], texture_uv)
+    packed, metallic, roughness = _metallic_roughness(shader, texture_uv, metallic_roughness)
     normal, normal_scale = None, 1.0
     normal_input = shader.inputs["Normal"]
     if normal_input.is_linked:
@@ -110,7 +132,7 @@ def _metadata(material, texture_uv):
     if isinstance(thickness, bool) or not isinstance(thickness, (int, float)):
         raise ValueError("sia.thickness must be a numeric world-space slab thickness")
     values = (*((1, 1, 1) if color else tuple(_constant(shader, "Base Color"))[:3]),
-              float(_constant(shader, "Metallic")), float(_constant(shader, "Roughness")),
+              metallic, roughness,
               *((1, 1, 1) if emission else tuple(_constant(shader, "Emission Color"))[:3]),
               float(_constant(shader, "Emission Strength")), float(normal_scale), 1.0,
               opacity, transmission, float(thickness))
@@ -126,10 +148,11 @@ def _metadata(material, texture_uv):
         raise ValueError("Material parameters exceed the existing domain bounds")
 
     owners, roles = {}, {}
-    def reference(node, srgb):
-        if node is None:
+    def reference(image, srgb):
+        if image is None:
             return bytes(16)
-        image = node.image
+        if not isinstance(image, bpy.types.Image):
+            raise ValueError("Texture references require authored Image datablocks")
         asset_id = _id(image)
         if asset_id == material_id:
             raise ValueError("Material and texture cannot claim one asset ID")
@@ -143,14 +166,15 @@ def _metadata(material, texture_uv):
         return asset_id.bytes
 
     flags = int(not material.use_backface_culling) | (int(alpha.is_linked or opacity < 1 or transmission > 0) << 1)
-    body = (b"SIAMATR1" + bytes((flags,)) + parameters + reference(color, True)
-            + reference(normal, False) + bytes(32) + reference(emission, True))
+    body = (b"SIAMATR1" + bytes((flags,)) + parameters + reference(color.image if color else None, True)
+            + reference(normal.image if normal else None, False) + reference(packed, False)
+            + reference(occlusion, False) + reference(emission.image if emission else None, True))
     return material_id, body + hashlib.sha256(body).digest()
 
 
-def export_material(material, output, texture_uv="TextureUV"):
+def export_material(material, output, texture_uv="TextureUV", metallic_roughness=None, occlusion=None):
     """Write exactly 177 metadata bytes to one new <material-UUID-N>.siaasset."""
-    material_id, payload = _metadata(material, texture_uv)
+    material_id, payload = _metadata(material, texture_uv, metallic_roughness, occlusion)
     output = Path(output).absolute()
     if output.name != material_id.hex + ".siaasset":
         raise ValueError("Material filename must be its authored UUID in N format plus .siaasset")
@@ -175,8 +199,16 @@ def main():
     parser.add_argument("--material", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--texture-uv", default="TextureUV")
+    parser.add_argument("--metallic-roughness-image", help="Explicit packed Image with constant material factors")
+    parser.add_argument("--occlusion-image", help="Explicit linear Image whose red channel supplies occlusion")
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
-    material_id = export_material(bpy.data.materials.get(args.material), args.output, args.texture_uv)
+    def image(name):
+        result = bpy.data.images.get(name) if name is not None else None
+        if name is not None and result is None:
+            raise ValueError(f"Authored Image not found: {name}")
+        return result
+    material_id = export_material(bpy.data.materials.get(args.material), args.output, args.texture_uv,
+                                  image(args.metallic_roughness_image), image(args.occlusion_image))
     print(f"Material {material_id}: {args.output}")
 
 

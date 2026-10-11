@@ -67,7 +67,8 @@ def _encode(values, srgb):
     return np.clip(np.rint(work * 255), 0, 255).astype(np.uint8).tobytes()
 
 
-def export_texture(image, output, role, maximum_size=MAXIMUM_DIMENSION, maximum_bytes=MAXIMUM_BYTES):
+def export_texture(image, output, role, maximum_size=MAXIMUM_DIMENSION, maximum_bytes=MAXIMUM_BYTES,
+                   normal_y="opengl"):
     """Write one new <Image-UUID-N>.siaasset; admission excludes authoring scratch."""
     if image is None or image.source not in ("FILE", "GENERATED") or image.is_float:
         raise ValueError("Select one static byte-buffer Image; float/HDR/sequence/tiled sources require separate authoring")
@@ -80,6 +81,8 @@ def export_texture(image, output, role, maximum_size=MAXIMUM_DIMENSION, maximum_
     if role not in ("color", "data", "normal"):
         raise ValueError("Select an explicit color, data or normal texture role")
     srgb = role == "color"
+    if normal_y not in ("opengl", "directx") or role != "normal" and normal_y != "opengl":
+        raise ValueError("Normal Y convention is explicit and applies only to normal textures")
     if image.colorspace_settings.name != ("sRGB" if srgb else "Non-Color"):
         raise ValueError("Image color space does not match the selected texture role")
     if image.alpha_mode not in ("STRAIGHT", "NONE", "CHANNEL_PACKED") or srgb and image.alpha_mode == "CHANNEL_PACKED":
@@ -118,6 +121,8 @@ def export_texture(image, output, role, maximum_size=MAXIMUM_DIMENSION, maximum_
     # Byte-buffer pixels preserve encoded RGB; alpha and data channels are linear.
     if image.alpha_mode == "NONE":
         values[:, :, 3] = 1
+    if normal_y == "directx":
+        values[:, :, 1] = 1 - values[:, :, 1]
     if srgb:
         rgb = values[:, :, :3]
         values[:, :, :3] = np.where(rgb <= .04045, rgb / 12.92, ((rgb + .055) / 1.055) ** 2.4)
@@ -154,10 +159,12 @@ def main():
     parser.add_argument("--image", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--role", required=True, choices=("color", "data", "normal"))
+    parser.add_argument("--normal-y", choices=("opengl", "directx"), default="opengl")
     parser.add_argument("--maximum-size", type=int, default=MAXIMUM_DIMENSION)
     parser.add_argument("--maximum-bytes", type=int, default=MAXIMUM_BYTES)
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
-    identity = export_texture(bpy.data.images.get(args.image), args.output, args.role, args.maximum_size, args.maximum_bytes)
+    identity = export_texture(bpy.data.images.get(args.image), args.output, args.role,
+                              args.maximum_size, args.maximum_bytes, args.normal_y)
     print(f"Texture {identity}: {args.output}")
 
 
