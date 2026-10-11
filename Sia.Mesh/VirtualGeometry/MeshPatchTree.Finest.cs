@@ -44,7 +44,12 @@ public sealed partial class MeshPatchTree
             }
         }
         var vertices = new MeshVertex[vertexCount];
-        for (var i = 0; i < remap.Length; i++) { if (remap[i] >= 0) { vertices[remap[i]] = _geometry.Vertices[i]; } }
+        var bakeUvs = HasBakeUvs ? new Sia.Math.float2[vertexCount] : [];
+        for (var i = 0; i < remap.Length; i++) {
+            if (remap[i] < 0) continue;
+            vertices[remap[i]] = _geometry.Vertices[i];
+            if (HasBakeUvs) bakeUvs[remap[i]] = _geometry.BakeUvs[i];
+        }
         var indices = new uint[checked(triangleCount * 3)];
         var clusters = new Meshlet[meshletCount];
         var references = new uint[referenceCount];
@@ -66,6 +71,6 @@ public sealed partial class MeshPatchTree
                 triangleOffset += cluster.TriangleCount;
             }
         }
-        return (new(vertices, indices, _geometry.Bounds), new(clusters, references, localIndices, sources));
+        return (new(vertices, indices, _geometry.Bounds) { BakeUvs = bakeUvs }, new(clusters, references, localIndices, sources));
     }
 }

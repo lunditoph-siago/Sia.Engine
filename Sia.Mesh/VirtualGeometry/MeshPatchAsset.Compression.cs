@@ -77,9 +77,9 @@ public sealed partial class MeshPatchAsset
             cancellationToken.ThrowIfCancellationRequested();
             var descriptor = bytes[(152 + section * 16)..];
             var count = BinaryPrimitives.ReadInt32LittleEndian(descriptor[8..]);
-            var stride = Strides[section];
+            var stride = BinaryPrimitives.ReadInt32LittleEndian(descriptor[12..]);
             Require(BinaryPrimitives.ReadInt64LittleEndian(descriptor) == offset && count >= 0
-                && BinaryPrimitives.ReadInt32LittleEndian(descriptor[12..]) == stride
+                && ValidStride(section, stride)
                 && (long)count * stride <= bytes.Length - offset, "Invalid compressed patch section.");
             if (stride == 1) {
                 bytes.Slice(offset, count).CopyTo(output[offset..]);

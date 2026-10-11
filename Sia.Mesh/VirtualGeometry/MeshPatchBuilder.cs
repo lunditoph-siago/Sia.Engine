@@ -8,10 +8,7 @@ public static partial class MeshPatchBuilder
         CancellationToken cancellationToken = default)
     {
         var options = settings ?? MeshPatchBuildSettings.Default;
-        if (options.MaxLeafTriangles is < 1 or > 512 || options.MaxChildren is < 2 or > 8
-            || !float.IsFinite(options.ParentTriangleRatio) || options.ParentTriangleRatio <= 0 || options.ParentTriangleRatio >= 1
-            || !float.IsFinite(options.NormalWeight) || options.NormalWeight < 0
-            || !float.IsFinite(options.UVWeight) || options.UVWeight < 0) {
+        if (!options.IsValid) {
             throw new ArgumentOutOfRangeException(nameof(settings));
         }
         var source = Prepare(mesh, cancellationToken, out var removed);
@@ -25,7 +22,7 @@ public static partial class MeshPatchBuilder
                 source.Indices.AsSpan(checked((int)meshlets.SourceTriangleIndices[triangleOffset++] * 3), 3)
                     .CopyTo(indices.AsSpan(t * 3));
             }
-            frontier.Add(new(Compact(source.Vertices, indices), 0, []));
+            frontier.Add(new(Compact(source.Vertices, indices, source.BakeUvs, cancellationToken: cancellationToken), 0, []));
         }
         var roots = new List<MeshPatch>();
         var simplifications = 0;
@@ -91,50 +88,59 @@ public static partial class MeshPatchBuilder
     private static MeshData Join(MeshPatch[] patches)
     {
         var vertices = new List<MeshVertex>();
+        var bakeUvs = new List<float2>();
         var indices = new List<uint>();
-        var identities = new Dictionary<VertexIdentity, uint>();
+        var identities = new Dictionary<MeshVertexIdentity, uint>();
         foreach (var patch in patches) {
             foreach (var index in patch.Geometry.Indices) {
                 var vertex = patch.Geometry.Vertices[index];
-                var identity = Identity(vertex);
+                var bakeUv = patch.Geometry.HasBakeUvs ? patch.Geometry.BakeUvs[index] : default;
+                var identity = MeshVertexIdentity.Create(vertex, bakeUv);
                 if (!identities.TryGetValue(identity, out var mapped)) {
                     identities.Add(identity, mapped = (uint)vertices.Count);
                     vertices.Add(vertex);
+                    if (patch.Geometry.HasBakeUvs) bakeUvs.Add(bakeUv);
                 }
                 indices.Add(mapped);
             }
         }
-        return WithBounds(vertices.ToArray(), indices.ToArray());
+        return WithBounds(vertices.ToArray(), indices.ToArray(), bakeUvs.ToArray());
     }
 
-    private static MeshData Compact(MeshVertex[] vertices, ReadOnlySpan<uint> indices)
+    internal static MeshData Compact(ReadOnlySpan<MeshVertex> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<float2> bakeUvs = default, ulong maximumBytes = ulong.MaxValue,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var indexBytes = (ulong)indices.Length * sizeof(uint);
+        if (indexBytes > maximumBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         var output = new List<MeshVertex>();
+        var outputBakeUvs = new List<float2>();
         var remap = new Dictionary<uint, uint>();
         var compact = new uint[indices.Length];
         for (var i = 0; i < indices.Length; i++) {
+            if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
             if (!remap.TryGetValue(indices[i], out var mapped)) {
+                if (indexBytes + ((ulong)output.Count + 1) * (ulong)(MeshVertex.Stride + (bakeUvs.IsEmpty ? 0 : 8)) > maximumBytes)
+                    throw new ArgumentOutOfRangeException(nameof(maximumBytes), "Compacted Mesh input exceeds its array budget.");
                 remap.Add(indices[i], mapped = (uint)output.Count);
-                output.Add(vertices[indices[i]]);
+                output.Add(vertices[(int)indices[i]]);
+                if (!bakeUvs.IsEmpty) outputBakeUvs.Add(bakeUvs[(int)indices[i]]);
             }
             compact[i] = mapped;
         }
-        return WithBounds(output.ToArray(), compact);
+        return WithBounds(output.ToArray(), compact, outputBakeUvs.ToArray());
     }
 
-    private static MeshData WithBounds(MeshVertex[] vertices, uint[] indices)
+    private static MeshData WithBounds(MeshVertex[] vertices, uint[] indices, float2[] bakeUvs)
     {
         var min = new float3(float.PositiveInfinity);
         var max = new float3(float.NegativeInfinity);
         foreach (var vertex in vertices) { min = math.min(min, vertex.Position); max = math.max(max, vertex.Position); }
-        return new(vertices, indices, vertices.Length == 0 ? default : new(min, max));
+        return new(vertices, indices, vertices.Length == 0 ? default : new(min, max)) { BakeUvs = bakeUvs };
     }
 
     private static double3 Position(MeshVertex vertex) => new(vertex.Position.x, vertex.Position.y, vertex.Position.z);
     private static double3 Center(Aabb bounds) => (new double3(bounds.Min.x, bounds.Min.y, bounds.Min.z)
         + new double3(bounds.Max.x, bounds.Max.y, bounds.Max.z)) * 0.5;
-    private static VertexIdentity Identity(MeshVertex v) => new(v.Position.x, v.Position.y, v.Position.z,
-        v.Normal.x, v.Normal.y, v.Normal.z, v.UV.x, v.UV.y, v.Tangent.x, v.Tangent.y, v.Tangent.z, v.Tangent.w);
-    private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V,
-        float Tx, float Ty, float Tz, float Tw);
 }

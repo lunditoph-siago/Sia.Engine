@@ -31,11 +31,13 @@ public sealed partial class MeshPatchAsset
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(source.Vertices);
         ArgumentNullException.ThrowIfNull(source.Indices);
+        source.ValidateBakeUvs();
         cancellationToken.ThrowIfCancellationRequested();
-        var snapshot = new MeshData([.. source.Vertices], [.. source.Indices], source.Bounds);
+        var snapshot = new MeshData([.. source.Vertices], [.. source.Indices], source.Bounds) { BakeUvs = [.. source.BakeUvs] };
         var options = settings ?? MeshPatchBuildSettings.Default;
         var build = MeshPatchBuilder.Build(snapshot, options, cancellationToken);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        if (snapshot.HasBakeUvs) hash.AppendData("SIAPATCHBAKE1"u8);
         Span<byte> buffer = stackalloc byte[48];
         var writer = new Writer(buffer);
         writer.Int(snapshot.Vertices.Length);
@@ -52,6 +54,12 @@ public sealed partial class MeshPatchAsset
             writer = new(buffer);
             writer.UInt(index);
             hash.AppendData(buffer[..4]);
+        }
+        foreach (var uv in snapshot.BakeUvs) {
+            cancellationToken.ThrowIfCancellationRequested();
+            writer = new(buffer);
+            writer.Float(uv.x); writer.Float(uv.y);
+            hash.AppendData(buffer[..8]);
         }
         return new(build, options, Convert.ToHexString(hash.GetHashAndReset()));
     }
