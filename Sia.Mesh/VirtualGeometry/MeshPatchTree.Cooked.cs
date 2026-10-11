@@ -10,6 +10,10 @@ public sealed partial class MeshPatchTree
     {
         Require(roots >= 0 && roots <= nodes.Length && (nodes.Length == 0) == (roots == 0), "Invalid patch root count.");
         Require(Valid(geometry.Bounds), "Invalid geometry bounds.");
+        Require(geometry.BakeUvs.Length == 0 || geometry.BakeUvs.Length == geometry.Vertices.Length,
+            "Bake UVs must have one value per vertex.");
+        foreach (var uv in geometry.BakeUvs)
+            Require(float.IsFinite(uv.x) && float.IsFinite(uv.y), "Patch bake UVs must be finite.");
         foreach (var vertex in geometry.Vertices) {
             cancellationToken.ThrowIfCancellationRequested();
             Require(Finite(vertex.Position) && Finite(vertex.Normal) && float.IsFinite(vertex.UV.x) && float.IsFinite(vertex.UV.y)
@@ -59,7 +63,7 @@ public sealed partial class MeshPatchTree
             && nextMeshlet == meshlets.Meshlets.Length && leafTriangles == finest, "Incomplete patch forest or geometry stream.");
         Require(nodes.Length != 0 || geometry.Vertices.Length == 0, "Empty patch assets cannot contain unused geometry.");
         ValidateMeshlets(nodes, geometry, meshlets, cancellationToken);
-        var ids = VertexIds(geometry.Vertices);
+        var ids = VertexIds(geometry);
         try {
             ValidateBoundaries(nodes, geometry.Indices, ids, cancellationToken);
         }

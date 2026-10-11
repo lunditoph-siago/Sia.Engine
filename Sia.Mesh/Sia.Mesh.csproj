@@ -10,6 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../Sia.Asset/Sia.Asset.csproj" />
+    <ProjectReference Include="../Sia.Asset.CodeGenerators/Sia.Asset.CodeGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <PackageReference Include="Sia.Prelude" Version="2.1.5" />
     <PackageReference Include="Sia.Math" Version="0.0.3" />
     <PackageReference Include="Sia.CodeGenerators" Version="2.1.5" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
