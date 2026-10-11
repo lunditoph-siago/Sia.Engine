@@ -8,8 +8,8 @@ namespace Sia.Engine.Mesh;
 /// <summary>One original material section, with mesh-local independently cooked patch geometry.</summary>
 public readonly record struct MeshVirtualPart(int MaterialSlot, int FirstSourceTriangle, MeshPatchAsset Patches);
 
-/// <summary>A source-derived virtual representation without Raster/BVH, scene or GPU dependencies.</summary>
-public sealed partial class MeshVirtualData
+/// <summary>Transient virtual derivation result. Persistent records use an independent index and typed pages.</summary>
+public sealed class MeshVirtualData
 {
     public const int MaximumParts = 4096;
     private readonly MeshVirtualPart[] _parts;
@@ -23,7 +23,6 @@ public sealed partial class MeshVirtualData
     public bool HasBakeUvs { get; }
     public int FinestTriangleCount { get; }
     public ulong PayloadBytes { get; }
-    public ulong EncodedBytes { get; }
 
     private MeshVirtualData(string sourceHash, MeshPatchBuildSettings settings, Aabb bounds, int vertices,
         int triangles, bool bakeUvs, MeshVirtualPart[] parts)
@@ -40,7 +39,6 @@ public sealed partial class MeshVirtualData
         long sourceTriangles = 0;
         var finest = 0;
         var owned = PartArrayBytes(parts.Length);
-        var encoded = (ulong)HeaderBytes + (ulong)parts.Length * PartHeaderBytes;
         foreach (var part in parts) {
             if (part.MaterialSlot < 0 || part.FirstSourceTriangle != sourceTriangles || part.Patches is null
                 || part.Patches.Settings != settings || part.Patches.Build.SourceTriangleCount <= 0)
@@ -52,10 +50,9 @@ public sealed partial class MeshVirtualData
             sourceTriangles += part.Patches.Build.SourceTriangleCount;
             finest = checked(finest + tree.FinestTriangleCount);
             owned += tree.PayloadBytes;
-            encoded += (ulong)part.Patches.EncodedBytes;
         }
         if (sourceTriangles != triangles) throw new ArgumentException("Virtual Mesh parts do not cover the source triangles.");
-        FinestTriangleCount = finest; PayloadBytes = owned; EncodedBytes = encoded;
+        FinestTriangleCount = finest; PayloadBytes = owned;
         BuildKey = ComputeBuildKey(SourceHash, settings);
     }
 

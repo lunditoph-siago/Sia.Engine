@@ -36,7 +36,7 @@ public sealed class StreamPageArena : IDisposable
 
     private readonly GpuResources _gpu;
     private readonly StreamRangePool _vertices, _triangles;
-    private readonly byte[] _staging = new byte[StreamGeometryPage.MaximumBytes - 16];
+    private readonly byte[] _staging = new byte[StreamGeometryPage.MaximumBytes];
     private Upload? _current;
 
     public Entity Vertices { get; }

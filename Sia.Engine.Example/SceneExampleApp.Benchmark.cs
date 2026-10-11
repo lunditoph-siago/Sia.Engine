@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Sia.Asset;
 using Sia.Engine.Rendering.Pbr;
 using Sia.GLFW;
 
@@ -27,7 +26,7 @@ internal sealed partial class SceneExampleApp
     private sealed record BenchmarkReport(string Mode, string Quality, int Width, int Height, int RenderWidth, int RenderHeight,
         string Adapter, string PresentMode, string[] Passes,
         int WarmupFrames, int SampleFrames, bool Moving,
-        AssetChunkCacheStatistics? Chunks, long ManagedHeapBytes, FrameSample[] Frames,
+        long ManagedHeapBytes, FrameSample[] Frames,
         bool GpuTimingEnabled, int GpuTimingDropped, int GpuTimingPending, GpuSample[] GpuFrames,
         int TargetFps, int ResolutionChanges, int GraphCompilationCount, Workflow? Workflow, ManagedMemory Memory);
 
@@ -64,12 +63,12 @@ internal sealed partial class SceneExampleApp
         if (_benchmarkFrames != Program.BenchmarkFrames + 120)
             return;
         Console.WriteLine("BISTRO_BENCHMARK " + JsonSerializer.Serialize(new BenchmarkReport(
-            _pipeline == ScenePipeline.Unlit ? "unlit" : _materialStream is not null ? "hierarchical-stream" : _finest ? "resident-finest" : "resident-two-level", Program.Quality.ToString(),
+            _pipeline == ScenePipeline.Unlit ? "unlit" : _finest ? "resident-finest" : "resident-two-level", Program.Quality.ToString(),
             _framebufferWidth, _framebufferHeight, RenderWidth, RenderHeight, _adapterDescription,
             _presentMode.ToString(),
             _renderGraph!.PreparePlan().Graph.Passes.Select(pass => pass.Name).ToArray(),
             120, Program.BenchmarkFrames, Program.BenchmarkMotion,
-            _materialStream?.Statistics, GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
+            GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
             _timingDropped, _timingSlots.Count(s => s.Mapping is not null), _gpuSamples.ToArray(),
             Program.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount, _workflow,
             new(_firstFrameAllocatedBytes, _firstFrameHeapBytes, GC.GetTotalAllocatedBytes(false) - _measuredAllocatedStart,

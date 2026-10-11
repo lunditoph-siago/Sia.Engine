@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 
 namespace Sia.Engine.Mesh;
 
-public sealed partial class MeshPatchAsset
+public sealed class MeshPatchAsset
 {
     public MeshPatchBuildResult Build { get; }
     public MeshPatchBuildSettings Settings { get; }
@@ -38,29 +38,23 @@ public sealed partial class MeshPatchAsset
         var build = MeshPatchBuilder.Build(snapshot, options, cancellationToken);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         if (snapshot.HasBakeUvs) hash.AppendData("SIAPATCHBAKE1"u8);
-        Span<byte> buffer = stackalloc byte[48];
-        var writer = new Writer(buffer);
+        Span<byte> buffer = stackalloc byte[32 * 1024];
+        var writer = new MeshDataIO.Writer(Stream.Null, hash, buffer, cancellationToken);
         writer.Int(snapshot.Vertices.Length);
         writer.Int(snapshot.Indices.Length);
-        hash.AppendData(buffer[..8]);
         foreach (var vertex in snapshot.Vertices) {
             cancellationToken.ThrowIfCancellationRequested();
-            writer = new(buffer);
             writer.Vertex(vertex);
-            hash.AppendData(buffer);
         }
         foreach (var index in snapshot.Indices) {
             cancellationToken.ThrowIfCancellationRequested();
-            writer = new(buffer);
             writer.UInt(index);
-            hash.AppendData(buffer[..4]);
         }
         foreach (var uv in snapshot.BakeUvs) {
             cancellationToken.ThrowIfCancellationRequested();
-            writer = new(buffer);
             writer.Float(uv.x); writer.Float(uv.y);
-            hash.AppendData(buffer[..8]);
         }
+        writer.Flush();
         return new(build, options, Convert.ToHexString(hash.GetHashAndReset()));
     }
 }

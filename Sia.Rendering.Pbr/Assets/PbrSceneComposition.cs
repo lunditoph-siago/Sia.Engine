@@ -12,17 +12,17 @@ namespace Sia.Engine.Rendering.Pbr;
 public static partial class PbrSceneComposition
 {
     /// <summary>
-    /// Selects Virtual explicitly and shares its original section payloads. Source/Raster/BVH are not needed.
+    /// Selects Virtual indexes explicitly. Source/Raster/BVH and page payloads are not needed.
     /// The caller retains selected assets while the returned transient render input is in use.
     /// </summary>
-    public static PbrSceneAsset ResolveVirtual(PbrSceneData scene, Func<MeshReference, MeshManifest> meshes,
-        Func<VirtualReference, MeshVirtualData> virtuals, Func<MaterialReference, PbrMaterialData> materials,
+    public static PbrVirtualScene ResolveVirtual(PbrSceneData scene, Func<MeshReference, MeshManifest> meshes,
+        Func<VirtualReference, MeshVirtualPagesData> virtuals, Func<MaterialReference, PbrMaterialData> materials,
         Func<TextureReference, PbrTextureData> textures, out Guid[] sourceInstances,
         int maximumExpandedInstances = PbrSceneData.MaximumInstances, CancellationToken cancellationToken = default)
-        => Resolve<MeshVirtualRecord, MeshVirtualData, MeshPatchAsset, PbrSceneAsset>(scene, meshes, virtuals, materials, textures,
+        => Resolve<MeshVirtualRecord, MeshVirtualPagesData, PbrVirtualGeometry, PbrVirtualScene>(scene, meshes, virtuals, materials, textures,
             out sourceInstances, static m => m.Virtual, Validate,
-            static d => d.Parts.Length, static (d, p) => d.Parts[p].Patches, static (d, p) => d.Parts[p].MaterialSlot,
-            PbrSceneAsset.AdoptResolved, maximumExpandedInstances, cancellationToken);
+            static d => d.Parts.Length, static (d, p) => new(d, p), static (d, p) => d.Parts[p].MaterialSlot,
+            static (g, m, i, a, identity) => new(g, m, i, a, identity), maximumExpandedInstances, cancellationToken);
 
     /// <summary>Selects Raster explicitly. No Source/Virtual/BVH or geometry cooker is involved.</summary>
     public static PbrRasterScene ResolveRaster(PbrSceneData scene, Func<MeshReference, MeshManifest> meshes,
@@ -38,7 +38,7 @@ public static partial class PbrSceneComposition
         Func<MeshReference, MeshManifest> meshes, Func<AssetRefer<TRecord>.Id, TProduct> products,
         Func<MaterialReference, PbrMaterialData> materials, Func<TextureReference, PbrTextureData> textures,
         out Guid[] sourceInstances, Func<MeshManifest, MeshProductReference<TRecord>?> select,
-        Action<MeshManifest, PbrMeshBinding, string, TProduct> validate,
+        Action<MeshManifest, PbrMeshBinding, AssetId, string, TProduct> validate,
         Func<TProduct, int> partCount, Func<TProduct, int, TGeometry> geometryAt, Func<TProduct, int, int> materialSlot,
         Func<TGeometry[], PbrMaterialAsset[], PbrSceneInstance[], string, byte[], TScene> createScene,
         int maximumExpandedInstances, CancellationToken cancellationToken)
@@ -88,7 +88,7 @@ public static partial class PbrSceneComposition
                 data = products(new(product.Id)) ?? throw new AssetNotFoundException("Selected scene Mesh product is not acquired.");
                 productValues.Add(product.Id, data);
             }
-            validate(manifest, binding, product.BuildKey, data);
+            validate(manifest, binding, product.Id, product.BuildKey, data);
             var count = partCount(data);
             expanded += (long)uses[i] * count;
             if (expanded > maximumExpandedInstances) throw new InvalidOperationException("Expanded scene instance limit exceeded.");
@@ -123,9 +123,9 @@ public static partial class PbrSceneComposition
         if (count >= 4096) throw new InvalidOperationException($"Resolved scene {kind} table limit exceeded.");
     }
 
-    private static void Validate(MeshManifest manifest, PbrMeshBinding binding, string key, MeshVirtualData data)
+    private static void Validate(MeshManifest manifest, PbrMeshBinding binding, AssetId id, string key, MeshVirtualPagesData data)
     {
-        if (data.BuildKey != key || data.SourceHash != manifest.SourceHash || data.SourceVertexCount != manifest.VertexCount
+        if (data.ProductId != id || data.BuildKey != key || data.SourceHash != manifest.SourceHash || data.SourceVertexCount != manifest.VertexCount
             || data.SourceTriangleCount != manifest.TriangleCount || data.HasBakeUvs != manifest.HasBakeUvs || !data.Bounds.Equals(manifest.Bounds))
             throw new InvalidAssetException("Virtual product does not match its Mesh inventory.");
         ValidateSlots(manifest, binding);
@@ -137,7 +137,7 @@ public static partial class PbrSceneComposition
         if (slots.Count != manifest.MaterialSlots.Length) throw new InvalidAssetException("Virtual product omits a Mesh material slot.");
     }
 
-    private static void ValidateRaster(MeshManifest manifest, PbrMeshBinding binding, string key, MeshRasterData data)
+    private static void ValidateRaster(MeshManifest manifest, PbrMeshBinding binding, AssetId id, string key, MeshRasterData data)
     {
         if (data.BuildKey != key || data.SourceHash != manifest.SourceHash || data.Vertices.Length != manifest.VertexCount
             || data.Indices.Length / 3 != manifest.TriangleCount || data.HasBakeUvs != manifest.HasBakeUvs || !data.Bounds.Equals(manifest.Bounds))

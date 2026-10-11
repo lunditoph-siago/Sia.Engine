@@ -1,5 +1,6 @@
 using Sia.Math;
 using Sia.Engine.Mesh;
+using Sia.Asset;
 using System.Runtime.CompilerServices;
 
 namespace Sia.Engine.Rendering.Pbr;
@@ -11,7 +12,7 @@ public sealed record PbrStreamingSettings
     public ulong DetailBytes { get; init; } = 64ul * 1024 * 1024;
     public uint UploadBytesPerFrame { get; init; } = 256 * 1024;
     public int MaximumRequests { get; init; } = 2;
-    public long DecodedBytes { get; init; } = 2 * StreamGeometryPage.MaximumBytes;
+    public long DecodedBytes { get; init; } = 4 * MeshVirtualPageData.MaximumEncodedBytes;
     public int MaximumSelectionNodesPerView { get; init; } = 4096;
 }
 
@@ -67,7 +68,8 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     private readonly Dictionary<string, int> _pageIndices;
     private readonly StreamPageArena _arena;
     private readonly PbrStreamingSettings _settings;
-    private readonly BoundedPageScheduler _requests;
+    private readonly BoundedPageScheduler<MeshVirtualPageRecord> _requests;
+    private readonly Dictionary<string, StreamGeometryPage> _prepared = new(StringComparer.Ordinal);
     private readonly Dictionary<Key, Resident> _resident = [];
     private readonly Dictionary<Key, float> _wanted = [];
     private readonly HashSet<Key> _used = [];
@@ -116,7 +118,8 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         (_source, _arena, _settings) = (source, arena, settings);
         _pages = [.. source.PageTable.Values];
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
-        _requests = new(source.ReadPageAsync, settings.MaximumRequests, settings.DecodedBytes);
+        _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes + r.Data.Vertices.Length * 48 + r.Data.Indices.Length * 4),
+            2 * MeshVirtualPageData.MaximumEncodedBytes, settings.MaximumRequests, settings.DecodedBytes);
         _norms = new float[source.Instances.Length];
         for (var i = 0; i < _norms.Length; i++) _norms[i] = PbrGpuScene.TransformNorm(source.Instances.Span[i].Transform);
         _bounds = new Aabb[source.Instances.Length][];
@@ -384,8 +387,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             else _missingPages.Add(pair.Key.Page, (pair.Value, 1));
         }
         foreach (var pair in _missingPages)
-            _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].Bytes, pair.Value.Priority));
+            _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].DecodedBytes, pair.Value.Priority));
         _requests.Update(_demands);
+        foreach (var id in _prepared.Keys.Where(id => !_requests.ReadyIds.Contains(id, StringComparer.Ordinal)).ToArray()) _prepared.Remove(id);
         // Sort only the bounded ready set, rather than every demanded page each upload.
         _ready.Clear();
         _readyPages.Clear();
@@ -409,9 +413,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             if (_upload is null) {
                 while (readyIndex < _ready.Count) {
                     var candidate = _ready[readyIndex++];
-                    if (_resident.ContainsKey(candidate.Key) || !_requests.TryGetReady(_pages[candidate.Key.Page].Id, out var page))
+                    var id = _pages[candidate.Key.Page].Id;
+                    if (_resident.ContainsKey(candidate.Key) || !_requests.TryGetReady(id, out var record))
                         continue;
-                    if (!Reserve(page!, out var allocation)) continue;
+                    if (!_prepared.TryGetValue(id, out var page)) { page = _source.UsePage(id, record!); _prepared.Add(id, page); }
+                    if (!Reserve(page, out var allocation)) continue;
                     var transform = float4x4.identity;
                     var material = 1;
                     if (!_settings.GpuTraversal) {
@@ -433,7 +439,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             _upload = null;
             var (Priority, Remaining) = _missingPages[active.Key.Page];
             _missingPages[active.Key.Page] = (Priority, Remaining - 1);
-            if (Remaining == 1) _requests.Acknowledge(_pages[active.Key.Page].Id);
+            if (Remaining == 1) {
+                _requests.Acknowledge(_pages[active.Key.Page].Id);
+                _prepared.Remove(_pages[active.Key.Page].Id);
+            }
         }
     }
 
@@ -475,6 +484,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     private async Task StopAsync()
     {
         await _requests.DisposeAsync();
+        _prepared.Clear();
         if (_upload is { } p) _arena.Abort(p.Upload);
         _upload = null;
         _stopped = true;

@@ -38,8 +38,21 @@ internal static partial class ExampleContent
             var raster = await PbrSceneFiles.PrepareRasterAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var virtuals = await PbrSceneFiles.PrepareVirtualAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var bvh = await PbrSceneFiles.PrepareBvhAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
+            await using (var pageSource = new PbrSceneFiles.PageSource(scene, client, virtuals)) {
+                long total = virtuals.EncodedBytes;
+                foreach (var product in virtuals.Products.Values) {
+                    for (var p = 0; p < product.Data.Pages.Length; p++) {
+                        var page = product.Data.Pages[p];
+                        if (page.EncodedBytes > maximumFileBytes || page.EncodedBytes > maximumBundleBytes - total)
+                            throw new InvalidDataException("Virtual pages exceed the package encoded admission.");
+                        total += page.EncodedBytes;
+                        _ = await pageSource.ReadAsync(page.Reference, cancellationToken);
+                    }
+                }
+            }
             var ids = raster.Meshes.Keys.Concat(raster.Materials.Keys).Concat(raster.Textures.Keys)
-                .Concat(raster.Products.Keys).Concat(virtuals.Products.Keys).Concat(bvh.Products.Keys);
+                .Concat(raster.Products.Keys).Concat(virtuals.Products.Keys).Concat(bvh.Products.Keys)
+                .Concat(virtuals.Products.Values.SelectMany(p => p.Data.Pages.ToArray()).Select(p => p.Id));
             var names = ids.Select(id => id.Value.ToString("N") + ".siaasset").ToHashSet(StringComparer.Ordinal);
             names.Add(raster.Id.Value.ToString("N") + ".siascene");
             return names;

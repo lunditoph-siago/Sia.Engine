@@ -25,7 +25,7 @@ public static partial class Program
             }
             if (args.Length == 4 && args[0] == "--cook-mesh" && args[2] == "--output") {
                 var mesh = MeshCook.Cook(args[1], args[3]);
-                Console.WriteLine($"Cooked Mesh {mesh.Value:N}: {Path.GetFullPath(args[3])}");
+                Console.WriteLine($"Cooked Mesh {mesh.Id.Value:N}: {Path.GetFullPath(args[3])}");
                 return 0;
             }
             if (args.Length == 4 && args[0] == "--bake-environment" && args[2] == "--output") {
@@ -34,10 +34,6 @@ public static partial class Program
             }
             if (args.Length == 4 && args[0] == "--bake-probes" && args[2] == "--output") {
                 BakeProbes(args[1], args[3]);
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--cook-stream" && args[2] == "--output") {
-                await CookStreamAsync(args[1], args[3]);
                 return 0;
             }
 #endif
@@ -55,21 +51,18 @@ public static partial class Program
             }
             var referencePath = pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny
                 && scenePath is not null && PbrSceneFiles.IsReferenceScene(scenePath);
-            if (pipeline == ScenePipeline.Bunny && !referencePath)
-                throw new ArgumentException("Bunny requires a cooked reference .siascene, not runtime cooking.");
+            if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && !referencePath)
+                throw new ArgumentException("Mesh scenes require a cooked reference .siascene with independent products.");
             PbrSceneFiles.Prepared? references = null;
+            await using var virtualUse = referencePath && Quality != Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareStreamingAsync(scenePath!, streamHttp) : null;
             if (referencePath) references = Quality == Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareRasterAsync(scenePath!, streamHttp)
-                : await PbrSceneFiles.PrepareVirtualAsync(scenePath!, streamHttp);
+                : virtualUse;
             var lighting = await LightingFiles.PrepareAsync(EnvironmentPath, ProbesPath, streamHttp);
-            await using var streaming = scenePath is not null && scenePath.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase)
-                    ? await OpenStreamAsync(scenePath, streamHttp) : null;
-            var scene = streaming?.Bootstrap
-                ?? (pipeline == ScenePipeline.Pbr && references is null ? await LoadPbrAsync(scenePath, finest, streamHttp) : null);
-            var app = new SceneExampleApp(pipeline, debugMode, distance, scene, finest, camera, streaming, references, lighting);
+            var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting);
             references = null;
             lighting = null;
-            scene = null;
 #if BROWSER
             try {
                 SetLoadingState("Preparing graphics", double.NaN);

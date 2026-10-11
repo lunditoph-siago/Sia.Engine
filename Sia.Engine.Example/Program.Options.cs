@@ -188,9 +188,6 @@ public static partial class Program
         if (camera is not null && pipeline != ScenePipeline.Pbr) {
             throw new ArgumentException("--camera requires --pipeline pbr.");
         }
-        if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
-            throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
-        }
         return (pipeline, debugMode, distance, scenePath, finest ?? false, camera);
     }
 
