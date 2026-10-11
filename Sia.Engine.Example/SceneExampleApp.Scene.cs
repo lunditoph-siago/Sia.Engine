@@ -1,4 +1,5 @@
 using Sia;
+using Sia.Asset;
 using Sia.Engine;
 using Sia.Engine.Camera;
 using Sia.Engine.Lighting;
@@ -38,7 +39,11 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld = new World();
         _renderWorld = new RenderWorld();
 
-        var meshRegistry = _renderWorld.Entities.AcquireAddon<MeshRegistry>();
+        AssetLibrary.RegisterAsset<MeshSourceAsset, MeshSourceRecord>();
+        AssetLibrary.RegisterAsset<MeshRasterAsset, MeshRasterRecord>();
+        AssetLibrary.RegisterAsset<MeshManifestAsset, MeshManifestRecord>();
+        _renderWorld.Entities.AcquireAddon<AssetLibrary>();
+        _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
         _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(Program.Width, Program.Height);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
@@ -53,7 +58,7 @@ internal sealed unsafe partial class SceneExampleApp
             .Add<CameraSystem>()
             .CreateStage(_sceneWorld);
 
-        BuildScene(meshRegistry);
+        BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
             InitializePatchLod();
@@ -77,7 +82,7 @@ internal sealed unsafe partial class SceneExampleApp
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer!).Build();
     }
 
-    private void BuildScene(MeshRegistry meshRegistry)
+    private void BuildScene()
     {
         var world = _sceneWorld!;
 
@@ -92,19 +97,19 @@ internal sealed unsafe partial class SceneExampleApp
         if (_pipeline == ScenePipeline.Pbr) { BuildMaterialScene(); return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
-        var groundHandle = meshRegistry.Register(groundMesh);
+        var groundMeshAsset = CreateRasterMesh(groundMesh);
         world.Create(HList.From(
             new Transform(new float3(0, -0.6f, 0), quaternion.identity, new float3(1, 1, 1)),
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             new Bounds(groundMesh.Bounds),
             new WorldBounds(groundMesh.Bounds),
-            new MeshComponent(groundHandle),
+            new MeshComponent(groundMeshAsset),
             new UnlitMaterial(new float4(0.12f, 0.16f, 0.22f, 1.0f)),
             new MeshRenderer()));
 
         var sphereMesh = ProceduralMesh.Sphere(radius: 0.45f);
-        var sphereHandle = meshRegistry.Register(sphereMesh);
+        var sphereMeshAsset = CreateRasterMesh(sphereMesh);
         var gridSteps = _gridExtent * 2;
 
         for (var gx = -_gridExtent; gx <= _gridExtent; gx++) {
@@ -119,7 +124,7 @@ internal sealed unsafe partial class SceneExampleApp
                     new Node<SceneGraph>(null),
                     new Bounds(sphereMesh.Bounds),
                     new WorldBounds(sphereMesh.Bounds),
-                    new MeshComponent(sphereHandle),
+                    new MeshComponent(sphereMeshAsset),
                     new UnlitMaterial(new float4(
                         0.15f + 0.8f * metallic,
                         0.15f + 0.8f * roughness,
@@ -130,14 +135,14 @@ internal sealed unsafe partial class SceneExampleApp
         }
 
         var occluderMesh = ProceduralMesh.Cube(size: 1.6f);
-        var occluderHandle = meshRegistry.Register(occluderMesh);
+        var occluderMeshAsset = CreateRasterMesh(occluderMesh);
         world.Create(HList.From(
             new Transform(new float3(5.5f, 2.5f, 1.0f), quaternion.identity, new float3(1, 1, 1)),
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             new Bounds(occluderMesh.Bounds),
             new WorldBounds(occluderMesh.Bounds),
-            new MeshComponent(occluderHandle),
+            new MeshComponent(occluderMeshAsset),
             new UnlitMaterial(new float4(1.0f, 0.55f, 0.12f, 1.0f)),
             new MeshRenderer()));
 

@@ -20,7 +20,7 @@ public sealed class UnlitRenderer
     {
         var matrices = camera.Get<CameraMatrices>();
         var cache = frame.MainWorld.AcquireAddon<UnlitRenderCache>();
-        cache.Refresh();
+        cache.Refresh(frame.ResourceWorld.GetAddon<MeshRegistry>());
         if (state.SceneVersion == cache.Version && state.Extracted is { } previous
             && previous.ViewProjection.Equals(matrices.ViewProj)) return previous;
         var visible = cache.Cull(matrices.Frustum);
