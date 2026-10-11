@@ -12,6 +12,13 @@ public sealed partial class MeshPatchAsset
     private const int HashOffset = 48;
     private const int HashSize = 32;
     private static ReadOnlySpan<int> Strides => [56, 48, 4, 72, 4, 1, 4];
+    private static bool ValidStride(int section, int stride)
+        => stride == Strides[section] || (section == 1 && stride == 56);
+
+    public int EncodedBytes => checked((int)(HeaderSize + (long)Build.Tree.Nodes.Length * 56
+        + (long)Build.Tree.VertexCount * (Build.Tree.HasBakeUvs ? 56 : 48)
+        + (long)Build.Tree.TriangleCount * 19 + (long)Build.Tree.MeshletCount * 72
+        + (long)Build.Tree.MeshletVertexCount * 4));
 
     public byte[] Encode(CancellationToken cancellationToken = default)
     {
@@ -19,11 +26,14 @@ public sealed partial class MeshPatchAsset
         var tree = Build.Tree;
         const int headerSize = HeaderSize;
         var (geometry, meshlets) = tree.CopyGeometry();
+        Span<int> strides = stackalloc int[7];
+        Strides.CopyTo(strides);
+        if (geometry.HasBakeUvs) strides[1] = 56;
         int[] counts = [tree.Nodes.Length, geometry.Vertices.Length, geometry.Indices.Length,
             meshlets.Meshlets.Length, meshlets.VertexIndices.Length, meshlets.TriangleIndices.Length,
             meshlets.SourceTriangleIndices.Length];
         var length = headerSize;
-        for (var i = 0; i < counts.Length; i++) { length = checked(length + counts[i] * Strides[i]); }
+        for (var i = 0; i < counts.Length; i++) { length = checked(length + counts[i] * strides[i]); }
         var bytes = new byte[length];
         "SIAPATC2"u8.CopyTo(bytes);
         var writer = new Writer(bytes.AsSpan(8));
@@ -47,8 +57,8 @@ public sealed partial class MeshPatchAsset
         for (var i = 0; i < counts.Length; i++) {
             writer.Long(offset);
             writer.Int(counts[i]);
-            writer.Int(Strides[i]);
-            offset += (long)counts[i] * Strides[i];
+            writer.Int(strides[i]);
+            offset += (long)counts[i] * strides[i];
         }
         writer.Int(QuadricErrorMetric);
         writer = new(bytes.AsSpan(headerSize));
@@ -64,9 +74,10 @@ public sealed partial class MeshPatchAsset
             writer.Int(node.TriangleOffset);
             writer.Int(node.TriangleCount);
         }
-        foreach (var vertex in geometry.Vertices) {
+        for (var i = 0; i < geometry.Vertices.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
-            writer.Vertex(vertex);
+            writer.Vertex(geometry.Vertices[i]);
+            if (geometry.HasBakeUvs) { writer.Float(geometry.BakeUvs[i].x); writer.Float(geometry.BakeUvs[i].y); }
         }
         foreach (var index in geometry.Indices) { writer.UInt(index); }
         foreach (var meshlet in meshlets.Meshlets) {
@@ -113,10 +124,7 @@ public sealed partial class MeshPatchAsset
         var sourceHash = Convert.ToHexString(bytes.Slice(16, HashSize));
         reader = new(bytes[80..]);
         var settings = new MeshPatchBuildSettings(reader.Int(), reader.Int(), reader.Float(), reader.Float(), reader.Float());
-        Require(settings.MaxLeafTriangles is >= 1 and <= 512 && settings.MaxChildren is >= 2 and <= 8
-            && float.IsFinite(settings.ParentTriangleRatio) && settings.ParentTriangleRatio > 0 && settings.ParentTriangleRatio < 1
-            && float.IsFinite(settings.NormalWeight) && settings.NormalWeight >= 0
-            && float.IsFinite(settings.UVWeight) && settings.UVWeight >= 0, "Invalid patch build settings.");
+        Require(settings.IsValid, "Invalid patch build settings.");
         var sourceTriangles = reader.Int();
         var removed = reader.Int();
         var simplified = reader.Int();
@@ -126,16 +134,19 @@ public sealed partial class MeshPatchAsset
         var finest = reader.Int();
         var bounds = reader.Box();
         Span<int> counts = stackalloc int[7];
+        var hasBakeUvs = false;
         long offset = headerSize;
         for (var i = 0; i < counts.Length; i++) {
             Require(reader.Long() == offset, "Patch sections must form a contiguous ordered stream.");
             counts[i] = reader.Int();
-            var stride = Strides[i];
-            Require(counts[i] >= 0 && reader.Int() == stride, "Invalid patch section count or stride.");
+            var stride = reader.Int();
+            Require(counts[i] >= 0 && ValidStride(i, stride), "Invalid patch section count or stride.");
+            if (i == 1) hasBakeUvs = stride == 56;
             offset += (long)counts[i] * stride;
             Require(offset <= bytes.Length, "Patch section exceeds the asset length.");
         }
         Require(offset == bytes.Length, "Unexpected data after patch sections.");
+        Require(!hasBakeUvs || counts[1] > 0, "A bake UV vertex layout requires nonempty vertices.");
         Require(reader.Int() == QuadricErrorMetric, "Unsupported patch error metric.");
         Require(sourceTriangles >= 0 && removed >= 0 && removed <= sourceTriangles && finest == sourceTriangles - removed
             && simplified >= 0 && simplified <= counts[0] && targetMisses >= 0 && unreduced >= 0,
@@ -150,9 +161,11 @@ public sealed partial class MeshPatchAsset
                 reader.Int(), reader.Int(), reader.Int(), reader.Int());
         }
         var vertices = new MeshVertex[counts[1]];
+        var bakeUvs = hasBakeUvs ? new float2[counts[1]] : [];
         for (var i = 0; i < vertices.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
             vertices[i] = reader.Vertex();
+            if (hasBakeUvs) bakeUvs[i] = new(reader.Float(), reader.Float());
         }
         var indices = reader.UIntArray(counts[2]);
         var clusters = new Meshlet[counts[3]];
@@ -164,7 +177,7 @@ public sealed partial class MeshPatchAsset
         var references = reader.UIntArray(counts[4]);
         var localIndices = reader.Bytes(counts[5]).ToArray();
         var sourceIndices = reader.UIntArray(counts[6]);
-        var tree = MeshPatchTree.Restore(nodes, roots, finest, new(vertices, indices, bounds),
+        var tree = MeshPatchTree.Restore(nodes, roots, finest, new(vertices, indices, bounds) { BakeUvs = bakeUvs },
             new(clusters, references, localIndices, sourceIndices), cancellationToken);
         Require(simplified == nodes.Count(node => node.ChildCount != 0), "Simplification count differs from the patch hierarchy.");
         return new(new(tree, sourceTriangles, removed, simplified, targetMisses, unreduced), settings, sourceHash);

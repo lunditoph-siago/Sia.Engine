@@ -7,15 +7,18 @@ public static partial class MeshPatchBuilder
         ArgumentNullException.ThrowIfNull(mesh);
         ArgumentNullException.ThrowIfNull(mesh.Vertices);
         ArgumentNullException.ThrowIfNull(mesh.Indices);
+        mesh.ValidateBakeUvs();
         cancellationToken.ThrowIfCancellationRequested();
         if (mesh.Indices.Length % 3 != 0) { throw new ArgumentException("Indices must describe complete triangles.", nameof(mesh)); }
         var vertices = new List<MeshVertex>();
-        var identities = new Dictionary<VertexIdentity, uint>();
+        var bakeUvs = new List<Sia.Math.float2>();
+        var identities = new Dictionary<MeshVertexIdentity, uint>();
         var remap = new uint[mesh.Vertices.Length];
         for (var i = 0; i < mesh.Vertices.Length; i++) {
             if ((i & 4095) == 0) { cancellationToken.ThrowIfCancellationRequested(); }
             var v = mesh.Vertices[i];
-            var identity = Identity(v);
+            var bakeUv = mesh.HasBakeUvs ? mesh.BakeUvs[i] : default;
+            var identity = MeshVertexIdentity.Create(v, bakeUv);
             if (!float.IsFinite(identity.X) || !float.IsFinite(identity.Y) || !float.IsFinite(identity.Z)
                 || !float.IsFinite(identity.Nx) || !float.IsFinite(identity.Ny) || !float.IsFinite(identity.Nz)
                 || !float.IsFinite(identity.U) || !float.IsFinite(identity.V) || !v.HasFiniteTangent) {
@@ -24,6 +27,7 @@ public static partial class MeshPatchBuilder
             if (!identities.TryGetValue(identity, out remap[i])) {
                 identities.Add(identity, remap[i] = (uint)vertices.Count);
                 vertices.Add(v);
+                if (mesh.HasBakeUvs) bakeUvs.Add(bakeUv);
             }
         }
         removed = 0;
@@ -43,7 +47,7 @@ public static partial class MeshPatchBuilder
             if (!faces.Add(Face((int)a, (int)b, (int)c))) { throw new ArgumentException("Mesh contains duplicate faces.", nameof(mesh)); }
             indices.AddRange([a, b, c]);
         }
-        var result = Compact(vertices.ToArray(), indices.ToArray());
+        var result = Compact(vertices.ToArray(), indices.ToArray(), bakeUvs.ToArray(), cancellationToken: cancellationToken);
         _ = Topology(result, cancellationToken);
         return result;
     }

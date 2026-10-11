@@ -11,8 +11,10 @@ public static partial class MeshPatchBuilder
         var deleted = new bool[triangles.Length];
         var revisions = new int[mesh.Vertices.Length];
         var positions = mesh.Vertices.Select(Position).ToArray();
+        var coordinateCount = mesh.HasBakeUvs ? 14 : 12;
+        var quadricSize = coordinateCount * (coordinateCount + 1) / 2;
         var quadrics = BuildQuadrics(mesh, triangles, locked, settings, cancellationToken,
-            out var coordinates, out var positionScale);
+            coordinateCount, out var coordinates, out var positionScale);
         var maximumCost = 0d;
         var candidates = new PriorityQueue<Collapse, (double Cost, double Length, int From, int To)>();
         var edges = new HashSet<(int, int)>();
@@ -26,7 +28,7 @@ public static partial class MeshPatchBuilder
             var (from, to, fromRevision, toRevision) = collapse;
             if (fromRevision != revisions[from] || toRevision != revisions[to] || incident[from].Count == 0
                 || incident[to].Count == 0 || locked[from]) { continue; }
-            if (!CanCollapse(from, to, triangles, incident, locked, positions, mesh.Vertices)) { continue; }
+            if (!CanCollapse(from, to, triangles, incident, locked, positions, mesh)) { continue; }
             maximumCost = System.Math.Max(maximumCost, priority.Cost);
             var affected = new HashSet<int>();
             foreach (var t in incident[from].Concat(incident[to])) {
@@ -43,7 +45,7 @@ public static partial class MeshPatchBuilder
                     incident[face.A].Add(t); incident[face.B].Add(t); incident[face.C].Add(t);
                 }
             }
-            for (var i = 0; i < k_QuadricSize; i++) { quadrics[to * k_QuadricSize + i] += quadrics[from * k_QuadricSize + i]; }
+            for (var i = 0; i < quadricSize; i++) { quadrics[to * quadricSize + i] += quadrics[from * quadricSize + i]; }
             edges.Clear();
             foreach (var v in affected) {
                 revisions[v]++;
@@ -64,14 +66,14 @@ public static partial class MeshPatchBuilder
         }
         // Coordinates are normalized by positionScale; restore mesh-space units.
         var error = RoundUp(System.Math.Sqrt(maximumCost) * positionScale);
-        return (Compact(mesh.Vertices, indices), error);
+        return (Compact(mesh.Vertices, indices, mesh.BakeUvs, cancellationToken: cancellationToken), error);
 
         void Enqueue(int from, int to)
         {
             if (locked[from] || incident[from].Count == 0 || incident[to].Count == 0) { return; }
-            var point = coordinates.AsSpan(to * k_CoordinateCount, k_CoordinateCount);
-            var cost = Evaluate(quadrics.AsSpan(from * k_QuadricSize, k_QuadricSize), point)
-                + Evaluate(quadrics.AsSpan(to * k_QuadricSize, k_QuadricSize), point);
+            var point = coordinates.AsSpan(to * coordinateCount, coordinateCount);
+            var cost = Evaluate(quadrics.AsSpan(from * quadricSize, quadricSize), point)
+                + Evaluate(quadrics.AsSpan(to * quadricSize, quadricSize), point);
             if (!double.IsFinite(cost)) { return; }
             candidates.Enqueue(new(from, to, revisions[from], revisions[to]),
                 (System.Math.Max(0, cost), math.lengthsq(positions[from] - positions[to]), from, to));
@@ -79,8 +81,9 @@ public static partial class MeshPatchBuilder
     }
 
     private static bool CanCollapse(int from, int to, Triangle[] triangles, HashSet<int>[] incident, bool[] locked,
-        double3[] positions, MeshVertex[] vertices)
+        double3[] positions, MeshData mesh)
     {
+        var vertices = mesh.Vertices;
         if (vertices[from].Tangent.w != vertices[to].Tangent.w) { return false; }
         var fromNeighbors = Neighbors(from);
         var toNeighbors = Neighbors(to);
@@ -103,8 +106,7 @@ public static partial class MeshPatchBuilder
             var oldNormal = math.cross(positions[before.B] - positions[before.A], positions[before.C] - positions[before.A]);
             var newNormal = math.cross(positions[after.B] - positions[after.A], positions[after.C] - positions[after.A]);
             if (math.dot(oldNormal, newNormal) <= 0) { return false; }
-            var oldArea = UVArea(before);
-            if (oldArea != 0 && oldArea * UVArea(after) <= 0) { return false; }
+            if (!PreservesUV(before, after, false) || (mesh.HasBakeUvs && !PreservesUV(before, after, true))) { return false; }
         }
         return faces.Count != 0;
 
@@ -119,11 +121,17 @@ public static partial class MeshPatchBuilder
             return neighbors;
         }
 
-        double UVArea(Triangle face)
+        bool PreservesUV(Triangle before, Triangle after, bool bake)
         {
-            var a = vertices[face.A].UV;
-            var b = vertices[face.B].UV;
-            var c = vertices[face.C].UV;
+            var oldArea = UVArea(before, bake);
+            return oldArea == 0 || oldArea * UVArea(after, bake) > 0;
+        }
+
+        double UVArea(Triangle face, bool bake)
+        {
+            var a = bake ? mesh.BakeUvs[face.A] : vertices[face.A].UV;
+            var b = bake ? mesh.BakeUvs[face.B] : vertices[face.B].UV;
+            var c = bake ? mesh.BakeUvs[face.C] : vertices[face.C].UV;
             return ((double)b.x - a.x) * ((double)c.y - a.y) - ((double)b.y - a.y) * ((double)c.x - a.x);
         }
     }
