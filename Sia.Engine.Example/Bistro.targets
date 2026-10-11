@@ -3,10 +3,10 @@
     <_ExamplePathPrefix Condition="'$(OS)' == 'Windows_NT'">\\?\</_ExamplePathPrefix>
   </PropertyGroup>
   <!-- Supply the verified example content package output. Builds can compile
-       without content; publishing requires the complete four-scene package. -->
+       without content; publishing requires the package or a browser delegation entry. -->
   <Target Name="ValidateExampleContent" BeforeTargets="PrepareForPublish">
     <Error Condition="'$(ExampleContentDirectory)' == '' or !Exists('$(ExampleContentDirectory)/default-scenes.json')"
-           Text="Publish requires ExampleContentDirectory from --package-example-content." />
+           Text="Publish requires ExampleContentDirectory with a packaged catalog or browser HTTPS delegation entry." />
   </Target>
   <Target Name="CopyExampleContentToOutput" AfterTargets="Build" Condition="'$(ExampleContentDirectory)' != ''">
     <Error Condition="!Exists('$(ExampleContentDirectory)/default-scenes.json')" Text="Example content catalog is missing." />

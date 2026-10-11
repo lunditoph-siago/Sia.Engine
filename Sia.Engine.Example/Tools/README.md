@@ -56,6 +56,17 @@ Build/publish with `-p:ExampleContentDirectory=<package-directory>` to copy defa
 to native Assets or published browser wwwroot/Assets. Publish requires this package;
 compilation can run without content. The unchanged ORCA license is included.
 
+The full four-case package with all three products is about 1.24 GiB, exceeding
+[GitHub Pages' 1 GB published-site limit](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits). For Pages, serve the complete package
+on a public HTTPS asset host that allows the example origin through CORS. The
+manual Deploy workflow requires `content_catalog_url`, pointing to that host's
+`default-scenes.json`; it publishes a small `{ "catalog": "https://..." }` entry
+and the license. Browser resolution follows one delegation, then validates the
+same bounded four-scene catalog and resolves its versioned content beside it.
+Embedded URL credentials and further delegation are rejected. Native publishing
+uses the complete local package. Publishing content or dispatching deployment
+is a separate operator action; cooking and compilation do not upload anything.
+
 Native and browser use the same default descriptor. Low loads Raster; Medium/High
 load Virtual. Bunny is pre-cooked, with one shared Mesh and 135 instances. `--scene`
 can select an explicit reference scene; `--lod finest` selects zero error within the
