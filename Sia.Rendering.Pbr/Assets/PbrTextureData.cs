@@ -10,17 +10,24 @@ public readonly record struct PbrTextureSampler(
     WGPUMipmapFilterMode MipFilter,
     bool UseMipmaps)
 {
+    internal bool IsValid => AddressU is WGPUAddressMode.Repeat or WGPUAddressMode.MirrorRepeat or WGPUAddressMode.ClampToEdge
+        && AddressV is WGPUAddressMode.Repeat or WGPUAddressMode.MirrorRepeat or WGPUAddressMode.ClampToEdge
+        && MinFilter is WGPUFilterMode.Nearest or WGPUFilterMode.Linear
+        && MagFilter is WGPUFilterMode.Nearest or WGPUFilterMode.Linear
+        && MipFilter is WGPUMipmapFilterMode.Nearest or WGPUMipmapFilterMode.Linear;
+
     public static PbrTextureSampler Default => new(WGPUAddressMode.Repeat, WGPUAddressMode.Repeat,
         WGPUFilterMode.Linear, WGPUFilterMode.Linear, WGPUMipmapFilterMode.Linear, true);
 }
 
-public sealed class PbrTextureData
+public sealed partial class PbrTextureData
 {
     public uint Width { get; }
     public uint Height { get; }
     public bool Srgb { get; }
     public PbrTextureSampler Sampler { get; }
     public ReadOnlyMemory<ReadOnlyMemory<byte>> MipLevels { get; }
+    public ulong PayloadBytes { get; }
 
     private PbrTextureData(uint width, uint height, bool srgb, PbrTextureSampler sampler, ReadOnlyMemory<byte>[] levels)
     {
@@ -29,6 +36,7 @@ public sealed class PbrTextureData
         Srgb = srgb;
         Sampler = sampler;
         MipLevels = levels;
+        foreach (var level in levels) PayloadBytes += (ulong)level.Length;
     }
 
     internal static PbrTextureData FromValidatedMipChain(uint width, uint height, bool srgb,
@@ -38,12 +46,7 @@ public sealed class PbrTextureData
         PbrTextureSampler? sampler = null)
     {
         var sampling = sampler ?? PbrTextureSampler.Default;
-        if (width == 0 || height == 0 || width > 8192 || height > 8192 || levels.IsEmpty
-            || sampling.AddressU is not (WGPUAddressMode.Repeat or WGPUAddressMode.MirrorRepeat or WGPUAddressMode.ClampToEdge)
-            || sampling.AddressV is not (WGPUAddressMode.Repeat or WGPUAddressMode.MirrorRepeat or WGPUAddressMode.ClampToEdge)
-            || sampling.MinFilter is not (WGPUFilterMode.Nearest or WGPUFilterMode.Linear)
-            || sampling.MagFilter is not (WGPUFilterMode.Nearest or WGPUFilterMode.Linear)
-            || sampling.MipFilter is not (WGPUMipmapFilterMode.Nearest or WGPUMipmapFilterMode.Linear)) {
+        if (!ValidShape(width, height, levels.Length, sampling)) {
             throw new ArgumentException("Invalid PBR texture dimensions, mip levels or sampler.");
         }
         var w = width;
@@ -61,4 +64,8 @@ public sealed class PbrTextureData
         }
         return new(width, height, srgb, sampling, copied);
     }
+
+    internal static bool ValidShape(uint width, uint height, int levels, PbrTextureSampler sampler)
+        => width is > 0 and <= 8192 && height is > 0 and <= 8192 && levels is > 0 and <= 14
+            && (levels == 1 || (width >> (levels - 2)) > 1 || (height >> (levels - 2)) > 1) && sampler.IsValid;
 }
