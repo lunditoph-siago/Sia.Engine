@@ -18,8 +18,6 @@ public static partial class Program
     internal static bool GpuTraversal { get; private set; } = true;
     internal static PbrOpaquePath? OpaquePath { get; private set; }
     internal static bool ExportSurfaceData { get; private set; }
-    internal static IblEnvironmentAsset? BakedEnvironment { get; private set; }
-    internal static DiffuseProbeAsset? BakedProbes { get; private set; }
     internal static bool? DynamicSceneGi { get; private set; }
     internal static string? ProbesPath { get; private set; }
     internal static string? EnvironmentPath { get; private set; }

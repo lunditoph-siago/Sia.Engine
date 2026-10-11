@@ -20,7 +20,8 @@ public sealed class IblEnvironmentAsset
 
     internal IblEnvironmentAsset(ProceduralSky sky, float4[] coefficients, Half[] cube, Half[] lut)
     {
-        sky.Validate();
+        try { sky.ValidateData(); }
+        catch (ArgumentOutOfRangeException error) { throw new InvalidDataException("Invalid environment sky data.", error); }
         if (coefficients.Length != 9 || cube.Length != CubeTexels * 4 || lut.Length != LutTexels * 4
             || coefficients.Any(c => !math.all(math.isfinite(c)))
             || cube.Any(v => !Half.IsFinite(v)) || lut.Any(v => !Half.IsFinite(v)))

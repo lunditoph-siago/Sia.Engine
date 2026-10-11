@@ -24,7 +24,7 @@ internal sealed unsafe class DebugPipeline
         var deviceHandle = device.GetWgpu<WGPUDevice>();
         var shader = world.OwnWgpu(Wgpu.CreateWgslShaderModule(
             deviceHandle,
-            DebugShaderSource.Load(),
+            DebugShaderSource.Acquire(world).Get<WgslSourceResource>().Source,
             "debug-overlay"));
         var bindGroupLayout = world.OwnWgpu(CreateBindGroupLayout(deviceHandle));
         var pipelineLayout = world.OwnWgpu(CreatePipelineLayout(
