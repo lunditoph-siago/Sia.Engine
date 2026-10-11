@@ -1,18 +1,23 @@
 using System.Reflection;
+using Sia.Asset;
 using Sia.Graphics.Wgsl;
 
 namespace Sia.Engine.Rendering;
 
-public static class RenderingShaderSource
+public static partial class RenderingShaderSource
 {
     public static string Compile(string source, IReadOnlyDictionary<string, string>? definitions = null,
         WgslImportResolver? resolveImport = null)
+        => CompileResolved(source, (module, context) => module.StartsWith("rendering/", StringComparison.Ordinal)
+            ? ReadModule(module) : resolveImport?.Invoke(module, context), definitions);
+
+    // Stateless preprocessing with explicit caller lookup; no builtin IO/acquisition fallback.
+    public static string CompileResolved(string source, WgslImportResolver resolveImport,
+        IReadOnlyDictionary<string, string>? definitions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(source);
-        var result = WgslPreprocessor.Process(source, definitions, (module, context) =>
-            module.StartsWith("rendering/", StringComparison.Ordinal)
-                ? ReadModule(module)
-                : resolveImport?.Invoke(module, context));
+        ArgumentNullException.ThrowIfNull(resolveImport);
+        var result = WgslPreprocessor.Process(source, definitions, resolveImport);
         if (result.HasErrors)
             throw new InvalidOperationException($"Rendering shader: {string.Join("\n", result.Diagnostics)}");
         return result.CombinedSource;
@@ -30,9 +35,7 @@ public static class RenderingShaderSource
         ArgumentNullException.ThrowIfNull(module);
         if (!module.StartsWith(modulePrefix, StringComparison.Ordinal)) return null;
         var name = resourcePrefix + module[modulePrefix.Length..].Replace('/', '.') + ".wgsl";
-        using var stream = assembly.GetManifestResourceStream(name);
-        if (stream is null) return null;
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        if (assembly.GetManifestResourceInfo(name) is null) return null;
+        return EmbeddedLoader.Load<WgslSourceRecord>(name, assembly).Source;
     }
 }
