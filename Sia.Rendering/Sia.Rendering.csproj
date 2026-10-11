@@ -19,6 +19,7 @@
     <ProjectReference Include="../Sia.Light/Sia.Light.csproj" />
     <ProjectReference Include="../Sia.Mesh/Sia.Mesh.csproj" />
     <ProjectReference Include="../Sia.Asset/Sia.Asset.csproj" />
+    <ProjectReference Include="../Sia.Asset.CodeGenerators/Sia.Asset.CodeGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

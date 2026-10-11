@@ -18,6 +18,17 @@ struct ProbeConfig {
 @group(0) @binding(2) var<storage, read_write> probes: array<vec4<f32>>;
 @group(0) @binding(3) var probe_texture: texture_storage_3d<rgba16float, write>;
 
+#ifdef INSTANCE_PROBE_TRACE
+#import rendering/Geometry/instance_trace
+@group(0) @binding(4) var<storage, read> instance_trace_geometry: array<vec4<u32>>;
+@group(0) @binding(5) var<storage, read> instance_trace_instances: array<vec4<u32>>;
+fn instance_trace_accept_material(material: u32) -> bool {
+    return material < arrayLength(&tracing) / 2u && tracing[material * 2u + 1u].w < 0.5;
+}
+fn trace_scene(origin: vec3<f32>, direction: vec3<f32>, maximum: f32) -> InstanceTraceHit {
+    return trace_instances(origin, direction, 0.001, maximum);
+}
+#else
 struct TraceHit {
     distance: f32,
     triangle: u32,
@@ -65,6 +76,7 @@ fn trace_scene(origin: vec3<f32>, direction: vec3<f32>, maximum: f32) -> TraceHi
     return hit;
 }
 
+#endif
 var<workgroup> probe_contributions: array<vec4<f32>,576>;
 
 @compute @workgroup_size(64)
@@ -86,6 +98,21 @@ fn integrate_probes(
         let direction = vec3<f32>(cos(theta)*r,y,sin(theta)*r);
         let hit = trace_scene(position,direction,config.light_direction.w);
         var radiance = sky_color(direction,config.sky);
+#ifdef INSTANCE_PROBE_TRACE
+        if (hit.instance != 0xffffffffu) {
+            let material = hit.material * 2u;
+            var normal = hit.normal;
+            let double_sided = tracing[material].w > 0.5;
+            if (!hit.front && !double_sided) { backs++; }
+            if (!hit.front) { normal = -normal; }
+            let point = position + direction * hit.parameter + normal * 0.01;
+            radiance = tracing[material + 1u].xyz;
+            let cosine = max(dot(normal, config.light_direction.xyz), 0.0);
+            if (cosine > 0.0 && trace_scene(point, config.light_direction.xyz, config.light_direction.w).instance == 0xffffffffu) {
+                radiance += tracing[material].xyz * config.light_radiance.xyz * cosine / IBL_PI;
+            }
+        }
+#else
         if (hit.triangle != 0xffffffffu) {
             let indices = vec4<u32>(tracing[u32(tracing[0].y)+hit.triangle]);
             let vertex_start = u32(tracing[1].x);
@@ -105,6 +132,7 @@ fn integrate_probes(
                 radiance += tracing[material].xyz*config.light_radiance.xyz*cosine/IBL_PI;
             }
         }
+#endif
         let basis = rendering_probe_basis(direction);
         for (var c=0u; c<9u; c++) { sum[c] += radiance*basis[c]; }
     }
