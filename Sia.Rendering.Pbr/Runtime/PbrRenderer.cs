@@ -56,9 +56,9 @@ public sealed record PbrRendererSettings
 
     public static PbrRendererSettings ForQuality(RenderQuality quality) => quality switch {
         RenderQuality.Low => new() {
-            OpaquePath = PbrOpaquePath.Visibility,
-            TargetPixelError = .5f,
-            ShadowTexelError = .5f,
+            OpaquePath = PbrOpaquePath.ForwardPlus,
+            TargetPixelError = 0,
+            ShadowTexelError = 0,
             ShadowResolution = 256,
             Streaming = new() { MaximumSelectionNodesPerView = 1024 }
         },
@@ -144,22 +144,28 @@ public sealed class PbrRenderer :
         PbrSceneAsset scene,
         WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, scene, null, outputFormat, settings) { }
+        : this(frame, scene, null, null, outputFormat, settings) { }
+
+    public PbrRenderer(in GpuFrame frame, PbrRasterScene scene, WGPUTextureFormat outputFormat,
+        PbrRendererSettings? settings = null)
+        : this(frame, null, null, scene, outputFormat, settings ?? PbrRendererSettings.ForQuality(RenderQuality.Low)) { }
 
     public PbrRenderer(in GpuFrame frame, PbrSceneStream scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, scene.Bootstrap, scene, outputFormat, settings) { }
+        : this(frame, scene.Bootstrap, scene, null, outputFormat, settings) { }
 
-    private PbrRenderer(in GpuFrame frame, PbrSceneAsset scene, PbrSceneStream? stream,
+    private PbrRenderer(in GpuFrame frame, PbrSceneAsset? scene, PbrSceneStream? stream, PbrRasterScene? raster,
         WGPUTextureFormat outputFormat, PbrRendererSettings? settings)
     {
-        ArgumentNullException.ThrowIfNull(scene);
+        if (scene is null && raster is null) throw new ArgumentNullException(nameof(scene));
         Settings = settings ?? new();
         OutputFormat = outputFormat;
         if (!float.IsFinite(Settings.TargetPixelError) || Settings.TargetPixelError < 0
             || !float.IsFinite(Settings.ShadowTexelError) || Settings.ShadowTexelError < 0)
             throw new ArgumentOutOfRangeException(nameof(settings));
         if (!Enum.IsDefined(Settings.OpaquePath)) throw new ArgumentOutOfRangeException(nameof(settings));
+        if (raster is not null && Settings.OpaquePath != PbrOpaquePath.ForwardPlus)
+            throw new ArgumentException("Direct Raster input requires the conventional Forward+ path.", nameof(settings));
         if (Settings.ExportSurfaceData && Settings.OpaquePath != PbrOpaquePath.Visibility)
             throw new ArgumentException("Shared surface export requires the Visibility path.", nameof(settings));
         if (Settings.DynamicSceneGi && Settings.OpaquePath != PbrOpaquePath.Visibility)
@@ -175,8 +181,9 @@ public sealed class PbrRenderer :
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 stream is not null && Settings.Streaming.GpuTraversal);
-            Materials = new(frame, scene.Materials.Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
-            Scene = stream is null ? new(frame, scene, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
+            Materials = new(frame, (raster?.Materials ?? scene!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
+            Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
+                : stream is null ? new(frame, scene!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
                 : new(frame, stream, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             Environment = new(frame, Settings.BakedEnvironment);
             if (sceneGi) {
@@ -189,11 +196,13 @@ public sealed class PbrRenderer :
                     ? System.Math.Min(Settings.SceneGiBytes - probeBytes,
                         System.Math.Min(limits.MaxStorageBufferBindingSize, limits.MaxBufferSize)) : 0;
                 var tracing = Settings.DynamicSceneGi
-                    ? stream is null ? PbrSceneTransport.Build(scene, traceBudget)
+                    ? raster is not null ? PbrSceneTransport.Build(raster, traceBudget)
+                        : stream is null ? PbrSceneTransport.Build(scene!, traceBudget)
                         : PbrSceneTransport.Build(stream, traceBudget) : null;
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
-                var identity = tracing is null ? stream is null ? PbrSceneTransport.Identity(scene) : stream.Identity.ToArray() : tracing.Identity.ToArray();
+                var identity = tracing is not null ? tracing.Identity.ToArray() : raster is not null ? PbrSceneTransport.Identity(raster)
+                    : stream is null ? PbrSceneTransport.Identity(scene!) : stream.Identity.ToArray();
                 if (!asset.SceneIdentity.Span.SequenceEqual(identity))
                     throw new ArgumentException("Baked probes belong to different scene geometry/materials.", nameof(settings));
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))

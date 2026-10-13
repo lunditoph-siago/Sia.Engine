@@ -8,7 +8,9 @@ internal sealed class PbrResidentGeometry : IDisposable
 {
     internal delegate void IndexUpload(ReadOnlySpan<uint> values, int first);
 
-    private readonly MeshPatchTree _tree;
+    private readonly MeshPatchTree? _tree;
+    private readonly PbrRasterGeometry? _raster;
+    private readonly Dictionary<uint, uint>? _rasterRemap;
     private int[]? _remap;
     private int[]? _source;
 
@@ -16,11 +18,12 @@ internal sealed class PbrResidentGeometry : IDisposable
     public uint Fine { get; }
     public uint Coarse { get; }
     public float Error { get; }
-    public Aabb Bounds => _tree.Bounds;
+    public Aabb Bounds { get; }
 
     public PbrResidentGeometry(MeshPatchTree tree)
     {
         _tree = tree;
+        Bounds = tree.Bounds;
         Fine = (uint)tree.FinestTriangleCount;
         if (tree.RootCount != tree.Nodes.Length) {
             VertexCount = tree.VertexCount;
@@ -48,6 +51,24 @@ internal sealed class PbrResidentGeometry : IDisposable
         }
     }
 
+    public PbrResidentGeometry(PbrRasterGeometry geometry)
+    {
+        ArgumentNullException.ThrowIfNull(geometry);
+        _raster = geometry; Bounds = geometry.Bounds; Fine = (uint)(geometry.Indices.Length / 3);
+        // Compact only vertices referenced by this section; never allocate a remap for the whole product per section.
+        var capacity = System.Math.Min(geometry.Product.Vertices.Length, geometry.Indices.Length);
+        _rasterRemap = new(System.Math.Min(capacity, 4096));
+        try {
+            foreach (var index in geometry.Indices) {
+                if (!_rasterRemap.TryAdd(index, (uint)VertexCount)) continue;
+                VertexCount++;
+            }
+            _source = ArrayPool<int>.Shared.Rent(VertexCount);
+            foreach (var item in _rasterRemap) _source[item.Value] = (int)item.Key;
+        }
+        catch { Dispose(); throw; }
+    }
+
     public void PackVertices(Span<float4> packed, int first, int count, float4x4 transform,
         float4x4 normal, int material, int planeStride = 0)
     {
@@ -55,7 +76,7 @@ internal sealed class PbrResidentGeometry : IDisposable
         if (first < 0 || count < 0 || first > VertexCount - count || stride < count
             || packed.Length < checked(stride * 2 + count))
             throw new ArgumentOutOfRangeException(nameof(count));
-        var vertices = _tree.Vertices;
+        var vertices = _tree is not null ? _tree.Vertices : _raster!.Product.Vertices;
         for (var v = 0; v < count; v++) {
             var vertex = vertices[_source is null ? first + v : _source[first + v]];
             var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
@@ -77,15 +98,19 @@ internal sealed class PbrResidentGeometry : IDisposable
 
     public void WriteIndices(ref IndexWriter writer, uint vertexOffset)
     {
+        if (_raster is not null) {
+            foreach (var index in _raster.Indices) writer.Append(checked(vertexOffset + _rasterRemap![index]));
+            return;
+        }
         if (_remap is not null) {
-            foreach (var cluster in _tree.Meshlets) {
+            foreach (var cluster in _tree!.Meshlets) {
                 var vertices = _tree.MeshletVertexIndices.Slice(cluster.VertexOffset, cluster.VertexCount);
                 foreach (var local in _tree.MeshletTriangleIndices.Slice(cluster.TriangleOffset, cluster.TriangleCount * 3))
                     writer.Append(checked(vertexOffset + (uint)_remap[vertices[local]]));
             }
         }
         else {
-            foreach (var node in _tree.Nodes.Span) {
+            foreach (var node in _tree!.Nodes.Span) {
                 if (node.ChildCount != 0) continue;
                 foreach (var index in _tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3))
                     writer.Append(checked(vertexOffset + index));
