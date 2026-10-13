@@ -15,7 +15,10 @@ public sealed record ProceduralSky
     public float Intensity { get; init; } = 1.0f;
 
     [Conditional("DEBUG")]
-    public void Validate()
+    public void Validate() => ValidateData();
+
+    // Asset decoding must validate external data in Release as well as Debug.
+    internal void ValidateData()
     {
         Require(IsColor(Horizon), nameof(Horizon));
         Require(IsColor(Zenith), nameof(Zenith));

@@ -29,6 +29,7 @@ internal sealed partial class SceneExampleApp
         if (_browserFeatureLevel is not ("core" or "compatibility" or "auto"))
             throw new ArgumentException("Expected feature-level core|compatibility|auto.");
         if (_materialScene is { } scene) SetSceneAttribution(scene.Attribution);
+        else if (_referenceScene is { } references) SetSceneAttribution(references.Scene.Data.Attribution);
         await Program.BrowserOwner.RunGraphicsAsync(async () => {
             CaptureBrowserState();
             await InitializeAsync();

@@ -49,7 +49,7 @@ public readonly record struct SceneTraceTriangle
     }
 }
 
-public sealed class SceneTraceData
+public sealed partial class SceneTraceData
 {
     private readonly record struct Centroid(double X, double Y, double Z);
 

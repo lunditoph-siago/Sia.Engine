@@ -58,6 +58,8 @@ internal sealed unsafe partial class SceneExampleApp
             .Add<CameraSystem>()
             .CreateStage(_sceneWorld);
 
+        AcquireReferenceScene();
+        AcquireLightingAssets();
         BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
@@ -71,7 +73,8 @@ internal sealed unsafe partial class SceneExampleApp
                 _renderDevice,
                 _surfaceFormat,
                 WGPUTextureFormat.Depth32Float,
-                UnlitShaderSource.Load(), "unlit");
+                new ShaderAsset(new ShaderAssetId("sia:unlit"),
+                    UnlitShaderSource.Acquire(_renderWorld.Entities).Get<WgslSourceResource>().Source), "unlit");
             _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
                 .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
                 .Build();
@@ -210,6 +213,14 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld?.Dispose();
         _sceneWorld = null;
         _sceneRenderer?.Dispose();
+        if (_assetRoot.IsValid) _assetRoot.Destroy();
+        _assetRoot = default;
+        _referenceScene = null;
+        _preparedLighting = null;
+        _bakedEnvironment = null;
+        _bakedProbes = null;
+        _materialScene = null;
+        _rasterScene = null;
         _renderWorld?.Dispose();
         _renderWorld = null;
         _sceneRenderer = null;
