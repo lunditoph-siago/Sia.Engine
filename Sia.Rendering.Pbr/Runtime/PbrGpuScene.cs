@@ -28,6 +28,7 @@ internal sealed partial class PbrGpuScene : IDisposable
         float Error)
     {
         public float3 Center => Bounds.Center;
+        public uint SourceInstance { get; init; } = Instance;
     }
 
     private readonly GpuResources _gpu;
@@ -38,6 +39,7 @@ internal sealed partial class PbrGpuScene : IDisposable
     public Entity Group { get; }
 
     public uint VertexCount { get; }
+    public uint VertexPlanes { get; } = StreamGeometryPage.VertexPlanes;
     public uint TriangleOffset { get; }
     public uint SingleSidedTriangles { get; }
     public uint OpaqueTriangles { get; }
@@ -53,23 +55,21 @@ internal sealed partial class PbrGpuScene : IDisposable
         : this(frame, source.Materials, source.Instances, source.Geometry.Length,
             g => new(source.Geometry.Span[g].Build.Tree), layout, budget, materialBatches, instances) { }
 
-    public PbrGpuScene(in GpuFrame frame, PbrRasterScene source, Entity layout, ulong budget, int[] materialBatches)
-        : this(frame, source.Materials, source.Instances, source.Geometry.Length,
-            g => new(source.Geometry.Span[g]), layout, budget, materialBatches, default) { }
-
     private PbrGpuScene(in GpuFrame frame, PbrSceneStream source, Entity layout, ulong budget, int[] materialBatches, Entity instances)
         : this(frame, source.Bootstrap.Materials, source.TransparentInstances, source.TransparentGeometry.Length,
-            g => new(source.TransparentGeometry[g]), layout, budget, materialBatches, instances) { }
+            g => new(source.TransparentGeometry[g]), layout, budget, materialBatches, instances, (uint)source.Instances.Length) { }
 
     private PbrGpuScene(in GpuFrame frame, ReadOnlyMemory<PbrMaterialAsset> materials,
         ReadOnlyMemory<PbrSceneInstance> sourceInstances, int geometryCount, Func<int, PbrResidentGeometry> prepareGeometry,
-        Entity layout, ulong budget, int[] materialBatches, Entity instanceBuffer)
+        Entity layout, ulong budget, int[] materialBatches, Entity instanceBuffer, uint instanceBase = 0)
     {
         _gpu = new(frame, budget);
         var geometries = new PbrResidentGeometry?[geometryCount];
         float4[]? vertexScratch = null;
         uint[]? indexScratch = null;
         try {
+            if ((ulong)instanceBase + (ulong)sourceInstances.Length > (1ul << 24) + 1)
+                throw new ArgumentOutOfRangeException(nameof(sourceInstances), "Packed instance indices must be exact Float32 integers.");
             for (var g = 0; g < geometries.Length; g++)
                 geometries[g] = prepareGeometry(g);
             var totalVertices = 0;
@@ -79,7 +79,7 @@ internal sealed partial class PbrGpuScene : IDisposable
                 totalVertices = checked(totalVertices + geometry.VertexCount);
                 totalTriangles = checked(totalTriangles + (int)checked(geometry.Fine + geometry.Coarse));
             }
-            var vertexBytes = checked((ulong)totalVertices * 48);
+            var vertexBytes = checked((ulong)totalVertices * StreamGeometryPage.VertexBytes);
             var indexBytes = checked((ulong)totalTriangles * 12);
             if (vertexBytes > _gpu.Limits.MaxStorageBufferBindingSize || indexBytes > _gpu.Limits.MaxStorageBufferBindingSize
                 || vertexBytes + indexBytes > budget)
@@ -90,12 +90,12 @@ internal sealed partial class PbrGpuScene : IDisposable
             Topology = _gpu.Buffer(indexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst);
             const int vertexBatch = 16384;
             const int indexBatch = 65536;
-            vertexScratch = ArrayPool<float4>.Shared.Rent(vertexBatch * 3);
+            vertexScratch = ArrayPool<float4>.Shared.Rent(vertexBatch * StreamGeometryPage.VertexPlanes);
             indexScratch = ArrayPool<uint>.Shared.Rent(indexBatch);
             void FlushVertices(int count, uint first)
             {
                 if (count == 0) return;
-                for (var plane = 0; plane < 3; plane++) {
+                for (var plane = 0; plane < StreamGeometryPage.VertexPlanes; plane++) {
                     var at = checked((ulong)plane * (uint)totalVertices + first);
                     Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), at * 16,
                         vertexScratch.AsSpan(plane * vertexBatch, count));
@@ -125,7 +125,7 @@ internal sealed partial class PbrGpuScene : IDisposable
                 for (var first = 0; first < geometry.VertexCount;) {
                     var count = System.Math.Min(vertexBatch - bufferedVertices, geometry.VertexCount - first);
                     geometry.PackVertices(vertexScratch.AsSpan(bufferedVertices), first, count,
-                        instance.Transform, normal, instance.Material, vertexBatch);
+                        instance.Transform, normal, instance.Material, checked(instanceBase + (uint)i), vertexBatch);
                     first += count;
                     bufferedVertices += count;
                     if (bufferedVertices == vertexBatch) {

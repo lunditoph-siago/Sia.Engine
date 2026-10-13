@@ -3,12 +3,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Sia.Asset;
+using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
 
 internal static partial class ExampleContent
 {
-    // Recipe fields are the four already cooked scene paths, relative to the recipe.
+    // Each entry selects a cooked scene and optional independent lighting, relative to the recipe.
     internal static async Task PackAsync(string recipePath, string outputDirectory,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumBundleBytes = 512L * 1024 * 1024,
         CancellationToken cancellationToken = default)
@@ -17,9 +18,13 @@ internal static partial class ExampleContent
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBundleBytes);
         recipePath = Path.GetFullPath(recipePath); var recipe = Read(recipePath);
         var inputs = new[] { recipe.Bunny, recipe.BistroExterior, recipe.BistroInterior, recipe.BistroWine };
-        if (inputs.Any(string.IsNullOrWhiteSpace)) throw new InvalidDataException("Every default scene needs an input.");
-        inputs = inputs.Select(path => Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!)).ToArray();
-        if (inputs.Distinct(StringComparer.OrdinalIgnoreCase).Count() != inputs.Length)
+        if (inputs.Any(entry => entry is null || string.IsNullOrWhiteSpace(entry.Scene)
+            || entry.Lightmaps is not null && string.IsNullOrWhiteSpace(entry.Lightmaps)))
+            throw new InvalidDataException("Every default requires nonempty selected input paths.");
+        string Resolve(string path) => Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!);
+        inputs = inputs.Select(entry => entry with { Scene = Resolve(entry.Scene),
+            Lightmaps = entry.Lightmaps is { } lightmaps ? Resolve(lightmaps) : null }).ToArray();
+        if (inputs.Select(entry => entry.Scene).Distinct(StringComparer.OrdinalIgnoreCase).Count() != inputs.Length)
             throw new InvalidDataException("Default scene inputs must be distinct.");
         var output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
         var parent = Path.GetDirectoryName(output);
@@ -34,7 +39,17 @@ internal static partial class ExampleContent
                     throw new IOException("Content package staging directories must not be links.");
         }
         using var client = new HttpClient();
-        async Task<HashSet<string>> RequiredFiles(string scene) {
+        async Task AuthenticateFile(string directory, AssetId id, string expectedHash, int expectedBytes) {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var file = File.OpenRead(Path.Combine(directory, id.Value.ToString("N") + ".siaasset"));
+            if (file.Length != expectedBytes || file.Length > maximumFileBytes)
+                throw new InvalidDataException("Selected record differs from its declared encoded length.");
+            var digest = await SHA256.HashDataAsync(file, cancellationToken);
+            if (file.Length != expectedBytes || Convert.ToHexString(digest) != expectedHash)
+                throw new InvalidDataException("Selected record differs from its declared content hash.");
+        }
+        async Task<Dictionary<string, string>> RequiredFiles(Entry entry) {
+            var scene = entry.Scene;
             var raster = await PbrSceneFiles.PrepareRasterAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var virtuals = await PbrSceneFiles.PrepareVirtualAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var bvh = await PbrSceneFiles.PrepareBvhAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
@@ -46,6 +61,8 @@ internal static partial class ExampleContent
                         if (page.EncodedBytes > maximumFileBytes || page.EncodedBytes > maximumBundleBytes - total)
                             throw new InvalidDataException("Virtual pages exceed the package encoded admission.");
                         total += page.EncodedBytes;
+                        // Runtime content sharing does not authenticate every independently named file in this snapshot.
+                        await AuthenticateFile(Path.GetDirectoryName(scene)!, page.Id, page.ContentHash, page.EncodedBytes);
                         _ = await pageSource.ReadAsync(page.Reference, cancellationToken);
                     }
                 }
@@ -53,14 +70,59 @@ internal static partial class ExampleContent
             var ids = raster.Meshes.Keys.Concat(raster.Materials.Keys).Concat(raster.Textures.Keys)
                 .Concat(raster.Products.Keys).Concat(virtuals.Products.Keys).Concat(bvh.Products.Keys)
                 .Concat(virtuals.Products.Values.SelectMany(p => p.Data.Pages.ToArray()).Select(p => p.Id));
-            var names = ids.Select(id => id.Value.ToString("N") + ".siaasset").ToHashSet(StringComparer.Ordinal);
-            names.Add(raster.Id.Value.ToString("N") + ".siascene");
+            var names = ids.Select(id => id.Value.ToString("N") + ".siaasset").Append(raster.Id.Value.ToString("N") + ".siascene")
+                .Distinct(StringComparer.Ordinal).ToDictionary(name => name, name => Path.Combine(Path.GetDirectoryName(scene)!, name), StringComparer.Ordinal);
+            long encoded = 0;
+            void Admit(long bytes) {
+                if (bytes < 0 || bytes > maximumFileBytes || bytes > maximumBundleBytes - encoded)
+                    throw new InvalidDataException("Selected content exceeds the package encoded admission.");
+                encoded += bytes;
+            }
+            foreach (var file in names.Values) { cancellationToken.ThrowIfCancellationRequested(); Admit(new FileInfo(file).Length); }
+            if (entry.Lightmaps is { } lightmaps) {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!lightmaps.EndsWith(".siaasset", StringComparison.OrdinalIgnoreCase)
+                    || !Guid.TryParseExact(Path.GetFileNameWithoutExtension(lightmaps), "N", out var lightingId)
+                    || lightingId == Guid.Empty)
+                    throw new InvalidDataException("Lighting set requires its nonempty UUID and .siaasset suffix.");
+                if (new FileInfo(lightmaps).Length > System.Math.Min(maximumFileBytes, PbrLightmapSetData.MaximumEncodedBytes))
+                    throw new InvalidDataException("Lighting set exceeds the per-file admission.");
+                Admit(new FileInfo(lightmaps).Length);
+                var lighting = FileLoader.Load<PbrLightmapSetRecord, ulong>(lightmaps, PbrLightmapSetData.MaximumPayloadBytes);
+                var set = lighting.Data;
+                if (set.ProductId.Value != lightingId) throw new InvalidDataException("Lighting set belongs to another logical ID.");
+                set.ValidateScene(virtuals.Scene.Data, r => virtuals.Meshes[r.Value].Data,
+                    r => virtuals.Materials[r.Value].Data, r => virtuals.Textures[r.Value].Data, cancellationToken);
+                await using var lightingSource = new LightmapFiles.ProductSource(lightmaps, client, set,
+                    32L * 1024 * 1024, otherIds: ids.Concat(raster.Meshes.Values.Select(mesh => mesh.Data.Source)).Append(raster.Id));
+                void Add(string name) {
+                    if (!names.TryAdd(name, Path.Combine(Path.GetDirectoryName(lightmaps)!, name)))
+                        throw new InvalidDataException("Lighting aliases a selected scene record identity.");
+                }
+                Add(set.ProductId.Value.ToString("N") + ".siaasset");
+                // Verify one independent member at a time. Root size and the
+                // decoded reservation never accumulate scene-wide chart arrays.
+                foreach (var reference in set.Products.ToArray()) {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Admit(reference.EncodedBytes);
+                    await AuthenticateFile(Path.GetDirectoryName(lightmaps)!, reference.Id, reference.ContentHash, reference.EncodedBytes);
+                    var member = await lightingSource.ReadAsync(reference.Reference, cancellationToken);
+                    Add(reference.Id.Value.ToString("N") + ".siaasset");
+                    for (var at = 0; at < member.Data.Pages.Length; at++) {
+                        var page = member.Data.Pages[at];
+                        Admit(page.EncodedBytes);
+                        await AuthenticateFile(Path.GetDirectoryName(lightmaps)!, page.Id, page.ContentHash, page.EncodedBytes);
+                        _ = await lightingSource.ReadAsync(member.Data, at, cancellationToken);
+                        Add(page.Id.Value.ToString("N") + ".siaasset");
+                    }
+                }
+            }
             return names;
         }
         try {
             RequireOwnedDirectories();
             var content = Path.Combine(stage, "Content"); Directory.CreateDirectory(content); directories.Add(content);
-            var roots = new List<string>(4);
+            var roots = new List<Entry>(4);
             for (var index = 0; index < inputs.Length; index++) {
                 cancellationToken.ThrowIfCancellationRequested();
                 var input = inputs[index]; var required = await RequiredFiles(input);
@@ -70,9 +132,9 @@ internal static partial class ExampleContent
                 var buffer = new byte[65536]; var encodedLength = new byte[8];
                 using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
                 hash.AppendData("SIAEXAMPLECONTENT1"u8);
-                foreach (var name in required.Order(StringComparer.Ordinal)) {
+                foreach (var name in required.Keys.Order(StringComparer.Ordinal)) {
                     cancellationToken.ThrowIfCancellationRequested(); RequireOwnedDirectories();
-                    var source = Path.Combine(Path.GetDirectoryName(input)!, name);
+                    var source = required[name];
                     using var read = File.OpenRead(source);
                     var length = read.Length;
                     if (length > maximumFileBytes || length > maximumBundleBytes - total)
@@ -94,15 +156,19 @@ internal static partial class ExampleContent
                     if (read.ReadByte() != -1) throw new IOException("Content package input grew while reading.");
                 }
                 // Validate the owned snapshot, including cross-record build keys and every selected product.
-                var sceneName = Path.GetFileName(input);
-                if (!required.SetEquals(await RequiredFiles(Path.Combine(folder, sceneName))))
+                var sceneName = Path.GetFileName(input.Scene);
+                var lightmapName = input.Lightmaps is { } selectedLightmaps ? Path.GetFileName(selectedLightmaps) : null;
+                var snapshot = new Entry { Scene = Path.Combine(folder, sceneName),
+                    Lightmaps = lightmapName is null ? null : Path.Combine(folder, lightmapName) };
+                if (!required.Keys.ToHashSet(StringComparer.Ordinal).SetEquals((await RequiredFiles(snapshot)).Keys))
                     throw new InvalidDataException("Content references changed during packaging.");
                 var digest = Convert.ToHexStringLower(hash.GetHashAndReset());
                 var version = Path.Combine(content, digest);
                 RequireOwnedDirectories(); Directory.Move(folder, version);
                 directories[directories.IndexOf(folder)] = version;
                 foreach (var file in copied) files[files.IndexOf(file)] = Path.Combine(version, Path.GetFileName(file));
-                roots.Add("Content/" + digest + "/" + sceneName);
+                roots.Add(new() { Scene = "Content/" + digest + "/" + sceneName,
+                    Lightmaps = lightmapName is null ? null : "Content/" + digest + "/" + lightmapName });
             }
             var catalog = new Catalog { Bunny = roots[0], BistroExterior = roots[1], BistroInterior = roots[2], BistroWine = roots[3] };
             Validate(catalog); RequireOwnedDirectories();

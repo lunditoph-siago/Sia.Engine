@@ -40,13 +40,14 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         VisibilityDebugMode? debugMode = null, float? distance = null,
         bool finest = false,
         (float3 Eye, float3 Target)? camera = null,
-        PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null)
+        PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null, LightmapFiles.Prepared? lightmaps = null)
     {
         _pipeline = pipeline;
         _renderScale = Program.RenderScale;
         _resolutionController = Program.TargetFps == 0 ? null : new(800d / Program.TargetFps, Program.RenderScale);
         _referenceScene = references;
         _preparedLighting = lighting;
+        _preparedLightmaps = lightmaps;
         _finest = finest;
         _initialCamera = camera;
         _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny
@@ -168,6 +169,13 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         }
         required.MaxStorageBufferBindingSize = System.Math.Min(supported.MaxStorageBufferBindingSize, 256ul * 1024 * 1024);
         required.MaxBufferSize = System.Math.Min(supported.MaxBufferSize, 256ul * 1024 * 1024);
+        var probes = (Program.DynamicSceneGi ?? PbrRendererSettings.ForQuality(Program.Quality).DynamicSceneGi)
+            || _preparedLighting?.Probes is not null;
+        var textures = 10u + (probes ? 1u : 0u) + (_preparedLightmaps is not null ? 3u : 0u);
+        if (supported.MaxSampledTexturesPerShaderStage < textures || supported.MaxVertexBuffers < 4 || supported.MaxVertexAttributes < 4)
+            throw new NotSupportedException("The selected PBR lighting requires more sampled textures or vertex attributes than this adapter provides.");
+        required.MaxSampledTexturesPerShaderStage = textures;
+        required.MaxVertexBuffers = 4; required.MaxVertexAttributes = 4;
     }
 
 #if BROWSER

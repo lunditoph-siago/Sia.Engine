@@ -21,6 +21,7 @@ public static partial class Program
     internal static bool? DynamicSceneGi { get; private set; }
     internal static string? ProbesPath { get; private set; }
     internal static string? EnvironmentPath { get; private set; }
+    internal static string? LightmapsPath { get; private set; }
     internal static int TargetFps { get; private set; }
 
     private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool Finest,
@@ -54,6 +55,10 @@ public static partial class Program
             }
             else if (args[i] == "--probes") {
                 ProbesPath = args[i + 1];
+            }
+            else if (args[i] == "--lightmaps") {
+                ArgumentException.ThrowIfNullOrWhiteSpace(args[i + 1]);
+                LightmapsPath = args[i + 1];
             }
             else if (args[i] == "--scene-gi") {
                 DynamicSceneGi = bool.Parse(args[i + 1]);
@@ -163,7 +168,7 @@ public static partial class Program
         }
         if (pipeline == ScenePipeline.Unlit) {
             for (var i = 0; i < args.Length; i += 2) {
-                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes"
+                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes" or "--lightmaps"
                     or "--scene-gi" or "--surface-data"
                     or "--render-scale" or "--target-fps") {
                     throw new ArgumentException($"{args[i]} requires --pipeline bunny|pbr.");

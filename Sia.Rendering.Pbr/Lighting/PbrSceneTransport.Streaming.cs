@@ -27,9 +27,9 @@ public static partial class PbrSceneTransport
                     var page = scene.ResidentRoots[part.Id];
                     var indices = page.Indices.Slice(part.First * 3, part.Count * 3);
                     for (var i = 0; i < indices.Length; i += 3) {
-                        var a = math.mul(instance.Transform, new float4(page.Vertices[(int)indices[i]].xyz, 1)).xyz;
-                        var b = math.mul(instance.Transform, new float4(page.Vertices[(int)indices[i + 1]].xyz, 1)).xyz;
-                        var c = math.mul(instance.Transform, new float4(page.Vertices[(int)indices[i + 2]].xyz, 1)).xyz;
+                        var a = math.mul(instance.Transform, new float4(page.Data.Vertices[(int)indices[i]].Position, 1)).xyz;
+                        var b = math.mul(instance.Transform, new float4(page.Data.Vertices[(int)indices[i + 1]].Position, 1)).xyz;
+                        var c = math.mul(instance.Transform, new float4(page.Data.Vertices[(int)indices[i + 2]].Position, 1)).xyz;
                         if (math.lengthsq(math.cross(b - a, c - a)) < 1e-16f) continue;
                         if (((ulong)(triangles.Count + 1) * 16) + 32 > maximumBytes)
                             throw new InvalidOperationException("Stream GI proxy exceeds its build budget.");

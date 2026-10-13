@@ -6,17 +6,23 @@ namespace Sia.Engine.Example;
 // The example's four entry points, not an asset registry or asset-core policy.
 internal static partial class ExampleContent
 {
+    internal sealed record Entry
+    {
+        public required string Scene { get; init; }
+        public string? Lightmaps { get; init; }
+    }
+
     internal sealed record Catalog
     {
-        public required string Bunny { get; init; }
-        public required string BistroExterior { get; init; }
-        public required string BistroInterior { get; init; }
-        public required string BistroWine { get; init; }
+        public required Entry Bunny { get; init; }
+        public required Entry BistroExterior { get; init; }
+        public required Entry BistroInterior { get; init; }
+        public required Entry BistroWine { get; init; }
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow, AllowDuplicateProperties = false,
-        RespectRequiredConstructorParameters = true, MaxDepth = 4)]
+        RespectRequiredConstructorParameters = true, MaxDepth = 4, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonSerializable(typeof(Catalog))]
     private partial class CatalogJsonContext : JsonSerializerContext;
 
@@ -32,22 +38,33 @@ internal static partial class ExampleContent
 
     internal static void Validate(Catalog catalog)
     {
-        foreach (var path in new[] { catalog.Bunny, catalog.BistroExterior, catalog.BistroInterior, catalog.BistroWine }) {
+        ArgumentNullException.ThrowIfNull(catalog);
+        static void Path(string? path, string suffix) {
             var parts = path?.Split('/');
             if (parts is not { Length: 3 } || parts[0] != "Content" || parts[1].Length != 64
                 || parts[1].Any(value => value is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
-                || !parts[2].EndsWith(".siascene", StringComparison.Ordinal)
-                || !Guid.TryParseExact(parts[2][..^9], "N", out var id) || id == Guid.Empty)
-                throw new InvalidDataException("Example scene paths require Content/<sha256>/<uuid>.siascene.");
+                || !parts[2].EndsWith(suffix, StringComparison.Ordinal)
+                || !Guid.TryParseExact(parts[2][..^suffix.Length], "N", out var id) || id == Guid.Empty)
+                throw new InvalidDataException("Example content paths require Content/<sha256>/<nonempty-uuid> and the selected record suffix.");
+        }
+        foreach (var entry in new[] { catalog.Bunny, catalog.BistroExterior, catalog.BistroInterior, catalog.BistroWine }) {
+            if (entry is null) throw new InvalidDataException("Every default requires a scene entry.");
+            Path(entry.Scene, ".siascene");
+            if (entry.Lightmaps is { } lightmaps) {
+                Path(lightmaps, ".siaasset");
+                if (lightmaps[..lightmaps.LastIndexOf('/')] != entry.Scene[..entry.Scene.LastIndexOf('/')])
+                    throw new InvalidDataException("Default scene and lighting must belong to the same checked content snapshot.");
+            }
         }
     }
 
 #if !BROWSER
-    internal static string DefaultScene(ScenePipeline pipeline, string assetsDirectory)
+    internal static Entry Default(ScenePipeline pipeline, string assetsDirectory)
     {
         var catalog = Read(Path.Combine(assetsDirectory, "default-scenes.json")); Validate(catalog);
-        var relative = pipeline == ScenePipeline.Bunny ? catalog.Bunny : catalog.BistroExterior;
-        return Path.Combine(assetsDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
+        var entry = pipeline == ScenePipeline.Bunny ? catalog.Bunny : catalog.BistroExterior;
+        string Resolve(string relative) => Path.Combine(assetsDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
+        return new() { Scene = Resolve(entry.Scene), Lightmaps = entry.Lightmaps is { } lightmaps ? Resolve(lightmaps) : null };
     }
 #endif
 }

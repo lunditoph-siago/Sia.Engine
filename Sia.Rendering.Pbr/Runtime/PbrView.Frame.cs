@@ -148,6 +148,20 @@ internal sealed unsafe partial class PbrView
                 if (_materialPixels[material] > 0) _owner.Materials.Demand(material, _materialPixels[material]);
         }
         _transparentEye = camera.WorldPosition;
+        if (_owner.Lightmaps is { } lightmaps) {
+            void Demand(uint row, Aabb bounds)
+            {
+                if (!culler.Intersects(bounds)) return;
+                var pixels = ProjectedGeometryError.ProjectError(bounds, math.length(bounds.Max - bounds.Min), camera.ViewProj, _width, _height);
+                lightmaps.Demand(row, float.IsFinite(pixels) ? MathF.Max(0, pixels) : System.Math.Max(_width, _height));
+            }
+            if (_owner.Scene.Streaming is { } stream) {
+                for (var row = 0; row < stream.Source.Instances.Length; row++) Demand((uint)row, stream.InstanceBounds[row]);
+            }
+            else foreach (var draw in _owner.Scene.Opaque) Demand(draw.SourceInstance, draw.Bounds);
+            var transparentBase = (uint)(_owner.Scene.Streaming?.Source.Instances.Length ?? 0);
+            foreach (var draw in _owner.Scene.Transparent) Demand(transparentBase + draw.SourceInstance, draw.Bounds);
+        }
         _transparent.Sort(_sortTransparent);
     }
 

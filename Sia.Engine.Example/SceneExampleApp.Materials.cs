@@ -30,11 +30,12 @@ internal sealed partial class SceneExampleApp
             case PbrSceneFiles.PreparedStreaming virtuals: {
                 var acquired = PbrSceneFiles.AcquireStreaming(_renderWorld!.Entities, virtuals);
                 _assetRoot = acquired.Root; _materialStream = acquired.Stream;
-                _materialInstanceCount = acquired.SourceInstances.Length;
+                _materialInstanceCount = acquired.Stream.SourceInstanceCount;
                 break;
             }
             default: throw new InvalidOperationException("Unsupported prepared scene product.");
         }
+        AcquireLightmapAssets(prepared.Scene.Data);
         _referenceScene = null;
         Console.WriteLine(prepared.Scene.Data.Attribution);
         Console.WriteLine($"Reference PBR scene: {prepared.Scene.Data.Instances.Length} Mesh instances; {_materialInstanceCount} section instances.");
@@ -52,7 +53,7 @@ internal sealed partial class SceneExampleApp
         shadows.CascadeCount = 3;
         shadows.MaxShadowedSpotLights = 1;
         shadows.ShadowDistance = 30;
-        world.AcquireAddon<EnvironmentLighting>().Sky = _bakedEnvironment?.Sky ?? new ProceduralSky { Intensity = .75f };
+        world.AcquireAddon<EnvironmentLighting>().Sky = _bakedEnvironment?.Sky ?? _lightmapInput?.Set.BakeSettings.Sky ?? new ProceduralSky { Intensity = .75f };
         var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
         world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
             new GlobalTransform(new AffineTransform(float3.zero, sun))));
@@ -70,6 +71,7 @@ internal sealed partial class SceneExampleApp
         var settings = preset with {
             Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
             BakedEnvironment = _bakedEnvironment,
+            Lightmaps = _lightmapInput,
             ExportSurfaceData = Program.ExportSurfaceData,
             BakedProbes = _bakedProbes,
             DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
@@ -86,9 +88,10 @@ internal sealed partial class SceneExampleApp
             settings.DynamicSceneGi ? settings.ProbeSamples : 0);
         InitializeInspectionControls();
         Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Independent selected geometry.");
-        Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
+        Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Signed dynamic correction, multiple bounces and temporal reconstruction are pending.");
         _materialStream = null;
         _rasterScene = null;
+        _lightmapInput = null;
     }
 
     public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
