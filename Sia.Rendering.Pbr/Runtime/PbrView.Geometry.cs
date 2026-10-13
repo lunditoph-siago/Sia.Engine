@@ -27,6 +27,7 @@ internal sealed unsafe partial class PbrView
     private void AddRange(List<PbrGpuScene.Draw> list, PbrGpuScene.Draw draw, bool matchBatch = false)
     {
         if (list.Count != 0 && list[^1].DoubleSided == draw.DoubleSided && list[^1].First + list[^1].Count == draw.First
+            && (_owner.Scene.Instances == default || list[^1].Instance == draw.Instance)
             && (!matchBatch || _owner.Materials.MaterialBatches[list[^1].Material] == _owner.Materials.MaterialBatches[draw.Material]))
             list[^1] = list[^1] with {
                 Count = list[^1].Count + draw.Count

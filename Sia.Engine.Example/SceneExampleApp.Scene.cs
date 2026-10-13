@@ -160,6 +160,7 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
+        UpdateInstanceMotion(deltaTime);
         var nextScale = _resolutionController?.Scale ?? Program.RenderScale;
         if (_renderScale != nextScale) {
             _renderScale = nextScale;

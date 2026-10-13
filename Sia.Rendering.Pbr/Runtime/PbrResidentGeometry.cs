@@ -81,14 +81,14 @@ internal sealed class PbrResidentGeometry : IDisposable
         // A shared page may contain many unrelated node ranges. Transparent draws
         // own only their selected range, just as Raster draws own one section.
         try {
-            _remap = ArrayPool<int>.Shared.Rent(geometry.Page.Vertices.Length);
-            _remap.AsSpan(0, geometry.Page.Vertices.Length).Fill(-1);
-            _source = ArrayPool<int>.Shared.Rent(System.Math.Min(geometry.Page.Vertices.Length, geometry.TriangleCount * 3));
+            _remap = ArrayPool<int>.Shared.Rent(geometry.Page.VertexCount);
+            _remap.AsSpan(0, geometry.Page.VertexCount).Fill(-1);
+            _source = ArrayPool<int>.Shared.Rent(System.Math.Min(geometry.Page.VertexCount, geometry.TriangleCount * 3));
             var minimum = new float3(float.PositiveInfinity); var maximum = new float3(float.NegativeInfinity);
             foreach (var index in geometry.Page.Indices.Slice(geometry.FirstTriangle * 3, geometry.TriangleCount * 3)) {
                 if (_remap[index] >= 0) continue;
                 _remap[index] = VertexCount; _source[VertexCount++] = (int)index;
-                var position = geometry.Page.Vertices[(int)index].Position;
+                var position = geometry.Page.GetVertex((int)index).Position;
                 minimum = math.min(minimum, position); maximum = math.max(maximum, position);
             }
             Bounds = new(minimum, maximum);
@@ -103,19 +103,20 @@ internal sealed class PbrResidentGeometry : IDisposable
         if (first < 0 || count < 0 || first > VertexCount - count || stride < count || sourceInstance > 1u << 24
             || packed.Length < checked(stride * 3 + count))
             throw new ArgumentOutOfRangeException(nameof(count));
-        var vertices = _tree is not null ? _tree.Vertices : _raster is not null ? _raster.Product.Vertices : _page!.Value.Page.Vertices;
-        var bakeUvs = _tree is not null ? _tree.BakeUvs : _raster is not null ? _raster.Product.BakeUvs : _page!.Value.Page.BakeUvs;
+        var vertices = _tree is not null ? _tree.Vertices : _raster is not null ? _raster.Product.Vertices : default;
+        var bakeUvs = _tree is not null ? _tree.BakeUvs : _raster is not null ? _raster.Product.BakeUvs : default;
+        var hasBake = _page is { } pageGeometry ? pageGeometry.Page.HasBakeUvs : !bakeUvs.IsEmpty;
         for (var v = 0; v < count; v++) {
             var source = _source is null ? first + v : _source[first + v];
-            var vertex = vertices[source];
+            var vertex = _page is { } page ? page.Page.GetVertex(source) : vertices[source];
             var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
             var n = math.mul(normal, new float4(vertex.Normal, 0)).xyz;
             var t = math.mul(transform, new float4(vertex.Tangent.xyz, 0)).xyz;
             packed[v] = new(position, n.x);
             packed[stride + v] = new(n.y, n.z, vertex.UV.x, vertex.UV.y);
             packed[stride * 2 + v] = new(t, (vertex.Tangent.w < 0 ? -1 : 1) * (material + 1));
-            var bakeUv = bakeUvs.IsEmpty ? default : bakeUvs[source];
-            packed[stride * 3 + v] = new(bakeUv.x, bakeUv.y, bakeUvs.IsEmpty ? 0 : 1,
+            var bakeUv = _page is { } bakedPage ? bakedPage.Page.GetBakeUv(source) : hasBake ? bakeUvs[source] : default;
+            packed[stride * 3 + v] = new(bakeUv.x, bakeUv.y, hasBake ? 1 : 0,
                 sourceInstance);
         }
     }

@@ -23,6 +23,7 @@ public static partial class Program
     internal static string? EnvironmentPath { get; private set; }
     internal static string? LightmapsPath { get; private set; }
     internal static int TargetFps { get; private set; }
+    internal static Guid? MovingInstance { get; private set; }
 
     private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool Finest,
         (float3 Eye, float3 Target)? Camera) ParseOptions(string[] args)
@@ -42,6 +43,11 @@ public static partial class Program
             }
             else if (args[i] == "--scene") {
                 scenePath = args[i + 1];
+            }
+            else if (args[i] == "--moving-instance") {
+                if (!Guid.TryParse(args[i + 1], out var id) || id == Guid.Empty)
+                    throw new ArgumentException("Expected --moving-instance with an authored instance UUID.");
+                MovingInstance = id;
             }
             else if (args[i] == "--pbr-path") {
                 OpaquePath = args[i + 1] switch {
@@ -169,7 +175,7 @@ public static partial class Program
         if (pipeline == ScenePipeline.Unlit) {
             for (var i = 0; i < args.Length; i += 2) {
                 if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes" or "--lightmaps"
-                    or "--scene-gi" or "--surface-data"
+                    or "--scene-gi" or "--surface-data" or "--moving-instance"
                     or "--render-scale" or "--target-fps") {
                     throw new ArgumentException($"{args[i]} requires --pipeline bunny|pbr.");
                 }

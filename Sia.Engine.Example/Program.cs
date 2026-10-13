@@ -56,14 +56,25 @@ public static partial class Program
             if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && !referencePath)
                 throw new ArgumentException("Mesh scenes require a cooked reference .siascene with independent products.");
             PbrSceneFiles.Prepared? references = null;
-            await using var virtualUse = referencePath && Quality != Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareStreamingAsync(scenePath!, streamHttp) : null;
+            var dynamicGi = DynamicSceneGi ?? PbrRendererSettings.ForQuality(Quality).DynamicSceneGi;
+            await using var mixedUse = referencePath && Quality != Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareMixedAsync(scenePath!, streamHttp, Quality, tracing: dynamicGi,
+                    rasterInstances: MovingInstance is { } moving ? new HashSet<Guid> { moving } : null) : null;
             if (referencePath) references = Quality == Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareRasterAsync(scenePath!, streamHttp)
-                : virtualUse;
+                : mixedUse;
             var lighting = await LightingFiles.PrepareAsync(EnvironmentPath, ProbesPath, streamHttp);
             await using var lightmaps = LightmapsPath is null ? null
                 : await LightmapFiles.PrepareAsync(LightmapsPath, streamHttp, references!);
+            if (MovingInstance is { } movingId) {
+                var found = false;
+                foreach (var instance in references!.Scene.Data.Instances) found |= instance.Id == movingId;
+                if (!found) throw new ArgumentException("Moving instance is absent from the selected scene.");
+                if (lightmaps is not null)
+                    foreach (var receiver in lightmaps.Set.Data.Receivers)
+                        if (receiver.Receiver.InstanceId == movingId)
+                            throw new ArgumentException("A static lightmap receiver cannot be the moving instance.");
+            }
             var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting, lightmaps);
             references = null;
             lighting = null;

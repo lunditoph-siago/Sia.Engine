@@ -44,82 +44,28 @@ internal static partial class PbrSceneFiles
         Func<MeshManifest, AssetId> selectProduct, Func<TProduct, int> partCount, Func<Stream, ulong, string?, TProduct> decodeProduct,
         int maximumFileBytes, long maximumTotalBytes, CancellationToken cancellationToken) where TProduct : class, IAssetRecord
     {
-        ArgumentNullException.ThrowIfNull(path); ArgumentNullException.ThrowIfNull(client);
-        ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes); ArgumentOutOfRangeException.ThrowIfNegative(maximumTotalBytes);
-        cancellationToken.ThrowIfCancellationRequested();
-        var http = AssetInput.TryGetHttpUri(path, out var uri);
-        var filename = Path.GetFileNameWithoutExtension(http ? uri!.AbsolutePath : path);
-        if (!IsReferenceScene(path) || !Guid.TryParseExact(filename, "N", out var guid) || guid == Guid.Empty)
-            throw new ArgumentException("Reference scenes require a nonempty Guid in N format and .siascene suffix.", nameof(path));
-        var root = http ? null : Path.GetDirectoryName(Path.GetFullPath(path))!;
-        string Locate(AssetId id) => http ? new Uri(uri!, id.Value.ToString("N") + ".siaasset").AbsoluteUri
-            : Path.Combine(root!, id.Value.ToString("N") + ".siaasset");
-        var claims = new Dictionary<AssetId, Type>(); long total = 0;
-
-        async Task<T> Read<T>(AssetId id, string location, Func<Stream, string, T> decode) where T : class, IAssetRecord
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (claims.TryGetValue(id, out var kind) && kind != typeof(T))
-                throw new InvalidDataException("One logical asset ID cannot identify different record kinds.");
-            claims[id] = typeof(T);
-            using var input = await AssetInput.OpenAsync(location, client, cancellationToken);
-            var limit = (int)System.Math.Min(maximumFileBytes, maximumTotalBytes - total);
-            var bytes = await AssetInput.ReadBoundedAsync(input, limit, cancellationToken);
-            total += bytes.Length;
-            cancellationToken.ThrowIfCancellationRequested();
-            T Decode(CancellationToken token)
-            {
-                token.ThrowIfCancellationRequested(); cancellationToken.ThrowIfCancellationRequested();
-                if (!MemoryMarshal.TryGetArray(bytes, out var segment)) throw new InvalidOperationException("Expected owned encoded array.");
-                using var encoded = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
-                return decode(encoded, location);
-            }
-#if BROWSER
-            return await Program.BrowserOwner.RunCpuAsync(Decode, cancellationToken);
-#else
-            return Decode(cancellationToken);
-#endif
-        }
-
-        var id = new AssetId(guid);
-        var scene = await Read(id, path, (s, n) => PbrSceneRecord.Load(s, (ulong)maximumFileBytes, n));
-        var meshes = new Dictionary<AssetId, MeshManifestRecord>(); var products = new Dictionary<AssetId, TProduct>();
-        var materials = new Dictionary<AssetId, PbrMaterialRecord>(); var textures = new Dictionary<AssetId, PbrTextureRecord>();
+        var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
+        var prepared = await reader.References(); var scene = prepared.Scene;
+        var meshes = prepared.Meshes; var products = new Dictionary<AssetId, TProduct>();
         var uses = new int[scene.Data.Bindings.Length];
         for (var i = 0; i < scene.Data.Instances.Length; i++) uses[scene.Data.Instances[i].Binding]++;
         long expanded = 0; var geometryCount = 0;
         for (var i = 0; i < uses.Length; i++) {
             if (uses[i] == 0) continue;
             var binding = scene.Data.Bindings[i];
-            if (!meshes.TryGetValue(binding.Mesh.Value, out var mesh)) {
-                mesh = await Read<MeshManifestRecord>(binding.Mesh.Value, Locate(binding.Mesh.Value), MeshManifestRecord.Load);
-                meshes.Add(binding.Mesh.Value, mesh);
-            }
+            var mesh = meshes[binding.Mesh.Value];
             var selected = selectProduct(mesh.Data);
             if (!products.TryGetValue(selected, out var product)) {
-                product = await Read(selected, Locate(selected), (s, n) => decodeProduct(s, (ulong)maximumFileBytes, n));
+                product = await reader.Read(selected, decodeProduct);
                 products.Add(selected, product);
                 geometryCount += partCount(product);
                 if (geometryCount > 4096) throw new InvalidDataException("Resolved geometry table limit exceeded.");
             }
             expanded += (long)uses[i] * partCount(product);
             if (expanded > PbrSceneData.MaximumInstances) throw new InvalidDataException("Expanded scene instance limit exceeded.");
-            for (var slotIndex = 0; slotIndex < binding.Materials.Length; slotIndex++) {
-                var slot = binding.Materials[slotIndex];
-                if (materials.ContainsKey(slot.Material.Value)) continue;
-                if (materials.Count == 4096) throw new InvalidDataException("Resolved material table limit exceeded.");
-                var material = await Read<PbrMaterialRecord>(slot.Material.Value, Locate(slot.Material.Value), PbrMaterialRecord.Load);
-                materials.Add(slot.Material.Value, material);
-                foreach (var reference in material.Data.TextureReferences) {
-                    if (textures.ContainsKey(reference.Value)) continue;
-                    if (textures.Count == 4096) throw new InvalidDataException("Resolved texture table limit exceeded.");
-                    var texture = await Read(reference.Value, Locate(reference.Value), (s, n) => PbrTextureRecord.Load(s, (ulong)maximumFileBytes, n));
-                    textures.Add(reference.Value, texture);
-                }
-            }
         }
         cancellationToken.ThrowIfCancellationRequested();
-        return new(id, scene, meshes, products, materials, textures) { EncodedBytes = total };
+        return new(prepared.Id, scene, meshes, products, prepared.Materials, prepared.Textures) { EncodedBytes = reader.EncodedBytes };
     }
 
     // Must run synchronously on the target World's owner context after preparation.
@@ -152,6 +98,12 @@ internal static partial class PbrSceneFiles
 
     private static (Entity Root, TScene Scene) Acquire<TProduct, TScene>(World world, Prepared<TProduct> prepared,
         Func<World, PbrSceneData, TScene> compose) where TProduct : class, IAssetRecord
+        => Acquire(world, prepared, (w, root) => {
+            foreach (var item in prepared.Products) w.AcquireAsset(item.Key, () => item.Value, root);
+        }, compose);
+
+    private static (Entity Root, TScene Scene) Acquire<TScene>(World world, Prepared prepared,
+        Action<World, Entity> acquireProducts, Func<World, PbrSceneData, TScene> compose)
     {
         ArgumentNullException.ThrowIfNull(world); ArgumentNullException.ThrowIfNull(prepared);
         AssetLibrary.RegisterAsset<PbrSceneResource, PbrSceneRecord>();
@@ -162,7 +114,7 @@ internal static partial class PbrSceneFiles
         try {
             var scene = world.AcquireAsset(prepared.Id, () => prepared.Scene, root);
             foreach (var item in prepared.Meshes) world.AcquireAsset(item.Key, () => item.Value, root);
-            foreach (var item in prepared.Products) world.AcquireAsset(item.Key, () => item.Value, root);
+            acquireProducts(world, root);
             foreach (var item in prepared.Materials) world.AcquireAsset(item.Key, () => item.Value, root);
             foreach (var item in prepared.Textures) world.AcquireAsset(item.Key, () => item.Value, root);
             var resolved = compose(world, scene.Get<PbrSceneResource>().Data);
