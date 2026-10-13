@@ -11,6 +11,7 @@ internal sealed partial class SceneExampleApp
 {
     private PbrSceneStream? _materialStream;
     private PbrRasterScene? _rasterScene;
+    private PbrBvhScene? _traceScene;
     private int _materialInstanceCount;
     private PbrSceneFiles.Prepared? _referenceScene;
     private Entity _assetRoot;
@@ -21,6 +22,12 @@ internal sealed partial class SceneExampleApp
     {
         if (_referenceScene is not { } prepared) return;
         switch (prepared) {
+            case PbrSceneFiles.PreparedMixed mixed: {
+                var acquired = PbrSceneFiles.AcquireMixed(_renderWorld!.Entities, mixed);
+                _assetRoot = acquired.Root; _materialStream = acquired.Stream; _traceScene = acquired.Trace;
+                _materialInstanceCount = acquired.Stream.SourceInstanceCount;
+                break;
+            }
             case PbrSceneFiles.Prepared<MeshRasterRecord> raster: {
                 var acquired = PbrSceneFiles.AcquireRaster(_renderWorld!.Entities, raster);
                 _assetRoot = acquired.Root; _rasterScene = acquired.Scene;
@@ -36,6 +43,9 @@ internal sealed partial class SceneExampleApp
             default: throw new InvalidOperationException("Unsupported prepared scene product.");
         }
         AcquireLightmapAssets(prepared.Scene.Data);
+        if (Program.MovingInstance is { } moving)
+            foreach (var instance in prepared.Scene.Data.Instances)
+                if (instance.Id == moving) _movingInstance = instance;
         _referenceScene = null;
         Console.WriteLine(prepared.Scene.Data.Attribution);
         Console.WriteLine($"Reference PBR scene: {prepared.Scene.Data.Instances.Length} Mesh instances; {_materialInstanceCount} section instances.");
@@ -75,6 +85,7 @@ internal sealed partial class SceneExampleApp
             ExportSurfaceData = Program.ExportSurfaceData,
             BakedProbes = _bakedProbes,
             DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
+            TraceScene = _traceScene,
             OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
             TargetPixelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
             ShadowTexelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
@@ -91,6 +102,7 @@ internal sealed partial class SceneExampleApp
         Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Signed dynamic correction, multiple bounces and temporal reconstruction are pending.");
         _materialStream = null;
         _rasterScene = null;
+        _traceScene = null;
         _lightmapInput = null;
     }
 

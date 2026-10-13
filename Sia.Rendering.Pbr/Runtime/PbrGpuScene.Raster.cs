@@ -13,6 +13,7 @@ internal sealed partial class PbrGpuScene
         float4[]? vertices=null; uint4[]? tangentBake=null; uint[]? indices=null;
         try {
             using var layout=new PbrRasterLayout(source,materialBatches,budget);
+            _instanceMotion = new(source, layout);
             var vertexBytes=(ulong)layout.VertexCount*PbrRasterVertex.Bytes;
             var indexBytes=(ulong)layout.TriangleCount*12;
             layout.ValidateBindingLimit(_gpu.Limits.MaxStorageBufferBindingSize);

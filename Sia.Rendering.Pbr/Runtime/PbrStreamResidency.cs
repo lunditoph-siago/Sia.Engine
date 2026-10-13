@@ -64,6 +64,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     }
 
     private readonly PbrSceneStream _source;
+    private readonly VisibilityInstance[] _instances;
     private readonly PbrSceneStream.PageInfo[] _pages;
     private readonly Dictionary<string, int> _pageIndices;
     private readonly StreamPageArena _arena;
@@ -100,6 +101,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     private Task? _stopTask;
 
     public ulong Revision { get; private set; }
+    internal ulong PoseRevision { get; private set; }
 
     public PbrGpuScene.Draw[] RootDraws => [.. _roots];
 
@@ -116,6 +118,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         if (settings.MaximumSelectionNodesPerView < 1024)
             throw new ArgumentOutOfRangeException(nameof(settings), "Selection must allow at least one complete packed root group.");
         (_source, _arena, _settings) = (source, arena, settings);
+        _instances = source.Instances.ToArray();
         _pages = [.. source.PageTable.Values];
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
         _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes),
@@ -169,7 +172,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _branches = new BranchGroup[_source.Instances.Length][];
         _leafRoots = new LeafRoot[_source.Instances.Length][];
         for (var i = 0; i < _source.Instances.Length; i++) {
-            var instance = _source.Instances.Span[i];
+            var instance = _instances[i];
             var tree = _source.Hierarchies[instance.AssetIndex];
             _bounds[i] ??= [.. tree.Nodes.Select(n => BoundsTransform.Apply(PbrSceneStream.NodeBounds(n), instance.Transform))];
             _branches[i] = [.. Enumerable.Range(0, tree.Roots).Where(n => tree.Nodes[n].ChildCount > 0)
@@ -258,7 +261,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         if (cacheGroups && !_groupCuts.TryGetValue(view, out groupCuts)) _groupCuts.Add(view, groupCuts = []);
         for (var i = 0; i < _source.Instances.Length; i++) {
             if (!culler.Intersects(_instanceBounds[i])) continue;
-            var instance = _source.Instances.Span[i];
+            var instance = _instances[i];
             var tree = _source.Hierarchies![instance.AssetIndex];
             foreach (var leaf in _leafRoots[i])
                 if (culler.Intersects(leaf.Bounds)) { Touch(leaf.Key); output.AddRange(leaf.Draws); }
@@ -312,7 +315,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _viewWanted = null;
         void Visit(int instanceIndex, PbrSceneStream.HierarchyInfo tree, int index)
         {
-            var instance = _source.Instances.Span[instanceIndex];
+            var instance = _instances[instanceIndex];
             var node = tree.Nodes[index];
             var bounds = _bounds[instanceIndex][index];
             if (!culler.Intersects(bounds)) return;
@@ -331,17 +334,22 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             var projected = float.IsFinite(raw) ? raw : float.MaxValue;
             if (node.ChildCount > 0 && (error == 0 || projected > error)) {
                 var complete = true;
-                for (var c = node.Children; c < node.Children + node.ChildCount; c++)
+                var visibleChildren = 0;
+                for (var c = node.Children; c < node.Children + node.ChildCount; c++) {
+                    if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
+                    visibleChildren++;
                     foreach (var part in tree.Nodes[c].Pages) {
                         var key = PageKey(instanceIndex, part.Id);
                         Demand(key, projected);
                         if (_resident.ContainsKey(key)) Touch(key);
                         else complete = false;
                     }
-                if (complete) {
+                }
+                if (complete && visibleChildren <= _settings.MaximumSelectionNodesPerView - visited) {
                     for (var c = node.Children; c < node.Children + node.ChildCount; c++) Visit(instanceIndex, tree, c);
                     return;
                 }
+                if (complete) { deferred = true; groupIncomplete = true; }
             }
             foreach (var part in node.Pages) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Id)].Allocation, bounds));
         }
@@ -364,7 +372,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     private PbrGpuScene.Draw Draw(int index, PbrSceneStream.NodeInfo node, PbrSceneStream.PagePart part, StreamPageAllocation allocation, Aabb? bounds = null)
     {
-        var instance = _source.Instances.Span[index];
+        var instance = _instances[index];
         return new(allocation.Triangles.Offset + (uint)part.First, (uint)part.Count, instance.MaterialIndex,
             bounds ?? BoundsTransform.Apply(PbrSceneStream.NodeBounds(node), instance.Transform),
             _source.Bootstrap.Materials.Span[instance.MaterialIndex].DoubleSided,

@@ -45,9 +45,9 @@ internal sealed partial class PbrGpuScene : IDisposable
     public uint OpaqueTriangles { get; }
     public uint TriangleCount { get; }
 
-    public Aabb Bounds { get; }
+    public Aabb Bounds { get; private set; }
     public Draw[] Transparent { get; }
-    public Draw[] Opaque { get; }
+    public Draw[] Opaque { get; private set; }
 
     public ulong Bytes => _gpu.Bytes + (_arena?.Bytes ?? 0) + (Streaming?.Hierarchy?.Bytes ?? 0);
 
@@ -74,7 +74,10 @@ internal sealed partial class PbrGpuScene : IDisposable
                 geometries[g] = prepareGeometry(g);
             var totalVertices = 0;
             var totalTriangles = 0;
+            var localInstances = instanceBuffer != default;
+            var counted = new HashSet<int>();
             foreach (var instance in sourceInstances.Span) {
+                if (localInstances && !counted.Add(instance.Geometry)) continue;
                 var geometry = geometries[instance.Geometry]!;
                 totalVertices = checked(totalVertices + geometry.VertexCount);
                 totalTriangles = checked(totalTriangles + (int)checked(geometry.Fine + geometry.Coarse));
@@ -117,15 +120,20 @@ internal sealed partial class PbrGpuScene : IDisposable
             var order = Enumerable.Range(0, sourceInstances.Length).OrderBy(Bin)
                 .ThenBy(i => materialBatches[sourceInstances.Span[i].Material]);
             uint vertexOffset = 0, triangleOffset = 0;
+            var shared = new Dictionary<int, uint>();
             foreach (var i in order) {
                 var instance = sourceInstances.Span[i];
                 var material = materials.Span[instance.Material];
                 var geometry = geometries[instance.Geometry]!;
-                var normal = math.transpose(math.inverse(instance.Transform));
-                for (var first = 0; first < geometry.VertexCount;) {
+                var transform = localInstances ? float4x4.identity : instance.Transform;
+                var normal = math.transpose(math.inverse(transform));
+                var upload = !localInstances || !shared.ContainsKey(instance.Geometry);
+                var drawFirst = triangleOffset;
+                if (!upload) drawFirst = shared[instance.Geometry];
+                for (var first = 0; upload && first < geometry.VertexCount;) {
                     var count = System.Math.Min(vertexBatch - bufferedVertices, geometry.VertexCount - first);
                     geometry.PackVertices(vertexScratch.AsSpan(bufferedVertices), first, count,
-                        instance.Transform, normal, instance.Material, checked(instanceBase + (uint)i), vertexBatch);
+                        transform, normal, instance.Material, checked(instanceBase + (uint)i), vertexBatch);
                     first += count;
                     bufferedVertices += count;
                     if (bufferedVertices == vertexBatch) {
@@ -134,17 +142,20 @@ internal sealed partial class PbrGpuScene : IDisposable
                         bufferedVertices = 0;
                     }
                 }
-                geometry.WriteIndices(ref indexWriter, vertexOffset);
+                if (upload) geometry.WriteIndices(ref indexWriter, vertexOffset);
                 var triangles = checked(geometry.Fine + geometry.Coarse);
                 var bounds = BoundsTransform.Apply(geometry.Bounds, instance.Transform);
                 minimum = math.min(minimum, bounds.Min);
                 maximum = math.max(maximum, bounds.Max);
                 if (triangles != 0)
-                    (material.AlphaBlend ? transparent : opaque).Add(new(triangleOffset, geometry.Fine,
-                        instance.Material, bounds, material.DoubleSided, triangleOffset * 3, (uint)i,
-                        triangleOffset + geometry.Fine, geometry.Coarse, geometry.Error * TransformNorm(instance.Transform)));
-                vertexOffset += (uint)geometry.VertexCount;
-                triangleOffset += triangles;
+                    (material.AlphaBlend ? transparent : opaque).Add(new(drawFirst, geometry.Fine,
+                        instance.Material, bounds, material.DoubleSided, drawFirst * 3, checked(instanceBase + (uint)i),
+                        drawFirst + geometry.Fine, geometry.Coarse, geometry.Error * TransformNorm(instance.Transform)) { SourceInstance = (uint)i });
+                if (upload) {
+                    shared.TryAdd(instance.Geometry, triangleOffset);
+                    vertexOffset += (uint)geometry.VertexCount;
+                    triangleOffset += triangles;
+                }
                 if (Bin(i) == 0) SingleSidedTriangles = triangleOffset;
                 if (Bin(i) <= 1) OpaqueTriangles = triangleOffset;
             }
@@ -174,16 +185,19 @@ internal sealed partial class PbrGpuScene : IDisposable
 
     internal static float TransformNorm(float4x4 m)
     {
-        var a = math.abs(m.c0.xyz);
-        var b = math.abs(m.c1.xyz);
-        var c = math.abs(m.c2.xyz);
-        var column = MathF.Max(a.x + a.y + a.z, MathF.Max(b.x + b.y + b.z, c.x + c.y + c.z));
+        var a = math.abs((double3)m.c0.xyz);
+        var b = math.abs((double3)m.c1.xyz);
+        var c = math.abs((double3)m.c2.xyz);
+        var column = System.Math.Max(a.x + a.y + a.z, System.Math.Max(b.x + b.y + b.z, c.x + c.y + c.z));
         var rows = a + b + c;
-        return MathF.Sqrt(column * MathF.Max(rows.x, MathF.Max(rows.y, rows.z)));
+        var norm = System.Math.Sqrt(column * System.Math.Max(rows.x, System.Math.Max(rows.y, rows.z)));
+        var rounded = (float)norm;
+        return rounded < norm ? MathF.BitIncrement(rounded) : rounded;
     }
 
     public void Dispose()
     {
+        _instanceMotion = null; _pendingInstanceMotion = null;
         Streaming?.Hierarchy?.Dispose();
         _gpu.Dispose();
         _arena?.Dispose();
