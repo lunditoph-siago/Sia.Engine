@@ -10,6 +10,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private const WGPUShaderStage k_Shade = WGPUShaderStage.Compute | WGPUShaderStage.Fragment;
 
     private readonly GpuResources _gpu;
+    private readonly World _sourceWorld;
     private readonly bool _sceneGi;
 
     public bool SeparateDirectResolvePass { get; }
@@ -60,6 +61,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
 
     public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false)
     {
+        _sourceWorld = frame.ResourceWorld;
         _gpu = new(frame, 0);
         _sceneGi = sceneGi;
         try {
@@ -193,7 +195,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-                PbrShaderSource.Compile("resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
+                PbrShaderSource.CompileAcquired(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
                     streamInstances: gpuStream, shadingWork: gpuStream), "pbr-resolve"));
             var shading = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
             Background = Compute(shade, shading, "background");
@@ -212,7 +214,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TransparentDouble = Render(transparent, glassLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
             Transmission = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
             TransmissionDouble = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
-            var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile("output.wgsl"), "pbr-output"));
+            var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.CompileAcquired(_sourceWorld, "output.wgsl"), "pbr-output"));
             Output = Render(output, GpuBinding.PipelineLayout(_gpu, OutputLayout), "output_vertex", "output_fragment", format, false, WGPUCullMode.None);
         }
         catch {
@@ -224,7 +226,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false,
         bool compatibilityUniformPadding = false)
         => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-            PbrShaderSource.Compile(file, writableClusters, sceneGi: _sceneGi,
+            PbrShaderSource.CompileAcquired(_sourceWorld, file, writableClusters, sceneGi: _sceneGi,
                 streamInstances: streamInstances, shadingWork: shadingWork,
                 compatibilityUniformPadding: compatibilityUniformPadding), file));
 

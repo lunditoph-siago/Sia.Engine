@@ -36,17 +36,21 @@ public static partial class Program
 #endif
             var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
             using var streamHttp = new HttpClient();
-            if (EnvironmentPath is not null)
-                BakedEnvironment = await LoadEnvironmentAsync(EnvironmentPath, streamHttp);
-            if (ProbesPath is not null)
-                BakedProbes = await LoadProbesAsync(ProbesPath, streamHttp);
+            var referencePath = pipeline == ScenePipeline.Pbr && scenePath is not null && PbrSceneFiles.IsReferenceScene(scenePath);
+            PbrSceneFiles.Prepared? references = null;
+            if (referencePath) references = Quality == Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareRasterAsync(scenePath!, streamHttp)
+                : await PbrSceneFiles.PrepareVirtualAsync(scenePath!, streamHttp);
+            var lighting = await LightingFiles.PrepareAsync(EnvironmentPath, ProbesPath, streamHttp);
             var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
             await using var streaming = asset is not null ? await OpenBunnyStreamAsync(asset)
                 : scenePath is not null && scenePath.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase)
                     ? await OpenStreamAsync(scenePath, streamHttp) : null;
             var scene = streaming?.Bootstrap
-                ?? (pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath, finest, streamHttp) : null);
-            var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera, streaming);
+                ?? (pipeline == ScenePipeline.Pbr && references is null ? await LoadPbrAsync(scenePath, finest, streamHttp) : null);
+            var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera, streaming, references, lighting);
+            references = null;
+            lighting = null;
             scene = null;
 #if BROWSER
             try {
