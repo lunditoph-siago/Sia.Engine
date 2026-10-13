@@ -13,7 +13,7 @@ internal sealed unsafe class VertexBufferVertexSource : IUiVertexSource
     public Entity LoadVertexShaderModule(
         World world, WgpuHandle<WGPUDevice> device, Entity fragmentShaderModule) =>
         world.OwnWgpu(Wgpu.CreateWgslShaderModule(
-            device, UiShaderSource.LoadVertexBuffer(), "ui_node_vertex_buffer"));
+            device, UiShaderSource.LoadVertexBuffer(world), "ui_node_vertex_buffer"));
 
     public int WriteBindGroupLayoutEntries(Span<WGPUBindGroupLayoutEntry> entries) => 0;
 

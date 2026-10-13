@@ -1,4 +1,3 @@
-using System.Reflection;
 using Sia;
 using Sia.GLFW;
 using Sia.Graphics.Text;
@@ -44,7 +43,7 @@ internal sealed unsafe partial class StyleShowcaseApp
         world.AcquireAddon<DetailsStyle.Reactor>();
 
         _theme = world.Create(HList.From(ShowcaseTheme.Dark));
-        _font = LoadFont();
+        _font = ShowcaseFont.Load(world);
         _mount = world.Mount(
             RenderShowcase,
             new ShowcaseProps(this, new Size(InitialWidth, InitialHeight)));
@@ -333,17 +332,6 @@ internal sealed unsafe partial class StyleShowcaseApp
         }
         var primitiveCount = _uiRenderer.PrepareFrame(_uiWorld, viewport);
         _uiRenderer.Encode(renderPass, primitiveCount);
-    }
-
-    private static Font LoadFont()
-    {
-        var assembly = typeof(StyleShowcaseApp).Assembly;
-        using var stream = assembly.GetManifestResourceStream(
-            "Sia.UI.Example.NotoSans-UiSubset.ttf")
-            ?? throw new InvalidOperationException("The embedded showcase font was not found.");
-        using var memory = new MemoryStream();
-        stream.CopyTo(memory);
-        return new Font(memory.ToArray());
     }
 
     private void DisposeUi()
