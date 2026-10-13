@@ -8,6 +8,16 @@ public static partial class Program
     {
         try {
 #if !BROWSER
+            if (args.Length == 4 && args[0] == "--pack-scene" && args[2] == "--output") {
+                var sceneId = await ScenePack.PackAsync(args[1], args[3]);
+                Console.WriteLine($"Packed scene {sceneId.Value:N}: {Path.GetFullPath(args[3])}");
+                return 0;
+            }
+            if (args.Length == 4 && args[0] == "--cook-mesh" && args[2] == "--output") {
+                var mesh = MeshCook.Cook(args[1], args[3]);
+                Console.WriteLine($"Cooked Mesh {mesh.Value:N}: {Path.GetFullPath(args[3])}");
+                return 0;
+            }
             if (args.Length == 4 && args[0] == "--bake-environment" && args[2] == "--output") {
                 BakeEnvironment(args[1], args[3]);
                 return 0;

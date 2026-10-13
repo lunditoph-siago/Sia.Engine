@@ -49,6 +49,7 @@ public static partial class PbrSceneTransport
     public static byte[] Identity(PbrSceneAsset scene, bool finest = false)
     {
         ArgumentNullException.ThrowIfNull(scene);
+        if (!scene.TransportIdentity.IsEmpty) return scene.TransportIdentity.ToArray();
         var hash = new SceneIdentityHash();
         void Record(float4 v)
         {
@@ -86,6 +87,41 @@ public static partial class PbrSceneTransport
             Record(instance.Transform.c1);
             Record(instance.Transform.c2);
             Record(instance.Transform.c3);
+        }
+        return hash.Finish();
+    }
+
+    internal static (float4 Albedo, float4 Emission) Surface(PbrMaterialAsset material)
+    {
+        var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
+        return (new(material.Parameters.BaseColor * Average(material.BaseColor) * (1 - MathF.Min(1, MathF.Max(0, metal))), material.DoubleSided ? 1 : 0),
+            new(material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive), material.AlphaBlend ? 1 : 0));
+    }
+
+    internal static byte[] ReferenceIdentity(PbrSceneData scene, Func<PbrMeshBinding, MeshManifest> mesh,
+        Func<PbrMaterialSlot, PbrMaterialAsset> material, CancellationToken token)
+    {
+        var hash = new SceneIdentityHash(); hash.AppendData("SIAPBRREFERENCETRACE1"u8);
+        static void Record(SceneIdentityHash target, float4 value) { Span<float4> row = [value]; target.AppendData(MemoryMarshal.AsBytes(row)); }
+        static void Count(SceneIdentityHash target, int value) { Span<byte> bytes = stackalloc byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes, value); target.AppendData(bytes); }
+        // Source revisions are deliberately conservative: authored normal/UV changes may invalidate a bake.
+        // Per-binding cache avoids repeatedly averaging texture pixels for repeated instances.
+        var bindings = new byte[scene.Bindings.Length][];
+        Span<byte> id = stackalloc byte[16]; Count(hash, scene.Instances.Length);
+        foreach (var instance in scene.Instances) {
+            token.ThrowIfCancellationRequested();
+            instance.Id.TryWriteBytes(id, bigEndian: true, out _); hash.AppendData(id);
+            var binding = scene.Bindings[instance.Binding];
+            if (bindings[instance.Binding] is not { } source) {
+                var revision = new SceneIdentityHash(); revision.AppendData(Convert.FromHexString(mesh(binding).SourceHash)); Count(revision, binding.Materials.Length);
+                foreach (var slot in binding.Materials) {
+                    token.ThrowIfCancellationRequested(); Count(revision, slot.Slot); var surface = Surface(material(slot));
+                    Record(revision, surface.Albedo); Record(revision, surface.Emission);
+                }
+                source = revision.Finish(); bindings[instance.Binding] = source;
+            }
+            hash.AppendData(source);
+            Record(hash, instance.Transform.c0); Record(hash, instance.Transform.c1); Record(hash, instance.Transform.c2); Record(hash, instance.Transform.c3);
         }
         return hash.Finish();
     }
