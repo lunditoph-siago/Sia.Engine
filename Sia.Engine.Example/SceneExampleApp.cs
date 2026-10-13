@@ -127,6 +127,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         deviceDescriptor.RequiredFeatures = _gpuTimingEnabled ? &timingFeature : null;
         _device = Wgpu.RequestDevice(_adapter, deviceDescriptor);
         _queue = Wgpu.GetQueue(_device);
+        if (_gpuTimingEnabled) _gpuTimestampPeriod = GpuTimestampPeriod.Read(_queue);
 
         InitializeRenderGraph();
         InitializeScene();

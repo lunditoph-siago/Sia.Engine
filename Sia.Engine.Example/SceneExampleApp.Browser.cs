@@ -93,6 +93,7 @@ internal sealed partial class SceneExampleApp
         _presentMode = surfaceInfo.PresentMode;
         _device = await RequestBrowserDeviceAsync();
         _queue = Wgpu.GetQueue(_device);
+        if (_gpuTimingEnabled) _gpuTimestampPeriod = GpuTimestampPeriod.Read(_queue);
         InitializeRenderGraph();
         InitializeScene();
         ResizeIfNeeded(force: true);
