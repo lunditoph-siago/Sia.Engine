@@ -202,7 +202,9 @@ def read_identities(path):
     return json.loads(encoded.decode("utf-8"), object_pairs_hook=pairs, parse_constant=invalid_constant)
 
 
-def author(scene, collection, directory, catalog, output, products=PRODUCTS, maximum_texture_size=256):
+def author(scene, collection, directory, catalog, output, products=PRODUCTS, maximum_texture_size=256,
+           bake_resolution=None, maximum_bake_resolution=None, lightmap_product=None,
+           lightmap_samples=128, maximum_page_resolution=64):
     """Compose canonical exporters and offline cook recipes in one new directory.
 
     Exclusive creation preserves existing outputs. Failures remove only created
@@ -215,8 +217,28 @@ def author(scene, collection, directory, catalog, output, products=PRODUCTS, max
     if (isinstance(maximum_texture_size, bool) or not isinstance(maximum_texture_size, int)
             or not 1 <= maximum_texture_size <= 8192):
         raise ValueError("Texture output size must be between 1 and 8192")
+    def power(value, minimum):
+        return (not isinstance(value, bool) and isinstance(value, int) and minimum <= value <= 8192
+                and value & (value - 1) == 0)
+    if bake_resolution is not None and not power(bake_resolution, 8):
+        raise ValueError("Bake resolution must be a power of two from 8 to 8192")
+    if maximum_bake_resolution is not None and (bake_resolution is None
+            or not power(maximum_bake_resolution, 8) or maximum_bake_resolution < bake_resolution):
+        raise ValueError("Maximum bake resolution requires an ordered minimum/maximum range")
+    if lightmap_product is not None:
+        lightmap_product = str(_uuid(lightmap_product))
+        if bake_resolution is None or not power(maximum_page_resolution, 2):
+            raise ValueError("Lightmap authoring requires bake charts and a power-of-two page resolution")
+        if isinstance(lightmap_samples, bool) or not isinstance(lightmap_samples, int) or not 16 <= lightmap_samples <= 1024:
+            raise ValueError("Lightmap samples must be between 16 and 1024")
     inventory = _inventory(collection, directory)
     validate_identities(catalog, inventory)
+    if lightmap_product is not None:
+        known = {catalog["scene"], *catalog["materials"].values(), *catalog["instances"].values(),
+                 *(entry["id"] for entry in catalog["images"].values()),
+                 *(entry[kind] for entry in catalog["meshes"].values() for kind in ("mesh", "source", *PRODUCTS))}
+        if lightmap_product in {str(_uuid(value)) for value in known}:
+            raise ValueError("Lightmap product aliases an authored input identity")
     meshes, materials, images, instances = inventory
     source_tool, material_tool, texture_tool, scene_tool = (
         _tool(name) for name in ("export_mesh_source", "export_material", "export_texture", "export_scene_references"))
@@ -267,10 +289,14 @@ def author(scene, collection, directory, catalog, output, products=PRODUCTS, max
             path = target(entry["source"])
             write(path, lambda: source_tool.export_source(obj, path, entry["textureUv"], entry["bakeUv"]))
             recipe = {"mesh": entry["mesh"], "source": entry["source"], "input": path.name}
+            if bake_resolution is not None:
+                recipe["bakeResolution"] = bake_resolution
+            if maximum_bake_resolution is not None:
+                recipe["maximumBakeResolution"] = maximum_bake_resolution
             if "raster" in products:
                 recipe["raster"] = entry["raster"]
             for kind in ("virtual", "bvh"):
-                if kind in products:
+                if kind in products or (kind == "bvh" and lightmap_product is not None):
                     recipe[kind] = {"id": entry[kind]}
             path = target(entry["mesh"], ".mesh.json")
             write(path, lambda: _write_json(path, recipe, 64 * 1024))
@@ -290,6 +316,10 @@ def author(scene, collection, directory, catalog, output, products=PRODUCTS, max
         recipe = {"scene": {"scene": catalog["scene"], "input": path.name,
                     **{kind: kind in products for kind in PRODUCTS},
                     "materials": material_entries, "textures": texture_entries}, "meshes": recipes}
+        if lightmap_product is not None:
+            recipe["lightmap"] = {"product": lightmap_product,
+                "staticInstances": sorted(catalog["instances"].values()),
+                "samples": lightmap_samples, "maximumPageResolution": maximum_page_resolution}
         path = output / "content.json"
         write(path, lambda: _write_json(path, recipe, MAXIMUM_RECIPE_BYTES))
     except BaseException:
@@ -330,9 +360,17 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--products", default="raster,virtual,bvh")
     parser.add_argument("--maximum-texture-size", type=int, default=256)
+    parser.add_argument("--bake-resolution", type=int)
+    parser.add_argument("--maximum-bake-resolution", type=int)
+    parser.add_argument("--lightmap-product")
+    parser.add_argument("--lightmap-samples", type=int, default=128)
+    parser.add_argument("--maximum-page-resolution", type=int, default=64)
     args = parser.parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else [])
     if args.capture_identities is not None and (args.attribution is None or args.output is not None):
         raise ValueError("Identity capture requires attribution and does not author output")
+    if args.capture_identities is not None and any(value is not None for value in
+            (args.bake_resolution, args.maximum_bake_resolution, args.lightmap_product)):
+        raise ValueError("Bake options require existing-identity authoring")
     if args.identities is not None and (args.output is None or args.attribution is not None):
         raise ValueError("Existing-identity authoring requires output and retains authored attribution")
     scene, collection = import_source(args.input)
@@ -343,7 +381,9 @@ def main():
         print(f"Authored identities: {args.capture_identities}")
     else:
         scene_id = author(scene, collection, args.input.resolve().parent, read_identities(args.identities),
-                          args.output, args.products.split(","), args.maximum_texture_size)
+                          args.output, args.products.split(","), args.maximum_texture_size,
+                          args.bake_resolution, args.maximum_bake_resolution, args.lightmap_product,
+                          args.lightmap_samples, args.maximum_page_resolution)
         print(f"Canonical source scene {scene_id}: {args.output}")
 
 

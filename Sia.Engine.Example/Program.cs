@@ -46,7 +46,9 @@ public static partial class Program
 #if BROWSER
                 throw new ArgumentException("The browser entry point must supply its default reference-scene URL.");
 #else
-                scenePath = ExampleContent.DefaultScene(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"));
+                var content = ExampleContent.Default(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"));
+                scenePath = content.Scene;
+                LightmapsPath ??= content.Lightmaps;
 #endif
             }
             var referencePath = pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny
@@ -60,7 +62,9 @@ public static partial class Program
                 ? await PbrSceneFiles.PrepareRasterAsync(scenePath!, streamHttp)
                 : virtualUse;
             var lighting = await LightingFiles.PrepareAsync(EnvironmentPath, ProbesPath, streamHttp);
-            var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting);
+            await using var lightmaps = LightmapsPath is null ? null
+                : await LightmapFiles.PrepareAsync(LightmapsPath, streamHttp, references!);
+            var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting, lightmaps);
             references = null;
             lighting = null;
 #if BROWSER

@@ -124,7 +124,7 @@ internal static partial class PbrSceneFiles
 
     // Must run synchronously on the target World's owner context after preparation.
     // Each use owns an anonymous root; scene identity and selected assets can be shared.
-    internal static (Entity Root, PbrVirtualScene Scene, Guid[] SourceInstances) AcquireVirtual(World world, Prepared<MeshVirtualRecord> prepared)
+    internal static (Entity Root, PbrVirtualScene Scene) AcquireVirtual(World world, Prepared<MeshVirtualRecord> prepared)
     {
         AssetLibrary.RegisterAsset<MeshVirtualAsset, MeshVirtualRecord>();
         return Acquire<MeshVirtualRecord, PbrVirtualScene>(world, prepared, static (w, s) => {
@@ -132,12 +132,12 @@ internal static partial class PbrSceneFiles
                 r => r.Find(w)?.Get<MeshManifestAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<MeshVirtualAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
-                r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException(), out var ids);
-            return (scene, ids);
+                r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException());
+            return scene;
         });
     }
 
-    internal static (Entity Root, PbrRasterScene Scene, Guid[] SourceInstances) AcquireRaster(World world, Prepared<MeshRasterRecord> prepared)
+    internal static (Entity Root, PbrRasterScene Scene) AcquireRaster(World world, Prepared<MeshRasterRecord> prepared)
     {
         AssetLibrary.RegisterAsset<MeshRasterAsset, MeshRasterRecord>();
         return Acquire<MeshRasterRecord, PbrRasterScene>(world, prepared, static (w, s) => {
@@ -145,13 +145,13 @@ internal static partial class PbrSceneFiles
                 r => r.Find(w)?.Get<MeshManifestAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<MeshRasterAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
-                r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException(), out var ids);
-            return (scene, ids);
+                r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException());
+            return scene;
         });
     }
 
-    private static (Entity Root, TScene Scene, Guid[] SourceInstances) Acquire<TProduct, TScene>(World world, Prepared<TProduct> prepared,
-        Func<World, PbrSceneData, (TScene Scene, Guid[] SourceInstances)> compose) where TProduct : class, IAssetRecord
+    private static (Entity Root, TScene Scene) Acquire<TProduct, TScene>(World world, Prepared<TProduct> prepared,
+        Func<World, PbrSceneData, TScene> compose) where TProduct : class, IAssetRecord
     {
         ArgumentNullException.ThrowIfNull(world); ArgumentNullException.ThrowIfNull(prepared);
         AssetLibrary.RegisterAsset<PbrSceneResource, PbrSceneRecord>();
@@ -166,7 +166,7 @@ internal static partial class PbrSceneFiles
             foreach (var item in prepared.Materials) world.AcquireAsset(item.Key, () => item.Value, root);
             foreach (var item in prepared.Textures) world.AcquireAsset(item.Key, () => item.Value, root);
             var resolved = compose(world, scene.Get<PbrSceneResource>().Data);
-            return (root, resolved.Scene, resolved.SourceInstances);
+            return (root, resolved);
         }
         catch { root.Destroy(); throw; }
     }

@@ -8,14 +8,18 @@ public sealed partial class PbrBvhTrace
     /// <summary>
     /// Closest geometric hit in inclusive [minimum, maximum], testing both sides and all material kinds.
     /// A miss returns false/default. Exact ties choose stable instance Guid then original primitive ID.
+    /// Optional resolved-material inclusion is applied during traversal, preserving coincident eligible hits.
     /// </summary>
     public bool TryTrace(float3 origin, float3 direction, out PbrBvhHit hit, double minimum = 0,
-        double maximum = double.PositiveInfinity, CancellationToken cancellationToken = default)
+        double maximum = double.PositiveInfinity, CancellationToken cancellationToken = default,
+        ReadOnlySpan<bool> includedMaterials = default)
     {
         if (!math.all(math.isfinite(origin)) || !math.all(math.isfinite(direction)) || math.all(direction == 0))
             throw new ArgumentException("Ray origin/direction must be finite and direction nonzero.");
         if (!double.IsFinite(minimum) || minimum < 0 || double.IsNaN(maximum) || maximum < minimum)
             throw new ArgumentOutOfRangeException(nameof(minimum), "Ray range must satisfy 0 <= minimum <= maximum.");
+        if (!includedMaterials.IsEmpty && includedMaterials.Length != Scene.Materials.Length)
+            throw new ArgumentException("Material inclusion must cover every resolved scene material.", nameof(includedMaterials));
         cancellationToken.ThrowIfCancellationRequested();
         hit = default; var found = false; var best = maximum;
         var o = (double3)origin; var d = (double3)direction;
@@ -24,14 +28,14 @@ public sealed partial class PbrBvhTrace
             var node = _nodes[nodeIndex];
             if (!Intersects(node.Bounds, o, d, minimum, best)) { nodeIndex = node.Escape; continue; }
             for (var at = node.First; at < node.First + node.Count; at++)
-                TraceInstance(_order[at], o, d, minimum, ref best, ref found, ref hit, cancellationToken);
+                TraceInstance(_order[at], o, d, minimum, ref best, ref found, ref hit, cancellationToken, includedMaterials);
             nodeIndex++;
         }
         return found;
     }
 
     private void TraceInstance(int index, double3 origin, double3 direction, double minimum,
-        ref double best, ref bool found, ref PbrBvhHit hit, CancellationToken cancellationToken)
+        ref double best, ref bool found, ref PbrBvhHit hit, CancellationToken cancellationToken, ReadOnlySpan<bool> includedMaterials)
     {
         var transform = _instances[index];
         if (!Intersects(transform.Bounds, origin, direction, minimum, best)) return;
@@ -45,6 +49,8 @@ public sealed partial class PbrBvhTrace
             if (!Intersects(node.Bounds, localOrigin, localDirection, minimum, best)) { nodeIndex = node.EscapeIndex; continue; }
             for (var at = node.FirstTriangle; at < node.FirstTriangle + node.TriangleCount; at++) {
                 var triangle = mesh.Triangles[at];
+                var material = includedMaterials.IsEmpty ? -1 : binding.GetMaterial(triangle.MaterialSlot);
+                if (material >= 0 && !includedMaterials[material]) continue;
                 if (!IntersectTriangle(mesh, triangle, localOrigin, localDirection, out var parameter, out var barycentric, out var front)
                     || parameter < minimum || parameter > best) continue;
                 if (found && parameter == best) {
@@ -53,10 +59,23 @@ public sealed partial class PbrBvhTrace
                 }
                 best = parameter; found = true;
                 hit = new(instance.Id, index, triangle.SourceTriangle, triangle.MaterialSlot,
-                    binding.GetMaterial(triangle.MaterialSlot), parameter, barycentric, front);
+                    material >= 0 ? material : binding.GetMaterial(triangle.MaterialSlot), parameter, barycentric, front) {
+                    GeometricNormal = GeometricNormal(mesh, triangle, transform)
+                };
             }
             nodeIndex++;
         }
+    }
+
+    private static float3 GeometricNormal(MeshBvhData mesh, MeshBvhTriangle triangle, InstanceData transform)
+    {
+        var a = (double3)mesh.Positions[(int)triangle.A];
+        var normal = math.cross((double3)mesh.Positions[(int)triangle.B] - a, (double3)mesh.Positions[(int)triangle.C] - a);
+        // Inverse transpose preserves the authored orientation under positive affine transforms.
+        var world = transform.Row0 * normal.x + transform.Row1 * normal.y + transform.Row2 * normal.z;
+        var scale = System.Math.Max(System.Math.Abs(world.x), System.Math.Max(System.Math.Abs(world.y), System.Math.Abs(world.z)));
+        world /= scale;
+        return (float3)(world / math.length(world));
     }
 
     private static bool Intersects(Aabb bounds, double3 origin, double3 direction, double minimum, double maximum)

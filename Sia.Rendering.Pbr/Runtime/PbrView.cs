@@ -124,6 +124,7 @@ internal sealed unsafe partial class PbrView : IDisposable
             Texture(entity);
         Texture(owner.Environment.Cube);
         Texture(owner.Environment.Lut);
+        if (owner.Lightmaps is { } lightmapTextures) foreach (var entity in lightmapTextures.Textures) Texture(entity);
         _collectCaster = e => _casters.Add(e);
         _collectDirectional = e => {
             if (_directional.Count == 4)
@@ -179,6 +180,11 @@ internal sealed unsafe partial class PbrView : IDisposable
             if (owner.Probes is { } probes) {
                 frameEntries.Add(GpuBinding.Texture(9, probes.TextureView.GetWgpu<WGPUTextureView>()));
                 frameEntries.Add(GpuBinding.Buffer(10, probes.Header));
+            }
+            if (owner.Lightmaps is { } lightmaps) {
+                frameEntries.Add(GpuBinding.Texture(12, lightmaps.MetadataView.GetWgpu<WGPUTextureView>()));
+                frameEntries.Add(GpuBinding.Texture(13, lightmaps.MappingView.GetWgpu<WGPUTextureView>()));
+                frameEntries.Add(GpuBinding.Texture(14, lightmaps.PageView.GetWgpu<WGPUTextureView>()));
             }
             _frameGroup = GpuBinding.Group(_gpu, owner.Pipelines.FrameLayout, CollectionsMarshal.AsSpan(frameEntries));
             if (owner.Settings.GpuTiming) {

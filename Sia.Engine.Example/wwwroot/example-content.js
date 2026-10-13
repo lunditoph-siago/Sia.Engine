@@ -1,5 +1,5 @@
 // Fixed example entry points. Mesh identities and payloads remain in their records.
-export async function defaultScene(pipeline, pageUrl, fetchContent = fetch) {
+export async function defaultContent(pipeline, pageUrl, fetchContent = fetch) {
   let descriptor = new URL('Assets/default-scenes.json', pageUrl);
   let catalog = await readCatalog(descriptor, fetchContent);
   // A thin Pages site can delegate once to the full package on a CORS-enabled host.
@@ -12,14 +12,22 @@ export async function defaultScene(pipeline, pageUrl, fetchContent = fetch) {
     catalog = await readCatalog(descriptor, fetchContent);
   }
   const keys = ['bunny', 'bistroExterior', 'bistroInterior', 'bistroWine'];
-  const path = /^Content\/[a-f0-9]{64}\/[a-f0-9]{32}\.siascene$/;
+  const path = suffix => new RegExp('^Content/[a-f0-9]{64}/[a-f0-9]{32}\\.' + suffix + '$');
+  const validPath = (value, suffix) => typeof value === 'string' && path(suffix).test(value)
+    && !value.endsWith('/' + '0'.repeat(32) + '.' + suffix);
+  const validEntry = entry => entry && typeof entry === 'object' && !Array.isArray(entry)
+    && Object.keys(entry).every(key => key === 'scene' || key === 'lightmaps')
+    && validPath(entry.scene, 'siascene')
+    && (entry.lightmaps == null || validPath(entry.lightmaps, 'siaasset')
+      && entry.lightmaps.slice(0, entry.lightmaps.lastIndexOf('/')) === entry.scene.slice(0, entry.scene.lastIndexOf('/')));
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)
       || Object.keys(catalog).length !== keys.length
-      || keys.some(key => typeof catalog[key] !== 'string' || !path.test(catalog[key])
-        || catalog[key].endsWith('/' + '0'.repeat(32) + '.siascene'))) {
+      || keys.some(key => !validEntry(catalog[key]))) {
     throw new Error('Invalid default scene catalog.');
   }
-  return new URL(pipeline === 'bunny' ? catalog.bunny : catalog.bistroExterior, descriptor).href;
+  const entry = pipeline === 'bunny' ? catalog.bunny : catalog.bistroExterior;
+  return { scene: new URL(entry.scene, descriptor).href,
+    lightmaps: entry.lightmaps == null ? null : new URL(entry.lightmaps, descriptor).href };
 }
 
 async function readCatalog(descriptor, fetchContent) {

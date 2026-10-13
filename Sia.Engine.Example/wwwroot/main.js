@@ -1,5 +1,5 @@
 import { createBrowserInput } from './browser-input.js';
-import { defaultScene } from './example-content.js';
+import { defaultContent } from './example-content.js';
 
 const canvas = document.getElementById('canvas');
 const parameters = new URLSearchParams(location.search);
@@ -241,8 +241,16 @@ try {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
   }
   if (pipeline === 'pbr' || pipeline === 'bunny') {
-    const scene = new URL(parameters.get('scene') ?? await defaultScene(pipeline, location.href), location.href);
-    args.push('--scene', scene.href);
+    const content = parameters.has('scene') ? { scene: parameters.get('scene'), lightmaps: null }
+      : await defaultContent(pipeline, location.href);
+    args.push('--scene', new URL(content.scene, location.href).href);
+    const lightmaps = parameters.get('lightmaps') ?? content.lightmaps;
+    if (lightmaps !== null) {
+      if (!lightmaps.trim()) throw new Error('The selected lightmap index path must not be empty.');
+      args.push('--lightmaps', new URL(lightmaps, location.href).href);
+    }
+  } else if (parameters.has('lightmaps')) {
+    throw new Error('Surface lightmaps require a mesh scene.');
   }
   setLoadingState('Starting engine runtime', NaN);
   // Preload runtime/timer/HTTP workers plus the four bounded CPU decoder workers.

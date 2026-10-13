@@ -4,5 +4,7 @@
 struct Instance {
     transform: mat4x4<f32>,
     normal_transform: mat4x4<f32>,
-    material: vec4<u32> // material index, bitcast spatial-error scale, reserved, reserved
+    // Stream: material, bitcast spatial-error scale, reserved, reserved.
+    // Resident: material, original input instance, logical triangle start, count.
+    material: vec4<u32>
 }

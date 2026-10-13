@@ -22,7 +22,13 @@ public sealed record PbrMaterialAsset(
     float Transmission = 0,
     float Thickness = 0);
 
-public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform);
+public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform)
+{
+    /// <summary>Authored scene identity, shared by all sections of one Mesh instance.</summary>
+    public Guid AuthoredId { get; init; }
+    /// <summary>Mesh-local slot, independent of the resolved renderer material table.</summary>
+    public int MaterialSlot { get; init; } = -1;
+}
 
 /// <summary>Transient resident rendering input for procedural callers; it has no persistence format or asset loader.</summary>
 public sealed class PbrSceneAsset
@@ -91,6 +97,8 @@ public sealed class PbrSceneAsset
             throw new ArgumentException("PBR scene texture count exceeds the asset format limit.", nameof(materials));
         }
         foreach (var instance in instances) {
+            if (instance.MaterialSlot < -1 || (instance.AuthoredId == Guid.Empty) != (instance.MaterialSlot == -1))
+                throw new ArgumentException("Authored instance identity and Mesh material slot must be supplied together.", nameof(instances));
             if ((uint)instance.Geometry >= (uint)geometryCount || (uint)instance.Material >= (uint)materials.Length) {
                 throw new ArgumentOutOfRangeException(nameof(instances), "The scene instance references a missing geometry or material.");
             }
