@@ -51,6 +51,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly RenderGraphBufferKey _frameKey, _lightsKey, _clustersKey, _tilesKey;
     private readonly RenderGraphBufferKey _probesKey, _traceKey, _traceGeometryKey, _traceInstancesKey, _probeConfigKey;
     private readonly RenderGraphBufferKey _probeHeaderKey;
+    private readonly RenderGraphBufferKey _referenceConfigKey, _referenceSurfacesKey, _referenceInstancesKey;
     private readonly RenderGraphTextureKey _probeTextureKey;
     private readonly RenderGraphTextureKey _idKey, _hdrKey, _shadowKey, _snapshotKey;
     private Entity _id, _depth, _hdr, _snapshot;
@@ -112,6 +113,9 @@ internal sealed unsafe partial class PbrView : IDisposable
         _traceInstancesKey = new(_prefix + "trace-instances");
         _probeConfigKey = new(_prefix + "probe-config");
         _probeHeaderKey = new(_prefix + "probe-header");
+        _referenceConfigKey = new(_prefix + "probe-reference-config");
+        _referenceSurfacesKey = new(_prefix + "probe-reference-surfaces");
+        _referenceInstancesKey = new(_prefix + "probe-reference-instances");
         _probeTextureKey = new(_prefix + "probe-texture");
         void Buffer(Entity entity, RenderGraphBufferUsage usage) => _sceneBuffers.Add((new(_prefix + "scene-buffer/" + _sceneBuffers.Count), entity, usage));
         void Texture(Entity entity) => _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), entity));

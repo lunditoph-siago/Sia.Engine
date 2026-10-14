@@ -1,5 +1,6 @@
 using Sia.Engine.Mesh;
 using Sia.Math;
+using Sia.Asset;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -10,11 +11,13 @@ public sealed class PbrBvhBinding
 {
     private readonly PbrBvhMaterialSlot[] _materials;
     public int Geometry { get; }
+    internal byte[] TransportRevision { get; }
+    internal string SourceHash { get; }
     public ReadOnlySpan<PbrBvhMaterialSlot> Materials => _materials;
 
-    internal PbrBvhBinding(int geometry, PbrBvhMaterialSlot[] materials)
+    internal PbrBvhBinding(int geometry, PbrBvhMaterialSlot[] materials, string sourceHash, byte[] transportRevision)
     {
-        Geometry = geometry; _materials = materials;
+        Geometry = geometry; _materials = materials; SourceHash = sourceHash; TransportRevision = transportRevision;
     }
 
     public int GetMaterial(int slot)
@@ -33,24 +36,26 @@ public sealed class PbrBvhBinding
 /// Transient trace input sharing acquired mesh-local BVHs. The caller retains its assets.
 /// Instance acceleration, traversal, GPU upload and retirement belong to rendering consumers.
 /// </summary>
-public sealed class PbrBvhScene
+public sealed partial class PbrBvhScene
 {
     private readonly MeshBvhData[] _geometry;
     private readonly PbrMaterialAsset[] _materials;
+    private readonly AssetId[] _materialIds;
     private readonly PbrBvhBinding[] _bindings;
     private readonly PbrMeshInstance[] _instances;
     public ReadOnlySpan<MeshBvhData> Geometry => _geometry;
     public ReadOnlySpan<PbrMaterialAsset> Materials => _materials;
+    public ReadOnlySpan<AssetId> MaterialIds => _materialIds;
     public ReadOnlySpan<PbrBvhBinding> Bindings => _bindings;
     public ReadOnlySpan<PbrMeshInstance> Instances => _instances;
     public string Attribution { get; }
     public Aabb Bounds { get; }
     public ReadOnlyMemory<byte> TransportIdentity { get; }
 
-    internal PbrBvhScene(MeshBvhData[] geometry, PbrMaterialAsset[] materials,
+    internal PbrBvhScene(MeshBvhData[] geometry, PbrMaterialAsset[] materials, AssetId[] materialIds,
         PbrBvhBinding[] bindings, PbrMeshInstance[] instances, string attribution, byte[] transportIdentity, CancellationToken cancellationToken)
     {
-        _geometry = geometry; _materials = materials; _bindings = bindings; _instances = instances; Attribution = attribution;
+        _geometry = geometry; _materials = materials; _materialIds = materialIds; _bindings = bindings; _instances = instances; Attribution = attribution;
         TransportIdentity = transportIdentity;
         var minimum = new float3(float.PositiveInfinity); var maximum = new float3(float.NegativeInfinity);
         for (var i = 0; i < instances.Length; i++) {

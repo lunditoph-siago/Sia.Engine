@@ -96,10 +96,10 @@ internal sealed partial class SceneExampleApp
         _workflow = new(settings.OpaquePath.ToString(), settings.BakedEnvironment is not null, _finest,
             settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData,
             settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
-            settings.DynamicSceneGi ? settings.ProbeSamples : 0);
+            settings.DynamicSceneGi ? settings.Lightmaps is { } reference ? (uint)reference.Set.BakeSettings.Samples : settings.ProbeSamples : 0);
         InitializeInspectionControls();
         Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Independent selected geometry.");
-        Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Signed dynamic correction, multiple bounces and temporal reconstruction are pending.");
+        Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {(settings.DynamicSceneGi && settings.Lightmaps is { } bake ? bake.Set.BakeSettings.Samples : settings.ProbeSamples)}; signed correction {settings.DynamicSceneGi && settings.Lightmaps is not null}. Multiple bounces and temporal reconstruction are pending.");
         _materialStream = null;
         _rasterScene = null;
         _traceScene = null;

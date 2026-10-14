@@ -316,6 +316,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         void Visit(int instanceIndex, PbrSceneStream.HierarchyInfo tree, int index)
         {
             var instance = _instances[instanceIndex];
+            if (instance.MaterialIndex < 0) return;
             var node = tree.Nodes[index];
             var bounds = _bounds[instanceIndex][index];
             if (!culler.Intersects(bounds)) return;

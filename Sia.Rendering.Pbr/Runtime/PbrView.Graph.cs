@@ -47,6 +47,11 @@ internal sealed unsafe partial class PbrView
                     Import(ref graph, _traceInstancesKey, probes.TracingInstances, RenderGraphBufferUsage.Storage);
                 }
                 Import(ref graph, _probeConfigKey, probes.Configuration, RenderGraphBufferUsage.Uniform);
+                if (probes.SignedCorrection) {
+                    Import(ref graph, _referenceConfigKey, probes.ReferenceConfiguration, RenderGraphBufferUsage.Uniform);
+                    Import(ref graph, _referenceSurfacesKey, probes.ReferenceSurfaces, RenderGraphBufferUsage.Storage);
+                    Import(ref graph, _referenceInstancesKey, probes.ReferenceInstances, RenderGraphBufferUsage.Storage);
+                }
             }
         }
         if (!UseForward) {
@@ -176,6 +181,9 @@ internal sealed unsafe partial class PbrView
         pass.Read(_traceKey, RenderGraphBufferUsage.Storage);
         if (_owner.Probes!.TracingGeometry.IsValid)
             pass.Read(_traceGeometryKey, RenderGraphBufferUsage.Storage).Read(_traceInstancesKey, RenderGraphBufferUsage.Storage);
+        if (_owner.Probes.SignedCorrection)
+            pass.Read(_referenceConfigKey, RenderGraphBufferUsage.Uniform)
+                .Read(_referenceSurfacesKey, RenderGraphBufferUsage.Storage).Read(_referenceInstancesKey, RenderGraphBufferUsage.Storage);
         return pass;
     }
 

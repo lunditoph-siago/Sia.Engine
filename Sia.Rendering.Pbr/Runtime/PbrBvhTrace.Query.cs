@@ -38,6 +38,7 @@ public sealed partial class PbrBvhTrace
         ref double best, ref bool found, ref PbrBvhHit hit, CancellationToken cancellationToken, ReadOnlySpan<bool> includedMaterials)
     {
         var transform = _instances[index];
+        if (transform.Disabled) return;
         if (!Intersects(transform.Bounds, origin, direction, minimum, best)) return;
         var localOrigin = transform.LocalVector(origin - transform.Translation);
         var localDirection = transform.LocalVector(direction); // Keep world ray parameter under nonuniform scale/shear.
