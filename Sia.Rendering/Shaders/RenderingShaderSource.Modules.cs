@@ -15,6 +15,7 @@ public static partial class RenderingShaderSource
         ["rendering/Geometry/instance_trace"] = new(new Guid("f1549fb8-8e04-4181-b56b-9530f0e8e6eb")),
         ["rendering/Lighting/local_light"] = new(new Guid("2fda0e7f-8535-4185-a86b-3da38e7e6880")),
         ["rendering/Lighting/probe_basis"] = new(new Guid("15b04684-7f40-4acd-8f87-2c6168134fe5")),
+        ["rendering/Lighting/probe_volume"] = new(new Guid("250e0a75-9830-4696-819f-32473a370817")),
         ["rendering/Lighting/shadow_map"] = new(new Guid("541dbf79-83b0-45ca-8cb0-f60075fe9476")),
         ["rendering/Visibility/surface_data"] = new(new Guid("a6273ad9-37b0-4fd0-9f14-3c51c89d7244")),
     };

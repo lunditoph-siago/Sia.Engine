@@ -81,6 +81,9 @@ internal sealed partial class SceneExampleApp
         var settings = preset with {
             Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
             BakedEnvironment = _bakedEnvironment,
+            ReflectionCaptures = _captureInputs ?? [],
+            Reflections = (Program.SceneReflections ?? ((Program.DynamicSceneGi ?? preset.DynamicSceneGi) && preset.Reflections is not null))
+                ? preset.Reflections ?? new PbrReflectionSettings() : null,
             Lightmaps = _lightmapInput,
             ExportSurfaceData = Program.ExportSurfaceData,
             BakedProbes = _bakedProbes,
@@ -94,11 +97,14 @@ internal sealed partial class SceneExampleApp
         _sceneRenderer = _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
             : new PbrRenderer(in frame, _materialStream!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
         _workflow = new(settings.OpaquePath.ToString(), settings.BakedEnvironment is not null, _finest,
-            settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData,
+            settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData || settings.Reflections is not null,
             settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
-            settings.DynamicSceneGi ? settings.Lightmaps is { } reference ? (uint)reference.Set.BakeSettings.Samples : settings.ProbeSamples : 0);
+            settings.DynamicSceneGi ? settings.Lightmaps is { } reference ? (uint)reference.Set.BakeSettings.Samples : settings.ProbeSamples : 0,
+            settings.ReflectionCaptures.Length, settings.Reflections is not null);
         InitializeInspectionControls();
         Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Independent selected geometry.");
+        Console.WriteLine($"Static reflection regions: {settings.ReflectionCaptures.Length}.");
+        Console.WriteLine($"Live reflections: {settings.Reflections is not null}.");
         Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {(settings.DynamicSceneGi && settings.Lightmaps is { } bake ? bake.Set.BakeSettings.Samples : settings.ProbeSamples)}; signed correction {settings.DynamicSceneGi && settings.Lightmaps is not null}. Multiple bounces and temporal reconstruction are pending.");
         _materialStream = null;
         _rasterScene = null;

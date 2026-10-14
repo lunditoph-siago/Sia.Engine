@@ -19,9 +19,11 @@ public static partial class Program
     internal static PbrOpaquePath? OpaquePath { get; private set; }
     internal static bool ExportSurfaceData { get; private set; }
     internal static bool? DynamicSceneGi { get; private set; }
+    internal static bool? SceneReflections { get; private set; }
     internal static string? ProbesPath { get; private set; }
     internal static string? EnvironmentPath { get; private set; }
     internal static string? LightmapsPath { get; private set; }
+    internal static List<string> ReflectionCapturePaths { get; } = [];
     internal static int TargetFps { get; private set; }
     internal static Guid? MovingInstance { get; private set; }
 
@@ -66,8 +68,16 @@ public static partial class Program
                 ArgumentException.ThrowIfNullOrWhiteSpace(args[i + 1]);
                 LightmapsPath = args[i + 1];
             }
+            else if (args[i] == "--reflection-capture") {
+                ArgumentException.ThrowIfNullOrWhiteSpace(args[i + 1]);
+                if (ReflectionCapturePaths.Count == 16) throw new ArgumentException("At most sixteen reflection regions are supported.");
+                ReflectionCapturePaths.Add(args[i + 1]);
+            }
             else if (args[i] == "--scene-gi") {
                 DynamicSceneGi = bool.Parse(args[i + 1]);
+            }
+            else if (args[i] == "--scene-reflections") {
+                SceneReflections = bool.Parse(args[i + 1]);
             }
             else if (args[i] == "--gpu-timing") {
                 GpuTiming = bool.Parse(args[i + 1]);
@@ -174,8 +184,8 @@ public static partial class Program
         }
         if (pipeline == ScenePipeline.Unlit) {
             for (var i = 0; i < args.Length; i += 2) {
-                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes" or "--lightmaps"
-                    or "--scene-gi" or "--surface-data" or "--moving-instance"
+                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes" or "--lightmaps" or "--reflection-capture"
+                    or "--scene-gi" or "--scene-reflections" or "--surface-data" or "--moving-instance"
                     or "--render-scale" or "--target-fps") {
                     throw new ArgumentException($"{args[i]} requires --pipeline bunny|pbr.");
                 }

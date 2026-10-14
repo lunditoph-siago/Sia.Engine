@@ -24,6 +24,10 @@ internal sealed unsafe partial class PbrView
                 _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), texture));
             _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), _owner.Environment.Cube));
             _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), _owner.Environment.Lut));
+            if (_owner.Captures is { } captures)
+                _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), captures.Texture));
+            if (_owner.Lightmaps is { } lightmapResources) foreach (var texture in lightmapResources.Textures)
+                _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), texture));
             _materialRevision = _owner.ResourceRevision;
         }
         var viewport = frame.Viewport ?? frame.Frame.MainWorld.AcquireAddon<Viewport>().Value;
@@ -46,6 +50,7 @@ internal sealed unsafe partial class PbrView
         };
         var scale = 24 / MathF.Log(parameters.Far / parameters.Near);
         _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1, 0);
+        PrepareHistory();
         _directional.Clear();
         _casters.Clear();
         Array.Clear(_shadowActive);
@@ -61,7 +66,7 @@ internal sealed unsafe partial class PbrView
             var light = e.Get<LightColor>();
             var direction = -math.normalize(e.Get<GlobalTransform>().Affine.RotationScale.c2);
             directionalData[i * 2] = new(direction, 0);
-            directionalData[(i * 2) + 1] = new(light.Color * light.Intensity, 0);
+            directionalData[(i * 2) + 1] = new(LightRadiance(light), 0);
             if (_data.Counts.z != uint.MaxValue || !_casters.Contains(e) || shadowConfig.CascadeCount == 0) continue;
             _data.Counts.z = (uint)i;
             _data.Shadow.x = (uint)shadowConfig.CascadeCount;

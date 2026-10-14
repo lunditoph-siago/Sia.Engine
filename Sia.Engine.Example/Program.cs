@@ -8,6 +8,11 @@ public static partial class Program
     {
         try {
 #if !BROWSER
+            if (args.Length == 4 && args[0] == "--bake-reflection-capture" && args[2] == "--output") {
+                var capture = await ReflectionCaptureCook.CookAsync(args[1], args[3]);
+                Console.WriteLine($"Baked reflection capture {capture.Id.Value:N}: {capture.Files.Count} files, {capture.EncodedBytes} bytes, {Path.GetFullPath(args[3])}");
+                return 0;
+            }
             if (args.Length is 4 or 6 && args[0] == "--package-example-content" && args[2] == "--output") {
                 await ExampleContent.PackAsync(args[1], args[3], maximumBundleBytes: OfflineTotalBytes(args));
                 Console.WriteLine($"Packaged example content: {Path.GetFullPath(args[3])}");
@@ -57,6 +62,9 @@ public static partial class Program
                 throw new ArgumentException("Mesh scenes require a cooked reference .siascene with independent products.");
             PbrSceneFiles.Prepared? references = null;
             var dynamicGi = DynamicSceneGi ?? PbrRendererSettings.ForQuality(Quality).DynamicSceneGi;
+            var liveReflections = SceneReflections ?? (dynamicGi && PbrRendererSettings.ForQuality(Quality).Reflections is not null);
+            if (liveReflections && (!dynamicGi || Quality == Rendering.RenderQuality.Low))
+                throw new ArgumentException("Live reflections require the shared dynamic local-BVH transport and Visibility path.");
             await using var mixedUse = referencePath && Quality != Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareMixedAsync(scenePath!, streamHttp, Quality, tracing: dynamicGi,
                     rasterInstances: MovingInstance is { } moving ? new HashSet<Guid> { moving } : null) : null;
@@ -64,6 +72,13 @@ public static partial class Program
                 ? await PbrSceneFiles.PrepareRasterAsync(scenePath!, streamHttp)
                 : mixedUse;
             var lighting = await LightingFiles.PrepareAsync(EnvironmentPath, ProbesPath, streamHttp);
+            var captures = new ReflectionCaptureFiles.Prepared[ReflectionCapturePaths.Count];
+            for (var at = 0; at < captures.Length; at++) {
+                captures[at] = await ReflectionCaptureFiles.PrepareAsync(ReflectionCapturePaths[at], streamHttp, references!);
+                if (lighting.Environment is null) lighting = lighting with { Environment = captures[at].Source };
+                if (ReflectionCaptureFiles.EnvironmentHash(lighting.Environment.Data) != captures[at].Capture.Data.SourceEnvironment.ContentHash)
+                    throw new ArgumentException("Selected reflection captures require the same source environment as scene lighting.");
+            }
             await using var lightmaps = LightmapsPath is null ? null
                 : await LightmapFiles.PrepareAsync(LightmapsPath, streamHttp, references!);
             if (MovingInstance is { } movingId) {
@@ -74,8 +89,11 @@ public static partial class Program
                     foreach (var receiver in lightmaps.Set.Data.Receivers)
                         if (receiver.Receiver.InstanceId == movingId)
                             throw new ArgumentException("A static lightmap receiver cannot be the moving instance.");
+                foreach (var capture in captures)
+                    if (capture.Capture.Data.StaticInstances.Contains(movingId))
+                        throw new ArgumentException("A static capture instance cannot be the moving instance.");
             }
-            var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting, lightmaps);
+            var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting, lightmaps, captures);
             references = null;
             lighting = null;
 #if BROWSER

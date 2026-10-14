@@ -233,7 +233,7 @@ try {
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
   const forwardedOptions = [
-    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'environment',
+    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'scene-reflections', 'probes', 'environment',
     'render-scale', 'width', 'height', 'gpu-timing', 'gpu-traversal', 'target-fps',
     'benchmark-frames', 'benchmark-motion', 'debug', 'distance', 'lod', 'camera',
   ];
@@ -249,8 +249,16 @@ try {
       if (!lightmaps.trim()) throw new Error('The selected lightmap index path must not be empty.');
       args.push('--lightmaps', new URL(lightmaps, location.href).href);
     }
+    const captures = parameters.getAll('reflection-capture');
+    if (captures.length > 16) throw new Error('At most sixteen reflection regions are supported.');
+    for (const capture of captures) {
+      if (!capture.trim()) throw new Error('The selected reflection capture path must not be empty.');
+      args.push('--reflection-capture', new URL(capture, location.href).href);
+    }
   } else if (parameters.has('lightmaps')) {
     throw new Error('Surface lightmaps require a mesh scene.');
+  } else if (parameters.has('reflection-capture')) {
+    throw new Error('Reflection captures require a mesh scene.');
   }
   setLoadingState('Starting engine runtime', NaN);
   // Preload runtime/timer/HTTP workers plus the four bounded CPU decoder workers.

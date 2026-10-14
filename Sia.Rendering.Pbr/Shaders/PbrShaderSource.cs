@@ -5,24 +5,24 @@ namespace Sia.Engine.Rendering.Pbr;
 internal static partial class PbrShaderSource
 {
     internal static string Compile(string entry, bool writableClusters = false, bool surfaceData = false, bool sceneGi = false,
-        bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false)
+        bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false)
         => CompileWithLookup(module => module.StartsWith("rendering/", StringComparison.Ordinal)
             ? RenderingShaderSource.ReadModule(module) : Read(module), entry, writableClusters, surfaceData,
-            sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances);
+            sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits);
 
     internal static string CompileAcquired(World world, string entry, bool writableClusters = false, bool surfaceData = false,
-        bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false)
+        bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false)
     {
         ArgumentNullException.ThrowIfNull(world);
         return CompileWithLookup(module => {
             var source = module.StartsWith("rendering/", StringComparison.Ordinal)
                 ? RenderingShaderSource.AcquireModule(world, module) : AcquireModule(world, module);
             return source is { } entity ? entity.Get<WgslSourceResource>().Source : null;
-        }, entry, writableClusters, surfaceData, sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances);
+        }, entry, writableClusters, surfaceData, sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits);
     }
 
     private static string CompileWithLookup(Func<string, string?> read, string entry, bool writableClusters, bool surfaceData,
-        bool sceneGi, bool streamInstances, bool shadingWork, bool compatibilityUniformPadding, bool staticLightmap, bool residentInstances)
+        bool sceneGi, bool streamInstances, bool shadingWork, bool compatibilityUniformPadding, bool staticLightmap, bool residentInstances, bool reflectionCaptures, bool liveReflections, bool historyCommitHits)
     {
         if(residentInstances && (streamInstances || shadingWork)) throw new ArgumentException("Resident instances and stream work are distinct geometry inputs.");
         var definitions = new Dictionary<string, string> {
@@ -31,6 +31,11 @@ internal static partial class PbrShaderSource
             ["SURFACE_DATA"] = surfaceData ? "true" : "false",
             ["SCENE_GI"] = sceneGi ? "true" : "false",
             ["STATIC_LIGHTMAP"] = staticLightmap ? "true" : "false",
+            ["REFLECTION_CAPTURES"] = reflectionCaptures ? "true" : "false",
+            ["LIVE_REFLECTIONS"] = liveReflections ? "true" : "false",
+            ["HISTORY_COMMIT_HITS"] = historyCommitHits ? "true" : "false",
+            ["MAXIMUM_CAPTURE_REGIONS"] = PbrReflectionCaptureGpu.MaximumRegions.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["CAPTURE_REGION_ROWS"] = (PbrReflectionCaptureGpu.UniformBytes / 16).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["STREAM_INSTANCES"] = streamInstances ? "true" : "false",
             ["SHADING_WORK"] = shadingWork ? "true" : "false",
             ["COMPATIBILITY_UNIFORM_PADDING"] = compatibilityUniformPadding ? "true" : "false",

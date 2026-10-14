@@ -40,6 +40,9 @@ public sealed record PbrRendererSettings
     public PbrLightmapStreamingSettings LightmapStreaming { get; init; } = new();
 
     public IblEnvironmentAsset? BakedEnvironment { get; init; }
+    public ReadOnlyMemory<PbrReflectionCaptureInput> ReflectionCaptures { get; init; }
+    public ulong ReflectionCaptureBytes { get; init; } = 20ul * 1024 * 1024;
+    public PbrReflectionSettings? Reflections { get; init; }
     public DiffuseProbeAsset? BakedProbes { get; init; }
     public bool DynamicSceneGi { get; init; }
     /// <summary>Explicit acquired independent BVH input for dynamic transport; no implicit product acquisition.</summary>
@@ -75,6 +78,8 @@ public sealed record PbrRendererSettings
         RenderQuality.High => new() {
             OpaquePath = PbrOpaquePath.Visibility,
             DynamicSceneGi = true,
+            Reflections = new(),
+            ViewBytes = 1280ul * 1024 * 1024,
             TargetPixelError = 0,
             ShadowTexelError = 0,
             ShadowResolution = 1024
@@ -89,6 +94,9 @@ public readonly record struct PbrFrameStatistics(
     ulong SceneBytes,
     ulong ViewBytes);
 
+public readonly record struct PbrReflectionTargets(RenderGraphTextureKey Radiance, RenderGraphTextureKey HitMetadata,
+    RenderGraphTextureKey CurrentSpecular, RenderGraphTextureKey OpaqueColor);
+
 public sealed class PbrRenderer :
     IPrepareRenderFeature<RenderFrameContext>,
     IRenderGraphContributor<RenderFrameContext>,
@@ -96,13 +104,17 @@ public sealed class PbrRenderer :
 {
     private static readonly string[] s_TimingStages = [
         "pbr-frame", "clusters", "shadows", "hierarchy", "triangle-expansion", "opaque",
-        "probe-update", "material-lighting", "transparency", "output"
+        "probe-update", "material-lighting", "reflection-trace", "reflection-compose", "transparency", "output"
     ];
 
     public static ReadOnlySpan<string> GpuTimingStages => s_TimingStages;
 
     private readonly List<PbrView> _views = [];
     private readonly HashSet<RenderView> _preparedViews = [];
+    private readonly PbrGpuRetirement _retirements = new();
+    private readonly Sia.WebGPU.WgpuHandle<Sia.WebGPU.WGPUQueue> _queue;
+    private bool _queueDrained;
+    internal ulong PreparedFrameIndex { get; private set; }
     private bool _disposed;
     private RenderWorld? _streamWorld;
     private ulong _streamFrame;
@@ -142,9 +154,11 @@ public sealed class PbrRenderer :
     internal PbrGpuScene Scene { get; }
     internal PbrMaterials Materials { get; }
     internal IblEnvironmentGpu Environment { get; }
+    internal PbrReflectionCaptureGpu? Captures { get; }
     internal DiffuseProbeGpu? Probes { get; }
     internal PbrLightmapGpu? Lightmaps { get; }
     internal PbrRendererSettings Settings { get; }
+    internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
 
     public PbrRenderer(
@@ -167,6 +181,12 @@ public sealed class PbrRenderer :
     {
         if (scene is null && raster is null) throw new ArgumentNullException(nameof(scene));
         Settings = settings ?? new();
+        if (Settings.Reflections is { } reflectionSettings) {
+            reflectionSettings.Validate();
+            if (!Settings.DynamicSceneGi || Settings.OpaquePath != PbrOpaquePath.Visibility)
+                throw new ArgumentException("Live reflections require Visibility and the shared dynamic local-BVH transport input.", nameof(settings));
+            Settings = Settings with { ExportSurfaceData = true };
+        }
         OutputFormat = outputFormat;
         if (!float.IsFinite(Settings.TargetPixelError) || Settings.TargetPixelError < 0
             || !float.IsFinite(Settings.ShadowTexelError) || Settings.ShadowTexelError < 0)
@@ -190,6 +210,13 @@ public sealed class PbrRenderer :
         if (Settings.ShadowResolution is < 64 or > 4096) throw new ArgumentOutOfRangeException(nameof(settings));
         if (outputFormat is not (WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.RGBA8UnormSrgb or WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.BGRA8UnormSrgb))
             throw new ArgumentException("PBR output currently requires an SDR RGBA/BGRA surface.", nameof(outputFormat));
+        var captures = PbrReflectionCaptureGpu.Validate(Settings.ReflectionCaptures.Span,
+            (stream?.Identity ?? raster?.TransportIdentity ?? scene!.TransportIdentity).Span,
+            Settings.BakedEnvironment, Settings.ReflectionCaptureBytes);
+        if (captures.Length != 0) {
+            _staticInstanceIds = [];
+            foreach (var capture in captures) foreach (var id in capture.Capture.StaticInstances) _staticInstanceIds.Add(id);
+        }
         int[]? lightmapRows = null;
         if (Settings.Lightmaps is { } input) {
             ArgumentNullException.ThrowIfNull(input.Set); ArgumentNullException.ThrowIfNull(input.PrepareProduct); ArgumentNullException.ThrowIfNull(input.AcquireProduct);
@@ -197,23 +224,26 @@ public sealed class PbrRenderer :
             ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
             lightmapRows = stream is not null ? input.Set.BindReceivers(stream)
                 : input.Set.BindReceivers((raster?.Instances ?? scene!.Instances).Span);
-            _staticInstanceIds = [];
+            _staticInstanceIds ??= [];
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
             if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
         }
         try {
+            _queue = frame.Queue.GetWgpu<WGPUQueue>();
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
             if (stream?.RequiresInstancing == true && !Settings.Streaming.GpuTraversal)
                 throw new NotSupportedException("Mixed scene input requires local shared GPU instance storage.");
             if (stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
-                stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null);
+                stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
+                Settings.Reflections is not null, Settings.Reflections?.History is not null);
             Materials = new(frame, (raster?.Materials ?? scene!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
                 : stream is null ? new(frame, scene!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
                 : new(frame, stream, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             Environment = new(frame, Settings.BakedEnvironment);
+            if (captures.Length != 0) Captures = new(frame, captures, Settings.ReflectionCaptureBytes);
             if (Settings.Lightmaps is { } lighting) {
                 var admission = Settings.LightmapStreaming;
                 Lightmaps = new(frame, lighting, lightmapRows!, admission);
@@ -338,6 +368,15 @@ public sealed class PbrRenderer :
             new(prefix + "normal-roughness"), new(prefix + "base-metallic"));
     }
 
+    /// <summary>View-owned raw radiance/distance and hit metadata, separate from material weight/baseline and final HDR.</summary>
+    public PbrReflectionTargets GetReflectionTargets(RenderViewKey view)
+    {
+        if (Settings.Reflections is null) throw new InvalidOperationException("Live reflections must be enabled before requesting their targets.");
+        var prefix = "pbr/" + view.Value + "/";
+        return new(new(prefix + "reflection-signal"), new(prefix + "reflection-metadata"),
+            new(prefix + "reflection-specular"), new(prefix + "opaque-hdr"));
+    }
+
     public void Prepare(in RenderFeatureContext<RenderFrameContext> context)
         => PrepareFrame(context.RenderWorld, [context]);
 
@@ -345,6 +384,8 @@ public sealed class PbrRenderer :
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(world);
+        PreparedFrameIndex = world.FrameIndex;
+        _retirements.Collect();
         if (Settings.DynamicSceneGi && contexts.Length > 1)
             throw new NotSupportedException("Dynamic probes currently require one view per renderer.");
         _preparedViews.Clear();
@@ -397,7 +438,7 @@ public sealed class PbrRenderer :
         Materials.EndFrame();
         Lightmaps?.EndFrame();
         FrameStatistics = new(triangles, Materials.Groups.Length,
-            Scene.Bytes + Materials.Bytes + Environment.Bytes + (Probes?.Bytes ?? 0) + (Lightmaps?.Bytes ?? 0), viewBytes);
+            Scene.Bytes + Materials.Bytes + Environment.Bytes + (Captures?.Bytes ?? 0) + (Probes?.Bytes ?? 0) + (Lightmaps?.Bytes ?? 0), checked(viewBytes + _retirements.Bytes));
     }
 
     public void BuildRenderGraph(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context)
@@ -418,19 +459,47 @@ public sealed class PbrRenderer :
     }
 
     internal void Forget(PbrView view) => _views.Remove(view);
+    /// <summary>Call on the owner only after successful queue submission of the prepared graph. Encoding alone cannot publish history.</summary>
+    public void NotifySubmittedFrame(ulong frameIndex)
+    {
+        if (frameIndex != PreparedFrameIndex) throw new InvalidOperationException("Submitted history must match the prepared render-world frame.");
+        foreach (var view in _views) view.SubmitReflectionHistory(frameIndex);
+    }
+
+    public void InvalidateReflectionHistory(RenderViewKey view)
+    {
+        foreach (var value in _views) if (value.View.Key == view) value.InvalidateReflectionHistory();
+    }
+    internal ulong RetiredBytes(PbrView view) => _retirements.BytesFor(view);
+    internal void RequireRetirementCapacity(PbrView view) => _retirements.RequireCapacity(view);
+    internal void RetireTargets(PbrView view, GpuResources? targets, GpuResources? frameResources = null, IDisposable? selection = null, ulong selectionBytes = 0)
+    {
+        if (targets is null && frameResources is null && selection is null) return;
+        if (_queueDrained) { selection?.Dispose(); targets?.Dispose(); frameResources?.Dispose(); return; }
+        var completion = GpuQueueCompletion.AfterSubmittedWork(_queue);
+        _retirements.Retire(view, checked((targets?.Bytes ?? 0) + (frameResources?.Bytes ?? 0) + selectionBytes), completion,
+            () => { selection?.Dispose(); targets?.Dispose(); frameResources?.Dispose(); });
+    }
 
     public async ValueTask StopStreamingAsync()
     {
+        // Capture completion on the owner before asynchronous joins; no resource mutation in continuations.
+        var queue = GpuQueueCompletion.AfterSubmittedWork(_queue);
+        var retired = _retirements.DrainAsync();
         // Capture lightmap queue completion on the owner context before any await.
         var lightmaps = Lightmaps?.StopAsync();
         await Materials.StopAsync().ConfigureAwait(false);
         if (Scene.Streaming is { } streaming) await streaming.DisposeAsync().ConfigureAwait(false);
         if (lightmaps is not null) await lightmaps.ConfigureAwait(false);
+        if (!await queue.ConfigureAwait(false)) throw new InvalidOperationException("Renderer queue completion failed; view resources remain retained.");
+        await retired.ConfigureAwait(false); _queueDrained = true;
     }
 
     public void Dispose()
     {
         if (_disposed) return;
+        if ((_views.Count != 0 || _retirements.Bytes != 0) && !_queueDrained)
+            throw new InvalidOperationException("Await StopStreamingAsync before disposing view targets or pending retirements.");
         if (Lightmaps is not null && !Lightmaps.IsStopped)
             throw new InvalidOperationException("Await StopStreamingAsync before disposing streamed lightmaps.");
         if (Scene?.Streaming is not null && !Scene.Streaming.IsStopped)
@@ -441,7 +510,9 @@ public sealed class PbrRenderer :
         _trace = null; _pendingTrace = null; _traceData = null; _pendingTraceData = null;
         while (_views.Count != 0)
             _views[^1].Dispose();
+        _retirements.Collect();
         Environment?.Dispose();
+        Captures?.Dispose();
         Probes?.Dispose();
         Lightmaps?.Dispose();
         Scene?.Dispose();

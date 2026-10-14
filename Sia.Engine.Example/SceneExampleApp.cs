@@ -40,7 +40,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         VisibilityDebugMode? debugMode = null, float? distance = null,
         bool finest = false,
         (float3 Eye, float3 Target)? camera = null,
-        PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null, LightmapFiles.Prepared? lightmaps = null)
+        PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null, LightmapFiles.Prepared? lightmaps = null,
+        ReflectionCaptureFiles.Prepared[]? captures = null)
     {
         _pipeline = pipeline;
         _renderScale = Program.RenderScale;
@@ -48,6 +49,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _referenceScene = references;
         _preparedLighting = lighting;
         _preparedLightmaps = lightmaps;
+        _preparedCaptures = captures;
         _finest = finest;
         _initialCamera = camera;
         _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny
@@ -171,11 +173,17 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         required.MaxBufferSize = System.Math.Min(supported.MaxBufferSize, 256ul * 1024 * 1024);
         var probes = (Program.DynamicSceneGi ?? PbrRendererSettings.ForQuality(Program.Quality).DynamicSceneGi)
             || _preparedLighting?.Probes is not null;
-        var textures = 10u + (probes ? 1u : 0u) + (_preparedLightmaps is not null ? 3u : 0u);
+        var textures = 10u + (probes ? 1u : 0u) + (_preparedLightmaps is not null ? 3u : 0u) + (_preparedCaptures is { Length: > 0 } ? 1u : 0u);
         if (supported.MaxSampledTexturesPerShaderStage < textures || supported.MaxVertexBuffers < 4 || supported.MaxVertexAttributes < 4)
             throw new NotSupportedException("The selected PBR lighting requires more sampled textures or vertex attributes than this adapter provides.");
         required.MaxSampledTexturesPerShaderStage = textures;
         required.MaxVertexBuffers = 4; required.MaxVertexAttributes = 4;
+        var liveReflections = Program.SceneReflections ?? ((Program.DynamicSceneGi ?? PbrRendererSettings.ForQuality(Program.Quality).DynamicSceneGi)
+            && PbrRendererSettings.ForQuality(Program.Quality).Reflections is not null);
+        if (liveReflections) {
+            if (supported.MaxStorageTexturesPerShaderStage < 4) throw new NotSupportedException("Live reflections require four compute storage textures.");
+            required.MaxStorageTexturesPerShaderStage = 4;
+        }
     }
 
 #if BROWSER
@@ -388,6 +396,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         try {
             UpdateRenderGraph(surfaceTexture.Texture);
             ExecuteRenderGraph();
+            _sceneRenderer?.NotifySubmittedFrame(_renderWorld!.FrameIndex);
             SubmitGpuTiming();
 #if !BROWSER
             Wgpu.PresentSurfaceOrThrow(_surface);
