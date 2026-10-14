@@ -101,30 +101,47 @@ public static partial class PbrSceneTransport
     internal static byte[] ReferenceIdentity(PbrSceneData scene, Func<PbrMeshBinding, MeshManifest> mesh,
         Func<PbrMaterialSlot, PbrMaterialAsset> material, CancellationToken token)
     {
-        var hash = new SceneIdentityHash(); hash.AppendData("SIAPBRREFERENCETRACE1"u8);
-        static void Record(SceneIdentityHash target, float4 value) { Span<float4> row = [value]; target.AppendData(MemoryMarshal.AsBytes(row)); }
-        static void Count(SceneIdentityHash target, int value) { Span<byte> bytes = stackalloc byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes, value); target.AppendData(bytes); }
         // Source revisions are deliberately conservative: authored normal/UV changes may invalidate a bake.
         // Per-binding cache avoids repeatedly averaging texture pixels for repeated instances.
         var bindings = new byte[scene.Bindings.Length][];
-        Span<byte> id = stackalloc byte[16]; Count(hash, scene.Instances.Length);
-        foreach (var instance in scene.Instances) {
-            token.ThrowIfCancellationRequested();
-            instance.Id.TryWriteBytes(id, bigEndian: true, out _); hash.AppendData(id);
-            var binding = scene.Bindings[instance.Binding];
-            if (bindings[instance.Binding] is not { } source) {
-                var revision = new SceneIdentityHash(); revision.AppendData(Convert.FromHexString(mesh(binding).SourceHash)); Count(revision, binding.Materials.Length);
-                foreach (var slot in binding.Materials) {
-                    token.ThrowIfCancellationRequested(); Count(revision, slot.Slot); var surface = Surface(material(slot));
-                    Record(revision, surface.Albedo); Record(revision, surface.Emission);
-                }
-                source = revision.Finish(); bindings[instance.Binding] = source;
+        return ReferenceIdentity(scene.Instances, at => {
+            if (bindings[at] is not { } source) {
+                var binding = scene.Bindings[at];
+                source = ReferenceBindingIdentity(mesh(binding).SourceHash, binding.Materials.Length,
+                    index => (binding.Materials[index].Slot, material(binding.Materials[index])), token);
+                bindings[at] = source;
             }
-            hash.AppendData(source);
+            return source;
+        }, token);
+    }
+
+    internal static byte[] ReferenceBindingIdentity(string sourceHash, int count,
+        Func<int, (int Slot, PbrMaterialAsset Material)> material, CancellationToken token)
+    {
+        var revision = new SceneIdentityHash(); revision.AppendData(Convert.FromHexString(sourceHash)); Count(revision, count);
+        for (var at = 0; at < count; at++) {
+            token.ThrowIfCancellationRequested(); var slot = material(at); Count(revision, slot.Slot);
+            var surface = Surface(slot.Material); Record(revision, surface.Albedo); Record(revision, surface.Emission);
+        }
+        return revision.Finish();
+    }
+
+    internal static byte[] ReferenceIdentity(ReadOnlySpan<PbrMeshInstance> instances, Func<int, byte[]> binding, CancellationToken token)
+    {
+        var hash = new SceneIdentityHash(); hash.AppendData("SIAPBRREFERENCETRACE1"u8);
+        Span<byte> id = stackalloc byte[16]; Count(hash, instances.Length);
+        foreach (var instance in instances) {
+            token.ThrowIfCancellationRequested();
+            instance.Id.TryWriteBytes(id, bigEndian: true, out _); hash.AppendData(id); hash.AppendData(binding(instance.Binding));
             Record(hash, instance.Transform.c0); Record(hash, instance.Transform.c1); Record(hash, instance.Transform.c2); Record(hash, instance.Transform.c3);
         }
         return hash.Finish();
     }
+
+    private static void Record(SceneIdentityHash target, float4 value)
+    { Span<float4> row = [value]; target.AppendData(MemoryMarshal.AsBytes(row)); }
+    private static void Count(SceneIdentityHash target, int value)
+    { Span<byte> bytes = stackalloc byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes, value); target.AppendData(bytes); }
 
     private static float3 Average(PbrTextureData? texture)
     {

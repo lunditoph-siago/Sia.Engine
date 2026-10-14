@@ -49,6 +49,7 @@ internal static partial class LightmapFiles
             if (mesh.Data.Virtual is { } virtualData) ids.Add(virtualData.Id);
         }
         var virtuals = scene switch {
+            PbrSceneFiles.PreparedMixed mixed => mixed.Virtuals.Values,
             PbrSceneFiles.PreparedStreaming streaming => streaming.Index.Products.Values,
             PbrSceneFiles.Prepared<Sia.Engine.Mesh.MeshVirtualRecord> prepared => prepared.Products.Values,
             _ => Enumerable.Empty<Sia.Engine.Mesh.MeshVirtualRecord>()

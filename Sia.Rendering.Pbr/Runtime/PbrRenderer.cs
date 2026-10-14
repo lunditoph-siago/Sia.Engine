@@ -199,6 +199,7 @@ public sealed class PbrRenderer :
                 : input.Set.BindReceivers((raster?.Instances ?? scene!.Instances).Span);
             _staticInstanceIds = [];
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
+            if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
         }
         try {
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
@@ -231,6 +232,18 @@ public sealed class PbrRenderer :
                     _traceData = PbrSceneTransport.Build(_trace, traceBudget);
                 }
                 var tracing = _traceData;
+                DiffuseProbeReference? reference = null;
+                if (Settings.DynamicSceneGi && Settings.Lightmaps is { } baked) {
+                    var referenceScene = baked.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
+                    var referenceTrace = PbrBvhTrace.Build(referenceScene, Settings.SceneGiBytes);
+                    var referenceData = PbrSceneTransport.BuildReference(referenceTrace, _trace!, tracing!, traceBudget);
+                    var inputs = baked.Set.BakeSettings;
+                    reference = new(referenceData, inputs.Sky, inputs.TowardLight, inputs.LightRadiance,
+                        (uint)inputs.Samples, inputs.MaximumDistance, inputs.RayBias);
+                    var total = DiffuseProbeGpu.RequiredBytes(dimensions, tracing!, reference);
+                    if (total > Settings.SceneGiBytes)
+                        throw new ArgumentException("Paired probe field and transport exceed the total GI budget.", nameof(settings));
+                }
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
                 var identity = tracing is not null ? tracing.Identity.ToArray() : raster is not null ? PbrSceneTransport.Identity(raster)
@@ -239,7 +252,7 @@ public sealed class PbrRenderer :
                     throw new ArgumentException("Baked probes belong to different scene geometry/materials.", nameof(settings));
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))
                     throw new ArgumentOutOfRangeException(nameof(settings), "Invalid dynamic probe update budget.");
-                Probes = new(frame, asset, tracing, Settings.SceneGiBytes);
+                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference);
             }
         }
         catch {
@@ -272,6 +285,48 @@ public sealed class PbrRenderer :
         }
         Scene.StageTransforms(updates);
         if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; }
+    }
+
+    /// <summary>Stages actor enable/disable for drawing and live transport. Frozen static bake receivers cannot be disabled.</summary>
+    public void UpdateInstanceVisibility(ReadOnlySpan<PbrInstanceVisibility> updates)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var update in updates)
+            if (_staticInstanceIds?.Contains(update.Id) == true)
+                throw new ArgumentException("Static bake receivers cannot change runtime visibility.", nameof(updates));
+        PbrBvhTrace? nextTrace = null; SceneTraceData? nextData = null;
+        if (_trace is not null && !updates.IsEmpty) {
+            nextTrace = (_pendingTrace ?? _trace).WithVisibility(updates, Settings.SceneGiBytes);
+            var currentData = _pendingTraceData ?? _traceData!;
+            nextData = currentData.WithInstances(nextTrace.PackGpuInstances((ulong)currentData.Instances.Length * 16));
+        }
+        Scene.StageVisibility(updates);
+        if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; }
+    }
+
+    /// <summary>Stages explicit late-bound diffuse transport values by asset ID; draw materials and frozen reference inputs are separate.</summary>
+    public void UpdateTransportMaterials(ReadOnlySpan<PbrTransportMaterial> updates)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (updates.IsEmpty) return;
+        if (_trace is null) throw new InvalidOperationException("Live material transport requires dynamic GI.");
+        var current = _pendingTraceData ?? _traceData!;
+        var ids = _trace.Scene.MaterialIds; var seen = new HashSet<Sia.Asset.AssetId>();
+        if (updates.Length > ids.Length) throw new ArgumentException("Too many live transport material updates.", nameof(updates));
+        var rows = current.Packed.ToArray();
+        foreach (var update in updates) {
+            var index = ids.IndexOf(update.Id);
+            if (index < 0 || !seen.Add(update.Id) || update.Material is null)
+                throw new ArgumentException("Live transport updates require unique acquired material IDs.", nameof(updates));
+            var values = PbrSceneTransport.Surface(update.Material);
+            if (!math.all(math.isfinite(values.Albedo)) || !math.all(math.isfinite(values.Emission))
+                || math.any(values.Albedo.xyz < 0) || math.any(values.Albedo.xyz > 1)
+                || math.any(values.Emission.xyz < 0) || math.any(values.Emission.xyz > 1e18f))
+                throw new ArgumentException("Live diffuse/emission inputs exceed the finite bake transport domain.", nameof(updates));
+            (rows[index * 2], rows[index * 2 + 1]) = values;
+        }
+        var next = current.WithSurfaces(rows, Settings.SceneGiBytes);
+        _pendingTrace = _pendingTrace ?? _trace; _pendingTraceData = next;
     }
 
     public VisibilitySurfaceTargets GetSurfaceTargets(RenderViewKey view, RenderGraphTextureKey depth)

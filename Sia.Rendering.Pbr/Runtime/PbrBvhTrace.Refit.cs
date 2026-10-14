@@ -26,7 +26,7 @@ public sealed partial class PbrBvhTrace
         for (var i = 0; i < instances.Length; i++) {
             if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
             if (!pending.TryGetValue(Scene.Instances[i].Id, out var transform)) continue;
-            instances[i] = CreateInstance(Scene, i, transform); matched++;
+            instances[i] = CreateInstance(Scene, i, transform) with { Disabled = instances[i].Disabled }; matched++;
         }
         if (matched != pending.Count) throw new ArgumentException("An updated authored instance is absent from this trace.", nameof(updates));
 
@@ -44,5 +44,29 @@ public sealed partial class PbrBvhTrace
         }
         cancellationToken.ThrowIfCancellationRequested();
         return new(Scene, instances, _order, nodes, PayloadBytes);
+    }
+
+    /// <summary>Shares local geometry and conservative instance topology/bounds while changing only live inclusion.</summary>
+    public PbrBvhTrace WithVisibility(ReadOnlySpan<PbrInstanceVisibility> updates,
+        ulong maximumBytes = 128ul * 1024 * 1024, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (PayloadBytes > maximumBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        if (updates.Length > _instances.Length) throw new ArgumentException("Too many instance updates.", nameof(updates));
+        if (updates.IsEmpty) return this;
+        var requested = new Dictionary<Guid, bool>(updates.Length);
+        foreach (var update in updates) {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (update.Id == Guid.Empty || !requested.TryAdd(update.Id, update.Enabled))
+                throw new ArgumentException("Visibility updates require valid unique IDs.", nameof(updates));
+        }
+        var instances = (InstanceData[])_instances.Clone(); var matched = 0;
+        for (var at = 0; at < instances.Length; at++) {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!requested.TryGetValue(Scene.Instances[at].Id, out var enabled)) continue;
+            instances[at] = instances[at] with { Disabled = !enabled }; matched++;
+        }
+        if (matched != requested.Count) throw new ArgumentException("Visibility ID is absent from the trace.", nameof(updates));
+        return new(Scene, instances, _order, _nodes, PayloadBytes);
     }
 }

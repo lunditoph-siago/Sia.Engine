@@ -9,6 +9,15 @@ internal sealed partial class PbrGpuScene
     private PbrInstanceMotion? _pendingInstanceMotion;
     private ulong _instanceRevision;
     internal ulong GeometryRevision => _instanceRevision + (Streaming?.Revision ?? 0);
+    internal bool IsInstanceEnabled(uint row) => _instanceMotion is null || (_instanceMotion.Rows[(int)row].Material.x & PbrInstanceMotion.DisabledBit) == 0;
+
+    internal void StageVisibility(ReadOnlySpan<PbrInstanceVisibility> updates)
+    {
+        if (updates.IsEmpty) return;
+        var current = _pendingInstanceMotion ?? _instanceMotion
+            ?? throw new NotSupportedException("Runtime visibility requires shared local instance storage.");
+        _pendingInstanceMotion = current.WithVisibility(updates);
+    }
 
     internal void StageTransforms(ReadOnlySpan<PbrInstanceTransform> updates)
     {

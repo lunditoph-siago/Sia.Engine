@@ -17,7 +17,7 @@ public readonly record struct PbrBvhHit(Guid InstanceId, int Instance, int Sourc
 /// </summary>
 public sealed partial class PbrBvhTrace
 {
-    private readonly record struct InstanceData(double3 Row0, double3 Row1, double3 Row2, double3 Translation, Aabb Bounds)
+    private readonly record struct InstanceData(double3 Row0, double3 Row1, double3 Row2, double3 Translation, Aabb Bounds, bool Disabled)
     {
         public double3 LocalVector(double3 vector) => new(math.dot(Row0, vector), math.dot(Row1, vector), math.dot(Row2, vector));
     }
@@ -29,7 +29,7 @@ public sealed partial class PbrBvhTrace
     public PbrBvhScene Scene { get; }
     public int NodeCount => _nodes.Length;
     public Aabb Bounds => _nodes.Length == 0 ? new(float3.zero, float3.zero) : _nodes[0].Bounds;
-    /// <summary>Owned array elements only; excludes shared scene/geometry, object headers and build scratch.</summary>
+    /// <summary>Logical acceleration array bytes, including topology shared by runtime snapshots; excludes scene/geometry, object headers and build scratch.</summary>
     public ulong PayloadBytes { get; }
 
     private PbrBvhTrace(PbrBvhScene scene, InstanceData[] instances, int[] order, Node[] nodes, ulong bytes)
@@ -97,7 +97,7 @@ public sealed partial class PbrBvhTrace
         if (!math.all(math.isfinite(bounds.Min)) || !math.all(math.isfinite(bounds.Max)))
             throw new ArgumentException("Conservative transformed instance bounds must remain finite.", nameof(transform));
         return new(math.cross(b, c) / determinant, math.cross(c, a) / determinant,
-            math.cross(a, b) / determinant, (double3)transform.c3.xyz, bounds);
+            math.cross(a, b) / determinant, (double3)transform.c3.xyz, bounds, false);
     }
 
     private static Aabb TransformBounds(Aabb bounds, float4x4 transform)
