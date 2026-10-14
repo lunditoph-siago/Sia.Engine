@@ -54,6 +54,8 @@ public static partial class Program
                 var content = ExampleContent.Default(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"));
                 scenePath = content.Scene;
                 LightmapsPath ??= content.Lightmaps;
+                EnvironmentPath ??= content.Environment;
+                if (ReflectionCapturePaths.Count == 0) ReflectionCapturePaths.AddRange(content.ReflectionCaptures);
 #endif
             }
             var referencePath = pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny

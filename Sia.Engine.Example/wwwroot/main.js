@@ -241,7 +241,7 @@ try {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
   }
   if (pipeline === 'pbr' || pipeline === 'bunny') {
-    const content = parameters.has('scene') ? { scene: parameters.get('scene'), lightmaps: null }
+    const content = parameters.has('scene') ? { scene: parameters.get('scene'), lightmaps: null, environment: null, reflectionCaptures: [] }
       : await defaultContent(pipeline, location.href);
     args.push('--scene', new URL(content.scene, location.href).href);
     const lightmaps = parameters.get('lightmaps') ?? content.lightmaps;
@@ -249,7 +249,9 @@ try {
       if (!lightmaps.trim()) throw new Error('The selected lightmap index path must not be empty.');
       args.push('--lightmaps', new URL(lightmaps, location.href).href);
     }
-    const captures = parameters.getAll('reflection-capture');
+    if (!parameters.has('environment') && content.environment !== null)
+      args.push('--environment', new URL(content.environment, location.href).href);
+    const captures = parameters.has('reflection-capture') ? parameters.getAll('reflection-capture') : content.reflectionCaptures;
     if (captures.length > 16) throw new Error('At most sixteen reflection regions are supported.');
     for (const capture of captures) {
       if (!capture.trim()) throw new Error('The selected reflection capture path must not be empty.');
