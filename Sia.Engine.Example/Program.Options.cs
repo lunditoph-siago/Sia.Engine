@@ -31,6 +31,7 @@ public static partial class Program
         float? distance = null;
         string? scenePath = null;
         bool? finest = null;
+        RenderQuality? requestedQuality = null;
         (float3 Eye, float3 Target)? camera = null;
         for (var i = 0; i < args.Length; i += 2) {
             if (i + 1 == args.Length) {
@@ -94,7 +95,7 @@ public static partial class Program
                     Height = size;
             }
             else if (args[i] == "--quality") {
-                Quality = args[i + 1] switch {
+                requestedQuality = args[i + 1] switch {
                     "low" => RenderQuality.Low,
                     "medium" => RenderQuality.Medium,
                     "high" => RenderQuality.High,
@@ -155,18 +156,27 @@ public static partial class Program
                 throw new ArgumentException("Unknown option: " + args[i]);
             }
         }
+#if BROWSER
+        Quality = pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low;
+        if (requestedQuality is { } requested && requested != Quality)
+            throw new ArgumentException("Browser Bistro supports Low; browser Bunny uses High.");
+        if (Quality == RenderQuality.Low && (OpaquePath == PbrOpaquePath.Visibility || DynamicSceneGi == true || ExportSurfaceData))
+            throw new ArgumentException("Browser Low does not support Visibility, dynamic scene GI or surface exports.");
+#else
+        if (requestedQuality is { } requested) Quality = requested;
+#endif
         if (distance is not null && pipeline != ScenePipeline.Bunny) {
             throw new ArgumentException("--distance requires --pipeline bunny; use --camera for PBR scenes.");
         }
         if (debugMode is not null && pipeline == ScenePipeline.Unlit) {
             throw new ArgumentException("--debug requires --pipeline bunny|pbr.");
         }
-        if (pipeline != ScenePipeline.Pbr) {
+        if (pipeline == ScenePipeline.Unlit) {
             for (var i = 0; i < args.Length; i += 2) {
                 if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes"
                     or "--scene-gi" or "--surface-data"
                     or "--render-scale" or "--target-fps") {
-                    throw new ArgumentException($"{args[i]} requires --pipeline pbr.");
+                    throw new ArgumentException($"{args[i]} requires --pipeline bunny|pbr.");
                 }
             }
         }
@@ -182,8 +192,11 @@ public static partial class Program
 #if BROWSER
         if (ImmediatePresent) throw new ArgumentException("Immediate present benchmarks are native-only.");
 #endif
-        if ((scenePath is not null || finest is not null || camera is not null) && pipeline != ScenePipeline.Pbr) {
-            throw new ArgumentException("--scene, --lod and --camera require --pipeline pbr.");
+        if ((scenePath is not null || finest is not null) && pipeline == ScenePipeline.Unlit) {
+            throw new ArgumentException("--scene and --lod require --pipeline bunny|pbr.");
+        }
+        if (camera is not null && pipeline != ScenePipeline.Pbr) {
+            throw new ArgumentException("--camera requires --pipeline pbr.");
         }
         if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
             throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");

@@ -1,25 +1,9 @@
-using Sia.Engine.Mesh;
 using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
 
 public static partial class Program
 {
-    private static async Task<MeshPatchAsset> LoadBunnyAsync()
-    {
-        using var stream = typeof(Program).Assembly.GetManifestResourceStream("Sia.Engine.Example.bunny.siapatch")
-            ?? throw new FileNotFoundException("The bundled Bunny asset is missing.");
-        Console.WriteLine("Stanford Bunny: Stanford University Computer Graphics Laboratory; https://graphics.stanford.edu/data/3Dscanrep/");
-        var bytes = await AssetInput.ReadExactAsync(stream, checked((int)stream.Length));
-#if BROWSER
-        var asset = await BrowserOwner.RunCpuAsync(token => MeshPatchAsset.Decode(bytes, cancellationToken: token));
-#else
-        var asset = MeshPatchAsset.Decode(bytes);
-#endif
-        Console.WriteLine($"Patch asset: {bytes.Length} bytes; {asset.SourceHash}.");
-        return asset;
-    }
-
     private static async Task<PbrSceneAsset> LoadPbrAsync(string? path, bool finest, HttpClient client)
     {
 #if BROWSER

@@ -89,8 +89,8 @@ internal sealed partial class SceneExampleApp
             BakedProbes = _bakedProbes,
             DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
             OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
-            TargetPixelError = _finest ? 0 : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
-            ShadowTexelError = _finest ? 0 : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
+            TargetPixelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
+            ShadowTexelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
             GpuTiming = _gpuTimingEnabled
         };
         _sceneRenderer = _materialStream is { } stream

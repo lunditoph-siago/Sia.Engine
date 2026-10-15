@@ -91,7 +91,10 @@ internal static partial class ScenePack
                 cancellationToken.ThrowIfCancellationRequested(); Claim(id, typeof(T));
                 using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
-                var bytes = await AssetInput.ReadBoundedAsync(input, (int)System.Math.Min(maximumFileBytes, maximumTotalBytes - total), cancellationToken);
+                var available = (int)System.Math.Min(maximumFileBytes, maximumTotalBytes - total);
+                if (input.Length > available)
+                    throw new InvalidDataException($"Scene input {id.Value:N} requires {input.Length} encoded bytes; remaining admission {available}, consumed {total}, total limit {maximumTotalBytes}.");
+                var bytes = await AssetInput.ReadBoundedAsync(input, available, cancellationToken);
                 total += bytes.Length;
                 if (!MemoryMarshal.TryGetArray(bytes, out var segment)) throw new InvalidOperationException("Expected encoded array.");
                 T record;

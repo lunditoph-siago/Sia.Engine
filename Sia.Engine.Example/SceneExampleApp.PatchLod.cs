@@ -10,11 +10,7 @@ namespace Sia.Engine.Example;
 
 internal sealed partial class SceneExampleApp
 {
-    private const int BunnyColumns = 15;
-    private const int BunnyRows = 9;
-    private const int BunnyInstanceCount = BunnyColumns * BunnyRows;
     private const float BunnyPixelError = .125f;
-    private readonly MeshPatchAsset? _patchAsset;
     private Aabb _patchBounds;
     private Aabb _patchSceneBounds;
     private readonly VisibilityDebugMode _patchDebugMode;
@@ -26,52 +22,29 @@ internal sealed partial class SceneExampleApp
 #endif
     private (int Distance, bool Touring, VisibilityDebugMode Mode, uint Triangles)? _patchStatus;
 
-    internal static PbrSceneAsset CreateBunnyScene(MeshPatchAsset asset)
+    private void InitializeBunnyRendering()
     {
-        var bounds = asset.Build.Tree.CopyGeometry().Geometry.Bounds;
-        var spacing = math.max(bounds.Max - bounds.Min, new float3(.1f)) * 1.2f;
-        var instances = new PbrSceneInstance[BunnyInstanceCount];
-        var index = 0;
-        for (var row = -(BunnyRows / 2); row <= BunnyRows / 2; row++) {
-            for (var column = -(BunnyColumns / 2); column <= BunnyColumns / 2; column++) {
-                instances[index++] = new(0, 0, float4x4.Translate(new float3(column * spacing.x, row * spacing.y, 0)));
-            }
-        }
-        return PbrSceneAsset.Create([asset],
-            [new(PbrMaterial.Default with { BaseColor = new float3(.8f, .75f, .65f), Roughness = .8f })],
-            instances, "Stanford Bunny · Stanford University Computer Graphics Laboratory; https://graphics.stanford.edu/data/3Dscanrep/");
+        PrepareBunnyBounds();
+        InitializeMaterialRendering();
+        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer!).Build();
+        Console.WriteLine($"Bunny: {_materialInstanceCount} section instances; {Program.Quality}; pre-cooked selected geometry.");
     }
 
-    private unsafe void InitializePatchLod()
+    private void PrepareBunnyBounds()
     {
-        var build = (_patchAsset ?? throw new InvalidOperationException("A cooked patch asset is required.")).Build;
-        var tree = build.Tree;
-        var rootTriangles = tree.Nodes.Span[..tree.RootCount].ToArray().Sum(node => node.TriangleCount);
-        Console.WriteLine($"Cooked patch: {build.SourceTriangleCount} source triangles, {rootTriangles} root triangles, "
-            + $"{tree.RootCount} roots, {build.SimplificationCount} reductions, {build.TargetMissCount} missed targets, "
-            + $"{build.UnreducedGroupCount} unreduced groups.");
-        _patchBounds = tree.RootCount == 0 ? default : tree.Nodes.Span[0].Bounds;
-        foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
-            _patchBounds = new(math.min(_patchBounds.Min, node.Bounds.Min), math.max(_patchBounds.Max, node.Bounds.Max));
+        _patchBounds = new(new float3(float.PositiveInfinity), new float3(float.NegativeInfinity));
+        void Include(Aabb bounds) => _patchBounds = new(math.min(_patchBounds.Min, bounds.Min), math.max(_patchBounds.Max, bounds.Max));
+        if (_rasterScene is { } raster) {
+            foreach (var geometry in raster.Geometry.Span) Include(geometry.Bounds);
         }
-        var stream = _materialStream ?? throw new InvalidOperationException("Bunny requires its complete LOD stream.");
-        _patchSceneBounds = stream.Bounds;
-        var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
-        var settings = new PbrRendererSettings {
-            TargetPixelError = BunnyPixelError,
-            ShadowTexelError = BunnyPixelError,
-            GpuTiming = _gpuTimingEnabled,
-            Streaming = new() {
-                GpuTraversal = Program.GpuTraversal,
-                DetailBytes = 8ul * 1024 * 1024,
-                MaximumSelectionNodesPerView = 32768
+        else if (_materialScene is { } scene) {
+            foreach (var geometry in scene.Geometry.Span) {
+                var tree = geometry.Build.Tree;
+                foreach (var node in tree.Nodes.Span[..tree.RootCount]) Include(node.Bounds);
             }
-        };
-        _sceneRenderer = new PbrRenderer(in frame, stream, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
-        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer).Build();
-        Console.WriteLine($"{(Program.GpuTraversal ? "GPU" : "CPU")} Bunny LOD: {BunnyInstanceCount} instances; target {BunnyPixelError} px; detail budget {settings.Streaming.DetailBytes} bytes.");
-        InitializeInspectionControls();
-        Console.WriteLine($"Bunny wall: {BunnyColumns} x {BunnyRows} bunnies, {(long)build.SourceTriangleCount * BunnyInstanceCount:N0} source triangles, one shared geometry asset.");
+        }
+        else throw new InvalidOperationException("Bunny requires an acquired Raster or Virtual scene.");
+        _patchSceneBounds = _materialBounds;
     }
 
     private unsafe void InitializeInspectionControls()
@@ -150,7 +123,7 @@ internal sealed partial class SceneExampleApp
         var status = ((int)(_patchDistance * 100), _patchTour, _sceneRenderer!.DebugMode, triangles);
         if (_patchStatus != status) {
             _patchStatus = status;
-            var scene = _pipeline == ScenePipeline.Bunny ? $"{BunnyInstanceCount} bunnies | {(Program.GpuTraversal ? "GPU" : "CPU")} LOD | {triangles:N0} triangles | target {BunnyPixelError} px"
+            var scene = _pipeline == ScenePipeline.Bunny ? $"{_materialInstanceCount} instances | {Program.Quality} | {triangles:N0} triangles"
                 : $"{_materialInstanceCount} instances | {(_finest ? "Finest geometry" : "Automatic LOD")}";
             var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
                 : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
