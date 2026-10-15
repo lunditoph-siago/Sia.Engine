@@ -37,7 +37,8 @@ internal static partial class ExampleContent
             if (parts is not { Length: 3 } || parts[0] != "Content" || parts[1].Length != 64
                 || parts[1].Any(value => value is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
                 || !parts[2].EndsWith(".siascene", StringComparison.Ordinal)
-                || !Guid.TryParseExact(parts[2][..^9], "N", out var id) || id == Guid.Empty)
+                || !Guid.TryParseExact(parts[2][..^9], "N", out var id) || id == Guid.Empty
+                || parts[2][..^9] != id.ToString("N"))
                 throw new InvalidDataException("Example scene paths require Content/<sha256>/<uuid>.siascene.");
         }
     }
