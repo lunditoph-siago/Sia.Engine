@@ -5,8 +5,6 @@ using Sia.Asset;
 
 namespace Sia.Engine.Example;
 
-// Offline use-site composition. Mesh builders and the original asset entry own
-// neither this file layout nor multi-resource authoring/publication policy.
 internal static partial class ContentCook
 {
     internal const int MaximumRecipeBytes = 1024 * 1024;
@@ -96,8 +94,6 @@ internal static partial class ContentCook
         finally {
             try {
                 RequireStage();
-                // Only known direct Mesh outputs and scene.json belong to this
-                // invocation. Preserve links/foreign children and report cleanup.
                 var allowedDirectories = meshInputs.ToDictionary(input => Path.Combine(stage, input.Id.Value.ToString("N")),
                     input => input.Files, StringComparer.OrdinalIgnoreCase);
                 foreach (var directory in Directory.GetDirectories(stage)) {

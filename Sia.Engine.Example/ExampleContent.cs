@@ -3,7 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace Sia.Engine.Example;
 
-// The example's four entry points, not an asset registry or asset-core policy.
 internal static partial class ExampleContent
 {
     internal sealed record Catalog

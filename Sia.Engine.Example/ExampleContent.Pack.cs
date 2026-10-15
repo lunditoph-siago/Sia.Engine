@@ -8,7 +8,6 @@ namespace Sia.Engine.Example;
 
 internal static partial class ExampleContent
 {
-    // Recipe fields are the four already cooked scene paths, relative to the recipe.
     internal static async Task PackAsync(string recipePath, string outputDirectory,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumBundleBytes = 512L * 1024 * 1024,
         CancellationToken cancellationToken = default)
@@ -80,7 +79,6 @@ internal static partial class ExampleContent
                     }
                     if (read.ReadByte() != -1) throw new IOException("Content package input grew while reading.");
                 }
-                // Validate the owned snapshot, including cross-record build keys and every selected product.
                 var sceneName = Path.GetFileName(input);
                 if (!required.SetEquals(await RequiredFiles(Path.Combine(folder, sceneName))))
                     throw new InvalidDataException("Content references changed during packaging.");

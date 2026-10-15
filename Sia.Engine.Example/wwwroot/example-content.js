@@ -1,16 +1,6 @@
-// Fixed example entry points. Mesh identities and payloads remain in their records.
 export async function defaultScene(pipeline, pageUrl, fetchContent = fetch) {
-  let descriptor = new URL('Assets/default-scenes.json', pageUrl);
-  let catalog = await readCatalog(descriptor, fetchContent);
-  // A thin Pages site can delegate once to the full package on a CORS-enabled host.
-  if (catalog && typeof catalog === 'object' && Object.keys(catalog).length === 1
-      && typeof catalog.catalog === 'string') {
-    descriptor = new URL(catalog.catalog);
-    if (descriptor.protocol !== 'https:' || descriptor.username || descriptor.password) {
-      throw new Error('External example content requires an HTTPS catalog URL.');
-    }
-    catalog = await readCatalog(descriptor, fetchContent);
-  }
+  const descriptor = new URL('Assets/default-scenes.json', pageUrl);
+  const catalog = await readCatalog(descriptor, fetchContent);
   const keys = ['bunny', 'bistroExterior', 'bistroInterior', 'bistroWine'];
   const path = /^Content\/[a-f0-9]{64}\/[a-f0-9]{32}\.siascene$/;
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)

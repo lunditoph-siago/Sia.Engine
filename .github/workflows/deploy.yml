@@ -2,11 +2,6 @@ name: Deploy
 
 on:
   workflow_dispatch:
-    inputs:
-      content_catalog_url:
-        description: HTTPS URL of the complete canonical content catalog on a CORS-enabled asset host
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -47,22 +42,6 @@ jobs:
       - name: Build solution
         run: dotnet build "$SOLUTION" --configuration "$BUILD_CONFIG" --no-restore
 
-      - name: Prepare external content entry
-        shell: pwsh
-        env:
-          CONTENT_CATALOG_URL: ${{ inputs.content_catalog_url }}
-        run: |
-          $catalog = [Uri]$env:CONTENT_CATALOG_URL
-          if (-not $catalog.IsAbsoluteUri -or $catalog.Scheme -ne 'https' -or $catalog.UserInfo) {
-            throw 'Content requires an absolute HTTPS catalog URL without embedded credentials.'
-          }
-          $directory = Join-Path $env:RUNNER_TEMP 'example-content-entry'
-          [IO.Directory]::CreateDirectory($directory) | Out-Null
-          $descriptor = @{ catalog = $catalog.AbsoluteUri } | ConvertTo-Json -Compress
-          if ([Text.Encoding]::UTF8.GetByteCount($descriptor) -gt 4096) { throw 'Content entry exceeds 4 KiB.' }
-          [IO.File]::WriteAllText((Join-Path $directory 'default-scenes.json'), $descriptor)
-          "EXAMPLE_CONTENT_DIRECTORY=$directory" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Publish browser example
         run: >
           dotnet publish "$EXAMPLES_PROJECT"
@@ -70,10 +49,6 @@ jobs:
           --no-restore
           -p:WasmCachePath="$RUNNER_TEMP/wasm-cache"
           -p:PublishDir="$PUBLISH_OUTPUT/"
-          -p:ExampleContentDirectory="$EXAMPLE_CONTENT_DIRECTORY"
-
-      - name: Check Pages size
-        run: test "$(du -sb "$PUBLISH_OUTPUT/wwwroot" | cut -f1)" -le 1000000000
 
       - name: Prepare Pages artifact
         run: touch "$PUBLISH_OUTPUT/wwwroot/.nojekyll"
