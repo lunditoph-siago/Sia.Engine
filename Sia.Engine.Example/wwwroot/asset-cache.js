@@ -82,12 +82,7 @@ async function loadScene(request) {
   let caching = true;
   // Bound the cache branch by its consumer's backpressure. Response.clone()
   // can buffer an entire large scene when one branch reads more slowly.
-  const cached = cache.put(request, new Response(cacheStream.readable, response)).then(async () => {
-    const path = new URL(request.url).pathname;
-    for (const key of await cache.keys()) {
-      if (new URL(key.url).pathname === path && key.url !== request.url) await cache.delete(key);
-    }
-  }).catch(() => {
+  const cached = cache.put(request, new Response(cacheStream.readable, response)).catch(() => {
     caching = false;
     void writer.abort().catch(() => {});
   });
