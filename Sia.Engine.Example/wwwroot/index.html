@@ -27,11 +27,11 @@
     nav a:hover, nav a[aria-current="page"] { background: #ffffff14; color: white; }
     #settings-toggle { min-height: 48px; padding: 0 18px; }
     #inspection { position: fixed; top: calc(max(16px, env(safe-area-inset-top)) + 62px); right: max(16px, env(safe-area-inset-right)); width: min(340px, calc(100vw - 32px)); max-height: calc(100dvh - 156px); overflow-y: auto; margin: 0; padding: 20px; }
-    .panel-title { margin: 0 0 16px; font-size: 17px; font-weight: 600; }
+    .panel-title { margin: 0; font-size: 17px; font-weight: 600; }
+    .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .quality-badge { padding: 4px 10px; border: 1px solid #9dc8e53a; border-radius: 6px; background: #9dc8e50d; color: #bcd8eb; font-size: 12px; }
     #inspection-status { margin: 0 0 16px; color: #aab9c7; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
     .controls { display: grid; gap: 8px; }
-    #quality-controls { display: grid; gap: 8px; margin-bottom: 16px; }
-    .setting-note { margin: 0; font-size: 12px; line-height: 1.6; color: #aab9c7; }
     .controls button, #retry { min-height: 44px; padding: 10px 14px; background: #ffffff0a; border: 1px solid #ffffff24; border-radius: 8px; text-align: left; }
     .controls button:hover, #retry:hover { background: #ffffff18; }
     .distance { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: #b5c1cc; }
@@ -80,11 +80,11 @@
     <button id="settings-toggle" class="glass" type="button" aria-expanded="false" aria-controls="inspection" disabled>Settings</button>
   </div>
   <fieldset id="inspection" class="glass" hidden disabled aria-label="Scene settings">
-    <div class="panel-title">Scene settings</div>
-    <p id="inspection-status"></p>
-    <div id="quality-controls" hidden>
-      <span>Rendering quality: <output id="quality-value">Low</output></span>
+    <div class="panel-heading">
+      <div id="scene-title" class="panel-title">Scene settings</div>
+      <output id="quality-value" class="quality-badge" aria-label="Rendering quality" hidden></output>
     </div>
+    <p id="inspection-status"></p>
     <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
     <label id="camera-speed-row" class="distance" hidden>Slow <input id="camera-speed" type="range" min="1" max="16" value="4" aria-label="Move speed" /> Fast</label>
     <div class="controls">
