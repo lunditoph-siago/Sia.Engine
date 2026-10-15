@@ -31,6 +31,7 @@ public static partial class Program
         float? distance = null;
         string? scenePath = null;
         bool? finest = null;
+        RenderQuality? requestedQuality = null;
         (float3 Eye, float3 Target)? camera = null;
         for (var i = 0; i < args.Length; i += 2) {
             if (i + 1 == args.Length) {
@@ -94,7 +95,7 @@ public static partial class Program
                     Height = size;
             }
             else if (args[i] == "--quality") {
-                Quality = args[i + 1] switch {
+                requestedQuality = args[i + 1] switch {
                     "low" => RenderQuality.Low,
                     "medium" => RenderQuality.Medium,
                     "high" => RenderQuality.High,
@@ -155,6 +156,15 @@ public static partial class Program
                 throw new ArgumentException("Unknown option: " + args[i]);
             }
         }
+#if BROWSER
+        Quality = pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low;
+        if (requestedQuality is { } requested && requested != Quality)
+            throw new ArgumentException("Browser Bistro supports Low; browser Bunny uses High.");
+        if (Quality == RenderQuality.Low && (OpaquePath == PbrOpaquePath.Visibility || DynamicSceneGi == true || ExportSurfaceData))
+            throw new ArgumentException("Browser Low does not support Visibility, dynamic scene GI or surface exports.");
+#else
+        if (requestedQuality is { } requested) Quality = requested;
+#endif
         if (distance is not null && pipeline != ScenePipeline.Bunny) {
             throw new ArgumentException("--distance requires --pipeline bunny; use --camera for PBR scenes.");
         }

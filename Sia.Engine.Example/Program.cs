@@ -8,8 +8,9 @@ public static partial class Program
     {
         try {
 #if !BROWSER
-            if (args.Length is 4 or 6 && args[0] == "--package-example-content" && args[2] == "--output") {
-                await ExampleContent.PackAsync(args[1], args[3], maximumBundleBytes: OfflineTotalBytes(args));
+            if (args.Length is 4 or 6 or 8 && args[0] == "--package-example-content" && args[2] == "--output") {
+                var (browser, maximumBytes) = ContentPackageOptions(args);
+                await ExampleContent.PackAsync(args[1], args[3], maximumBundleBytes: maximumBytes, browser: browser);
                 Console.WriteLine($"Packaged example content: {Path.GetFullPath(args[3])}");
                 return 0;
             }
@@ -103,6 +104,28 @@ public static partial class Program
     }
 
 #if !BROWSER
+    private static (bool Browser, long MaximumBytes) ContentPackageOptions(string[] args)
+    {
+        var browser = false;
+        var maximumBytes = 512L * 1024 * 1024;
+        var options = new HashSet<string>(StringComparer.Ordinal);
+        for (var at = 4; at < args.Length; at += 2) {
+            if (!options.Add(args[at])) throw new ArgumentException("Duplicate content package option.");
+            if (args[at] == "--target") {
+                browser = args[at + 1] switch {
+                    "browser" => true,
+                    "native" => false,
+                    _ => throw new ArgumentException("Expected --target native|browser.")
+                };
+            }
+            else if (args[at] == "--maximum-total-bytes" && long.TryParse(args[at + 1],
+                System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var bytes) && bytes > 0)
+                maximumBytes = bytes;
+            else throw new ArgumentException("Expected --target native|browser or --maximum-total-bytes <positive integer>.");
+        }
+        return (browser, maximumBytes);
+    }
+
     private static long OfflineTotalBytes(string[] args)
     {
         if (args.Length == 4) return 512L * 1024 * 1024;

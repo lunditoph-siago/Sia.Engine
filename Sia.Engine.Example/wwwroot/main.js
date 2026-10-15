@@ -10,20 +10,8 @@ const distanceControl = document.getElementById('inspection-distance');
 const tourControl = document.getElementById('inspection-tour');
 const materialControl = document.getElementById('inspection-material');
 const resetControl = document.getElementById('inspection-reset');
-const qualityControl = document.getElementById('quality-select');
-const qualityApply = document.getElementById('quality-apply');
-const quality = parameters.get('quality') ?? 'low';
-qualityControl.value = quality;
-qualityControl.addEventListener('change', () => {
-  qualityApply.disabled = qualityControl.value === quality;
-});
-qualityApply.addEventListener('click', () => {
-  const url = new URL(location.href);
-  url.searchParams.set('quality', qualityControl.value);
-  qualityApply.disabled = true;
-  input.reset();
-  location.href = url.href;
-});
+const quality = pipeline === 'bunny' ? 'high' : 'low';
+document.getElementById('quality-value').textContent = pipeline === 'bunny' ? 'High' : 'Low';
 const loading = document.getElementById('loading');
 const loadingProgress = document.getElementById('loading-progress');
 let inspectionCommands = 0;
@@ -190,6 +178,8 @@ for (const link of document.querySelectorAll('nav a')) {
 }
 
 try {
+  if (parameters.has('quality') && parameters.get('quality') !== quality)
+    throw new Error('Browser Bistro supports Low; browser Bunny uses High.');
   for (const name of ['atmosphere', 'skybox']) {
     if (parameters.has(name)) throw new Error(`${name} is no longer supported. Remove it from the URL.`);
   }
@@ -232,8 +222,9 @@ try {
   setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   const args = ['--pipeline', pipeline];
+  if (pipeline === 'pbr' || pipeline === 'bunny') args.push('--quality', quality);
   const forwardedOptions = [
-    'quality', 'pbr-path', 'surface-data', 'scene-gi', 'probes', 'environment',
+    'pbr-path', 'surface-data', 'scene-gi', 'probes', 'environment',
     'render-scale', 'width', 'height', 'gpu-timing', 'gpu-traversal', 'target-fps',
     'benchmark-frames', 'benchmark-motion', 'debug', 'distance', 'lod', 'camera',
   ];

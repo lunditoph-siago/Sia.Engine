@@ -10,7 +10,7 @@ internal static partial class ExampleContent
 {
     internal static async Task PackAsync(string recipePath, string outputDirectory,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumBundleBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        bool browser = false, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBundleBytes);
@@ -33,12 +33,15 @@ internal static partial class ExampleContent
                     throw new IOException("Content package staging directories must not be links.");
         }
         using var client = new HttpClient();
-        async Task<HashSet<string>> RequiredFiles(string scene) {
+        async Task<HashSet<string>> RequiredFiles(string scene, bool allProducts) {
             var raster = await PbrSceneFiles.PrepareRasterAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
-            var virtuals = await PbrSceneFiles.PrepareVirtualAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
-            var bvh = await PbrSceneFiles.PrepareBvhAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var ids = raster.Meshes.Keys.Concat(raster.Materials.Keys).Concat(raster.Textures.Keys)
-                .Concat(raster.Products.Keys).Concat(virtuals.Products.Keys).Concat(bvh.Products.Keys);
+                .Concat(raster.Products.Keys);
+            if (allProducts) {
+                var virtuals = await PbrSceneFiles.PrepareVirtualAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
+                var bvh = await PbrSceneFiles.PrepareBvhAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
+                ids = ids.Concat(virtuals.Products.Keys).Concat(bvh.Products.Keys);
+            }
             var names = ids.Select(id => id.Value.ToString("N") + ".siaasset").ToHashSet(StringComparer.Ordinal);
             names.Add(raster.Id.Value.ToString("N") + ".siascene");
             return names;
@@ -49,7 +52,8 @@ internal static partial class ExampleContent
             var roots = new List<string>(4);
             for (var index = 0; index < inputs.Length; index++) {
                 cancellationToken.ThrowIfCancellationRequested();
-                var input = inputs[index]; var required = await RequiredFiles(input);
+                var allProducts = !browser || index == 0;
+                var input = inputs[index]; var required = await RequiredFiles(input, allProducts);
                 RequireOwnedDirectories();
                 var folder = Path.Combine(content, "input-" + index); Directory.CreateDirectory(folder); directories.Add(folder);
                 var copied = new List<string>(); long total = 0;
@@ -80,7 +84,7 @@ internal static partial class ExampleContent
                     if (read.ReadByte() != -1) throw new IOException("Content package input grew while reading.");
                 }
                 var sceneName = Path.GetFileName(input);
-                if (!required.SetEquals(await RequiredFiles(Path.Combine(folder, sceneName))))
+                if (!required.SetEquals(await RequiredFiles(Path.Combine(folder, sceneName), allProducts)))
                     throw new InvalidDataException("Content references changed during packaging.");
                 var digest = Convert.ToHexStringLower(hash.GetHashAndReset());
                 var version = Path.Combine(content, digest);
