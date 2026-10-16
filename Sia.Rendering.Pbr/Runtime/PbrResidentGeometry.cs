@@ -110,14 +110,14 @@ internal sealed class PbrResidentGeometry : IDisposable
         writer.Flush();
     }
 
-    public void WriteIndices(ref IndexWriter writer, uint vertexOffset)
+    public void WriteIndices(ref IndexWriter writer, uint vertexOffset, int lod = 0)
     {
         if (_page is { } page) {
             foreach (var index in page.Page.Indices.Slice(page.FirstTriangle * 3, page.TriangleCount * 3)) writer.Append(checked(vertexOffset + (uint)_remap![index]));
             return;
         }
         if (_raster is not null) {
-            foreach (var index in _raster.Indices) writer.Append(checked(vertexOffset + _rasterRemap![index]));
+            foreach (var index in _raster.GetIndices(lod)) writer.Append(checked(vertexOffset + _rasterRemap![index]));
             return;
         }
         throw new InvalidOperationException("Resident geometry requires an acquired Raster section or page.");

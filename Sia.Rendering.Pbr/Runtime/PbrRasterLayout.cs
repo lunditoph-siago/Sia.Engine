@@ -15,6 +15,8 @@ internal sealed class PbrRasterLayout : IDisposable
     internal PbrGpuScene.Draw[] Transparent { get; private set; } = [];
     internal uint VertexCount { get; private set; }
     internal uint TriangleCount { get; private set; }
+    internal uint IndexCount { get; private set; }
+    internal MeshRasterLod[][] Lods { get; private set; } = [];
     internal uint SingleSidedTriangles { get; private set; }
     internal uint OpaqueTriangles { get; private set; }
     internal ulong RequiredBytes { get; private set; }
@@ -27,7 +29,7 @@ internal sealed class PbrRasterLayout : IDisposable
         if(materialBatches.Length!=source.Materials.Length || materialBatches.Any(batch=>batch<0))
             throw new ArgumentException("Raster material batches must cover the acquired material table.",nameof(materialBatches));
         Bounds=source.Bounds;
-        var geometry=new List<PbrResidentGeometry>(); var offsets=new List<uint>();
+        var geometry=new List<PbrResidentGeometry>(); var offsets=new List<uint>(); var levels=new List<MeshRasterLod[]>();
         var shapes=new Dictionary<(MeshRasterData,int),int>(); var rows=new int[source.Geometry.Length]; Array.Fill(rows,-1);
         try {
             foreach(var instance in source.Instances.Span) {
@@ -37,10 +39,17 @@ internal sealed class PbrRasterLayout : IDisposable
                     var prepared=new PbrResidentGeometry(value); geometry.Add(prepared); slot=geometry.Count-1;
                     shapes.Add(key,slot); offsets.Add(VertexCount);
                     VertexCount=checked(VertexCount+(uint)prepared.VertexCount);
+                    var lods = new MeshRasterLod[value.Lods.Length];
+                    for (var lod = 0; lod < lods.Length; lod++) {
+                        var input = value.Lods[lod];
+                        lods[lod] = new(checked((int)IndexCount), input.IndexCount, input.Error);
+                        IndexCount = checked(IndexCount + (uint)input.IndexCount);
+                    }
+                    levels.Add(lods);
                 }
                 rows[instance.Geometry]=slot;
             }
-            Geometry=geometry.ToArray(); VertexOffsets=offsets.ToArray();
+            Geometry=geometry.ToArray(); VertexOffsets=offsets.ToArray(); Lods=levels.ToArray();
             int Bin(int index) {
                 var material=source.Materials.Span[source.Instances.Span[index].Material];
                 return material.AlphaBlend?2:material.DoubleSided?1:0;
@@ -59,12 +68,12 @@ internal sealed class PbrRasterLayout : IDisposable
                     new((uint)instance.Material,(uint)original,first,count));
                 var bounds=BoundsTransform.Apply(prepared.Bounds,instance.Transform);
                 if(count!=0) (material.AlphaBlend?transparent:opaque).Add(new(first,prepared.TriangleCount,instance.Material,bounds,
-                    material.DoubleSided,checked(first*3),(uint)row) { SourceInstance=(uint)original });
+                    material.DoubleSided,(uint)Lods[slot][0].FirstIndex,(uint)row) { SourceInstance=(uint)original, Lods=Lods[slot], ErrorScale=PbrGpuScene.TransformNorm(instance.Transform) });
                 TriangleCount=checked(TriangleCount+count);
                 if(Bin(original)==0) SingleSidedTriangles=TriangleCount;
                 if(Bin(original)<=1) OpaqueTriangles=TriangleCount;
             }
-            RequiredBytes=checked((ulong)VertexCount*PbrRasterVertex.Bytes+(ulong)TriangleCount*12
+            RequiredBytes=checked((ulong)VertexCount*PbrRasterVertex.Bytes+(ulong)IndexCount*4
                 +(ulong)System.Math.Max(1,Instances.Length)*(ulong)Unsafe.SizeOf<PbrInstanceGpu>());
             if(RequiredBytes>maximumBytes) throw new ArgumentException(
                 $"Shared Raster geometry/instances require {RequiredBytes} bytes, exceeding budget {maximumBytes}.",nameof(maximumBytes));
@@ -90,7 +99,7 @@ internal sealed class PbrRasterLayout : IDisposable
     internal void ValidateBindingLimit(ulong maximumBytes)
     {
         ObjectDisposedException.ThrowIf(_disposed,this);
-        if((ulong)VertexCount*PbrRasterVertex.Bytes>maximumBytes || (ulong)TriangleCount*12>maximumBytes
+        if((ulong)VertexCount*PbrRasterVertex.Bytes>maximumBytes || (ulong)IndexCount*4>maximumBytes
             || (ulong)System.Math.Max(1,Instances.Length)*(ulong)Unsafe.SizeOf<PbrInstanceGpu>()>maximumBytes)
             throw new NotSupportedException("Shared Raster vertex, topology or instance buffer exceeds device binding limits.");
     }

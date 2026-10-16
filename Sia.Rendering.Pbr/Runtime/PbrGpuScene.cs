@@ -26,6 +26,8 @@ internal sealed partial class PbrGpuScene : IDisposable
     {
         public float3 Center => Bounds.Center;
         public uint SourceInstance { get; init; } = Instance;
+        public ReadOnlyMemory<MeshRasterLod> Lods { get; init; }
+        public float ErrorScale { get; init; } = 1;
     }
 
     private readonly GpuResources _gpu;

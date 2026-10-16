@@ -8,6 +8,8 @@ public sealed class PbrRasterGeometry
 {
     public MeshRasterData Product { get; }
     public int Section { get; }
+    public ReadOnlySpan<MeshRasterLod> Lods => Product.GetLods(Section);
+    public ReadOnlySpan<uint> GetIndices(int lod) => Product.GetIndices(Section, lod);
     public ReadOnlySpan<uint> Indices => Product.Indices.Slice(Product.Sections[Section].FirstIndex, Product.Sections[Section].IndexCount);
     public Aabb Bounds { get; }
 

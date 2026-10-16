@@ -12,6 +12,20 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe partial class PbrView
 {
+    internal static PbrGpuScene.Draw SelectRasterLod(PbrGpuScene.Draw draw, in float4x4 matrix,
+        in ProjectedGeometryError.LodProjection projection, uint width, uint height, float target)
+    {
+        if (target <= 0 || draw.Lods.Length <= 1) return draw;
+        var levels = draw.Lods.Span;
+        for (var lod = levels.Length - 1; lod > 0; lod--) {
+            var level = levels[lod];
+            var error = ProjectedGeometryError.ProjectLodError(draw.Bounds, level.Error * draw.ErrorScale,
+                projection, matrix, width, height);
+            if (error <= target) return draw with { Count = (uint)(level.IndexCount / 3), FirstIndex = (uint)level.FirstIndex };
+        }
+        return draw;
+    }
+
     private void AddRange(List<PbrGpuScene.Draw> list, PbrGpuScene.Draw draw, bool matchBatch = false)
     {
         if (list.Count != 0 && list[^1].DoubleSided == draw.DoubleSided && list[^1].First + list[^1].Count == draw.First

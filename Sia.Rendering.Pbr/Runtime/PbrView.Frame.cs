@@ -99,6 +99,7 @@ internal sealed unsafe partial class PbrView
         Wgpu.WriteBuffer<PbrFrame>(_gpu.Queue, _uniform.GetWgpu<WGPUBuffer>(), 0, [_data]);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
         var culler = new FrustumCuller(camera.Frustum);
+        var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
         _opaque.Clear();
         _transparent.Clear();
         if (_owner.Scene.Streaming is { } streaming) {
@@ -113,11 +114,11 @@ internal sealed unsafe partial class PbrView
         else {
             foreach (var draw in _owner.Scene.Opaque) {
                 if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
-                    AddRange(_opaque, draw, UseForward);
+                    AddRange(_opaque, SelectRasterLod(draw, camera.ViewProj, projection, _width, _height, _owner.Settings.TargetPixelError), UseForward);
             }
         }
         foreach (var draw in _owner.Scene.Transparent)
-            if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds)) _transparent.Add(draw);
+            if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds)) _transparent.Add(SelectRasterLod(draw, camera.ViewProj, projection, _width, _height, _owner.Settings.TargetPixelError));
 
         var opaqueTriangles = _selection?.VisibleTriangles ?? 0;
         if (_selection is null) foreach (var draw in _opaque) opaqueTriangles = checked(opaqueTriangles + draw.Count);

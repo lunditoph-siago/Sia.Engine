@@ -55,7 +55,8 @@ internal sealed partial class PbrGpuScene
         }
         else {
             foreach (var draws in new[] { Opaque, Transparent })
-                for (var i = 0; i < draws.Length; i++) draws[i] = draws[i] with { Bounds = pending.WorldBounds[(int)draws[i].Instance] };
+                for (var i = 0; i < draws.Length; i++) draws[i] = draws[i] with { Bounds = pending.WorldBounds[(int)draws[i].Instance],
+                    ErrorScale = TransformNorm(pending.Rows[(int)draws[i].Instance].Transform) };
             Bounds = pending.Bounds;
         }
         _instanceMotion = pending; _pendingInstanceMotion = null;

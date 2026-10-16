@@ -34,6 +34,8 @@ internal sealed unsafe partial class PbrView
         // Cached depth still needs view demand and residency protection every frame.
         if (!_shadowDirty[layer] && _owner.Scene.Streaming is null) return;
         var culler = new FrustumCuller(Frustum.CreateFromViewProjection(matrix));
+        var resolution = _owner.Settings.ShadowResolution;
+        var projection = ProjectedGeometryError.PrepareLodProjection(matrix, resolution, resolution);
         var list = _shadowDraws[layer];
         list.Clear();
         if (_owner.Scene.Streaming is { } streaming) {
@@ -44,7 +46,7 @@ internal sealed unsafe partial class PbrView
         else {
             foreach (var draw in _owner.Scene.Opaque)
                 if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
-                    AddRange(list, draw);
+                    AddRange(list, SelectRasterLod(draw, matrix, projection, resolution, resolution, _owner.Settings.ShadowTexelError));
         }
     }
 

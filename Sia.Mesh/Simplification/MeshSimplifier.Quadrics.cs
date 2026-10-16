@@ -2,10 +2,10 @@ using Sia.Math;
 
 namespace Sia.Engine.Mesh;
 
-public static partial class MeshPatchBuilder
+internal static partial class MeshSimplifier
 {
     private static double[] BuildQuadrics(MeshData mesh, Triangle[] triangles, bool[] locked,
-        MeshPatchBuildSettings settings, CancellationToken cancellationToken, int coordinateCount, out double[] coordinates,
+        float normalWeight, float uvWeight, CancellationToken cancellationToken, int coordinateCount, out double[] coordinates,
         out double positionScale)
     {
         var quadricSize = coordinateCount * (coordinateCount + 1) / 2;
@@ -52,7 +52,7 @@ public static partial class MeshPatchBuilder
             var basis1 = math.cross(e2, cross) / areaSquared;
             var basis2 = math.cross(cross, e1) / areaSquared;
             for (var attribute = 3; attribute < constant; attribute++) {
-                var weight = attribute is 6 or 7 || attribute >= 11 ? settings.UVWeight : settings.NormalWeight;
+                var weight = attribute is 6 or 7 || attribute >= 11 ? uvWeight : normalWeight;
                 if (weight == 0) { continue; }
                 var gradient = basis1 * (b[attribute] - a[attribute]) + basis2 * (c[attribute] - a[attribute]);
                 plane.Clear();

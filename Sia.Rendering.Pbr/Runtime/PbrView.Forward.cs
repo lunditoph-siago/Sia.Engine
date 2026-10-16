@@ -25,7 +25,7 @@ internal sealed unsafe partial class PbrView
         foreach (var draw in _transparent) {
             Wgpu.SetRenderPipeline(pass, (draw.DoubleSided ? _owner.Pipelines.CoverageDouble : _owner.Pipelines.Coverage).GetWgpu<WGPURenderPipeline>());
             Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[_owner.Materials.MaterialBatches[draw.Material]].GetWgpu<WGPUBindGroup>());
-            Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.First * 3, firstInstance: draw.Instance);
+            Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.FirstIndex, firstInstance: draw.Instance);
         }
     }
 
