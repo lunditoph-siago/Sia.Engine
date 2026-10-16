@@ -52,15 +52,14 @@ internal sealed class PbrRasterLayout : IDisposable
             for(var row=0;row<order.Length;row++) {
                 var original=order[row]; var instance=source.Instances.Span[original];
                 var material=source.Materials.Span[instance.Material]; var slot=rows[instance.Geometry]; var prepared=Geometry[slot];
-                var count=checked(prepared.Fine+prepared.Coarse); var first=TriangleCount;
+                var count=prepared.TriangleCount; var first=TriangleCount;
                 SourceGeometry[row]=slot;
                 // z/w describe an ordered, disjoint logical triangle interval; y retains authored input order.
                 Instances[row]=new(instance.Transform,math.transpose(math.inverse(instance.Transform)),
                     new((uint)instance.Material,(uint)original,first,count));
                 var bounds=BoundsTransform.Apply(prepared.Bounds,instance.Transform);
-                if(count!=0) (material.AlphaBlend?transparent:opaque).Add(new(first,prepared.Fine,instance.Material,bounds,
-                    material.DoubleSided,checked(first*3),(uint)row,checked(first+prepared.Fine),prepared.Coarse,
-                    prepared.Error*PbrGpuScene.TransformNorm(instance.Transform)) { SourceInstance=(uint)original });
+                if(count!=0) (material.AlphaBlend?transparent:opaque).Add(new(first,prepared.TriangleCount,instance.Material,bounds,
+                    material.DoubleSided,checked(first*3),(uint)row) { SourceInstance=(uint)original });
                 TriangleCount=checked(TriangleCount+count);
                 if(Bin(original)==0) SingleSidedTriangles=TriangleCount;
                 if(Bin(original)<=1) OpaqueTriangles=TriangleCount;

@@ -111,11 +111,9 @@ internal sealed unsafe partial class PbrView
             }
         }
         else {
-            var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
             foreach (var draw in _owner.Scene.Opaque) {
                 if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
-                    AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, projection,
-                        _width, _height, _owner.Settings.TargetPixelError), UseForward);
+                    AddRange(_opaque, draw, UseForward);
             }
         }
         foreach (var draw in _owner.Scene.Transparent)

@@ -22,10 +22,7 @@ internal sealed partial class PbrGpuScene : IDisposable
         Aabb Bounds,
         bool DoubleSided,
         uint FirstIndex,
-        uint Instance,
-        uint CoarseFirst,
-        uint CoarseCount,
-        float Error)
+        uint Instance)
     {
         public float3 Center => Bounds.Center;
         public uint SourceInstance { get; init; } = Instance;
@@ -51,12 +48,8 @@ internal sealed partial class PbrGpuScene : IDisposable
 
     public ulong Bytes => _gpu.Bytes + (_arena?.Bytes ?? 0) + (Streaming?.Hierarchy?.Bytes ?? 0);
 
-    public PbrGpuScene(in GpuFrame frame, PbrSceneAsset source, Entity layout, ulong budget, int[] materialBatches, Entity instances = default)
-        : this(frame, source.Materials, source.Instances, source.Geometry.Length,
-            g => new(source.Geometry.Span[g].Build.Tree), layout, budget, materialBatches, instances) { }
-
     private PbrGpuScene(in GpuFrame frame, PbrSceneStream source, Entity layout, ulong budget, int[] materialBatches, Entity instances)
-        : this(frame, source.Bootstrap.Materials, source.TransparentInstances, source.TransparentGeometry.Length,
+        : this(frame, source.Materials, source.TransparentInstances, source.TransparentGeometry.Length,
             g => new(source.TransparentGeometry[g]), layout, budget, materialBatches, instances, (uint)source.Instances.Length) { }
 
     private PbrGpuScene(in GpuFrame frame, ReadOnlyMemory<PbrMaterialAsset> materials,
@@ -80,7 +73,7 @@ internal sealed partial class PbrGpuScene : IDisposable
                 if (localInstances && !counted.Add(instance.Geometry)) continue;
                 var geometry = geometries[instance.Geometry]!;
                 totalVertices = checked(totalVertices + geometry.VertexCount);
-                totalTriangles = checked(totalTriangles + (int)checked(geometry.Fine + geometry.Coarse));
+                totalTriangles = checked(totalTriangles + (int)geometry.TriangleCount);
             }
             var vertexBytes = checked((ulong)totalVertices * StreamGeometryPage.VertexBytes);
             var indexBytes = checked((ulong)totalTriangles * 12);
@@ -143,14 +136,13 @@ internal sealed partial class PbrGpuScene : IDisposable
                     }
                 }
                 if (upload) geometry.WriteIndices(ref indexWriter, vertexOffset);
-                var triangles = checked(geometry.Fine + geometry.Coarse);
+                var triangles = geometry.TriangleCount;
                 var bounds = BoundsTransform.Apply(geometry.Bounds, instance.Transform);
                 minimum = math.min(minimum, bounds.Min);
                 maximum = math.max(maximum, bounds.Max);
                 if (triangles != 0)
-                    (material.AlphaBlend ? transparent : opaque).Add(new(drawFirst, geometry.Fine,
-                        instance.Material, bounds, material.DoubleSided, drawFirst * 3, checked(instanceBase + (uint)i),
-                        drawFirst + geometry.Fine, geometry.Coarse, geometry.Error * TransformNorm(instance.Transform)) { SourceInstance = (uint)i });
+                    (material.AlphaBlend ? transparent : opaque).Add(new(drawFirst, geometry.TriangleCount,
+                        instance.Material, bounds, material.DoubleSided, drawFirst * 3, checked(instanceBase + (uint)i)) { SourceInstance = (uint)i });
                 if (upload) {
                     shared.TryAdd(instance.Geometry, triangleOffset);
                     vertexOffset += (uint)geometry.VertexCount;

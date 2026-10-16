@@ -230,7 +230,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-                PbrShaderSource.CompileAcquired(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
+                PbrShaderSource.Compile(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
                     streamInstances: gpuStream, shadingWork: gpuStream, staticLightmap: staticLightmap, residentInstances: residentInstances, reflectionCaptures: reflectionCaptures, liveReflections: liveReflections), "pbr-resolve"));
             var shading = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
             Background = Compute(shade, shading, "background");
@@ -294,7 +294,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
                     ReflectionCommitLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(commit));
                     ReflectionHistory = Compute(Module("reflection_history.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionHistoryLayout), "filter_reflections");
                     ReflectionCommit = Compute(Module("reflection_history_commit.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionCommitLayout), "commit_reflections");
-                    var hitSource = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.CompileAcquired(_sourceWorld,
+                    var hitSource = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(_sourceWorld,
                         "reflection_history_commit.wgsl", historyCommitHits: true), "reflection-history-hit-commit"));
                     ReflectionCommitHit = Compute(hitSource, GpuBinding.PipelineLayout(_gpu, ReflectionCommitHitLayout), "commit_reflections");
                 }
@@ -312,7 +312,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TransparentDouble = Render(transparent, glassLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
             Transmission = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
             TransmissionDouble = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
-            var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.CompileAcquired(_sourceWorld, "output.wgsl"), "pbr-output"));
+            var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(_sourceWorld, "output.wgsl"), "pbr-output"));
             Output = Render(output, GpuBinding.PipelineLayout(_gpu, OutputLayout), "output_vertex", "output_fragment", format, false, WGPUCullMode.None);
         }
         catch {
@@ -324,7 +324,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false,
         bool compatibilityUniformPadding = false)
         => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-            PbrShaderSource.CompileAcquired(_sourceWorld, file, writableClusters, sceneGi: _sceneGi,
+            PbrShaderSource.Compile(_sourceWorld, file, writableClusters, sceneGi: _sceneGi,
                 streamInstances: streamInstances, shadingWork: shadingWork,
                 compatibilityUniformPadding: compatibilityUniformPadding, staticLightmap: _staticLightmap, residentInstances: _residentInstances, reflectionCaptures: _reflectionCaptures, liveReflections: _liveReflections), file));
 

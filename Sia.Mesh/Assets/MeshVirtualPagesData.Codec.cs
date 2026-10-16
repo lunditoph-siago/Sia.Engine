@@ -61,7 +61,7 @@ public sealed partial class MeshVirtualPagesData
         var vertices = GetInt(header, 88); var triangles = GetInt(header, 92); var flags = header[96];
         var parts = GetInt(header, 141); var nodes = GetInt(header, 145); var ranges = GetInt(header, 149); var pages = GetInt(header, 153);
         Require(header[..8].SequenceEqual("SIAMSHVI"u8) && vertices > 0 && triangles > 0 && flags <= 1
-            && parts is > 0 and <= MeshVirtualData.MaximumParts && nodes is >= 0 and <= MaximumNodes
+            && parts is > 0 and <= MaximumParts && nodes is >= 0 and <= MaximumNodes
             && ranges is >= 0 and <= MaximumRanges && pages is >= 0 and <= MaximumPages, "Invalid virtual index header.");
         var encoded = WireBytes(parts, nodes, ranges, pages);
         Require(encoded <= maximumBytes && encoded <= MaximumEncodedBytes && OwnedBytes(parts, nodes, ranges, pages) <= maximumBytes

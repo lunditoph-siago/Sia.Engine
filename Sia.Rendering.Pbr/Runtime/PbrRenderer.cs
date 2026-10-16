@@ -161,25 +161,18 @@ public sealed class PbrRenderer :
     internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
 
-    public PbrRenderer(
-        in GpuFrame frame,
-        PbrSceneAsset scene,
-        WGPUTextureFormat outputFormat,
-        PbrRendererSettings? settings = null)
-        : this(frame, scene, null, null, outputFormat, settings) { }
-
     public PbrRenderer(in GpuFrame frame, PbrRasterScene scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, null, null, scene, outputFormat, settings ?? PbrRendererSettings.ForQuality(RenderQuality.Low)) { }
+        : this(frame, null, scene, outputFormat, settings ?? PbrRendererSettings.ForQuality(RenderQuality.Low)) { }
 
     public PbrRenderer(in GpuFrame frame, PbrSceneStream scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, scene.Bootstrap, scene, null, outputFormat, settings) { }
+        : this(frame, scene, null, outputFormat, settings) { }
 
-    private PbrRenderer(in GpuFrame frame, PbrSceneAsset? scene, PbrSceneStream? stream, PbrRasterScene? raster,
+    private PbrRenderer(in GpuFrame frame, PbrSceneStream? stream, PbrRasterScene? raster,
         WGPUTextureFormat outputFormat, PbrRendererSettings? settings)
     {
-        if (scene is null && raster is null) throw new ArgumentNullException(nameof(scene));
+        if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
         if (Settings.Reflections is { } reflectionSettings) {
             reflectionSettings.Validate();
@@ -201,7 +194,7 @@ public sealed class PbrRenderer :
         if (Settings.DynamicSceneGi) {
             if (Settings.TraceScene is not { } traceScene)
                 throw new ArgumentException("Dynamic scene GI requires explicitly acquired independent Mesh BVHs.", nameof(settings));
-            var identity = stream?.Identity ?? (raster?.TransportIdentity ?? scene!.TransportIdentity);
+            var identity = stream?.Identity ?? raster!.TransportIdentity;
             if (!traceScene.TransportIdentity.Span.SequenceEqual(identity.Span))
                 throw new ArgumentException("Trace input differs from authored render geometry/materials/instances.", nameof(settings));
         }
@@ -211,7 +204,7 @@ public sealed class PbrRenderer :
         if (outputFormat is not (WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.RGBA8UnormSrgb or WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.BGRA8UnormSrgb))
             throw new ArgumentException("PBR output currently requires an SDR RGBA/BGRA surface.", nameof(outputFormat));
         var captures = PbrReflectionCaptureGpu.Validate(Settings.ReflectionCaptures.Span,
-            (stream?.Identity ?? raster?.TransportIdentity ?? scene!.TransportIdentity).Span,
+            (stream?.Identity ?? raster!.TransportIdentity).Span,
             Settings.BakedEnvironment, Settings.ReflectionCaptureBytes);
         if (captures.Length != 0) {
             _staticInstanceIds = [];
@@ -223,7 +216,7 @@ public sealed class PbrRenderer :
             ArgumentNullException.ThrowIfNull(input.PreparePage); ArgumentNullException.ThrowIfNull(input.AcquirePage);
             ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
             lightmapRows = stream is not null ? input.Set.BindReceivers(stream)
-                : input.Set.BindReceivers((raster?.Instances ?? scene!.Instances).Span);
+                : input.Set.BindReceivers(raster!.Instances.Span);
             _staticInstanceIds ??= [];
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
             if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
@@ -238,10 +231,9 @@ public sealed class PbrRenderer :
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
                 Settings.Reflections is not null, Settings.Reflections?.History is not null);
-            Materials = new(frame, (raster?.Materials ?? scene!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
+            Materials = new(frame, (raster?.Materials ?? stream!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
-                : stream is null ? new(frame, scene!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
-                : new(frame, stream, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
+                : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             Environment = new(frame, Settings.BakedEnvironment);
             if (captures.Length != 0) Captures = new(frame, captures, Settings.ReflectionCaptureBytes);
             if (Settings.Lightmaps is { } lighting) {
@@ -276,8 +268,7 @@ public sealed class PbrRenderer :
                 }
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
-                var identity = tracing is not null ? tracing.Identity.ToArray() : raster is not null ? PbrSceneTransport.Identity(raster)
-                    : stream is null ? PbrSceneTransport.Identity(scene!) : stream.Identity.ToArray();
+                var identity = (tracing?.Identity ?? raster?.TransportIdentity ?? stream!.Identity).ToArray();
                 if (!asset.SceneIdentity.Span.SequenceEqual(identity))
                     throw new ArgumentException("Baked probes belong to different scene geometry/materials.", nameof(settings));
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))

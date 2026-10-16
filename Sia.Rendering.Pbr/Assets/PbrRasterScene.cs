@@ -64,6 +64,6 @@ public sealed class PbrRasterScene
         ReadOnlySpan<PbrSceneInstance> instances, string attribution)
     {
         foreach (var item in geometry) ArgumentNullException.ThrowIfNull(item);
-        PbrSceneAsset.ValidateTables(geometry.Length, materials, instances, attribution);
+        PbrSceneComposition.ValidateTables(geometry.Length, materials, instances, attribution);
     }
 }

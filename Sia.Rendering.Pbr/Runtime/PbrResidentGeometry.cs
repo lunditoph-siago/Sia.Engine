@@ -8,7 +8,6 @@ internal sealed class PbrResidentGeometry : IDisposable
 {
     internal delegate void IndexUpload(ReadOnlySpan<uint> values, int first);
 
-    private readonly MeshPatchTree? _tree;
     private readonly PbrRasterGeometry? _raster;
     private readonly PbrSceneStream.PageGeometry? _page;
     private readonly Dictionary<uint, uint>? _rasterRemap;
@@ -16,46 +15,13 @@ internal sealed class PbrResidentGeometry : IDisposable
     private int[]? _source;
 
     public int VertexCount { get; }
-    public uint Fine { get; }
-    public uint Coarse { get; }
-    public float Error { get; }
+    public uint TriangleCount { get; }
     public Aabb Bounds { get; }
-
-    public PbrResidentGeometry(MeshPatchTree tree)
-    {
-        _tree = tree;
-        Bounds = tree.Bounds;
-        Fine = (uint)tree.FinestTriangleCount;
-        if (tree.RootCount != tree.Nodes.Length) {
-            VertexCount = tree.VertexCount;
-            foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
-                Coarse = checked(Coarse + (uint)node.TriangleCount);
-                Error = MathF.Max(Error, node.EstimatedSpatialError);
-            }
-            return;
-        }
-        try {
-            _remap = ArrayPool<int>.Shared.Rent(tree.VertexCount);
-            _source = ArrayPool<int>.Shared.Rent(tree.VertexCount);
-            _remap.AsSpan(0, tree.VertexCount).Fill(-1);
-            foreach (var cluster in tree.Meshlets) {
-                foreach (var vertex in tree.MeshletVertexIndices.Slice(cluster.VertexOffset, cluster.VertexCount)) {
-                    if (_remap[vertex] >= 0) continue;
-                    _remap[vertex] = VertexCount;
-                    _source[VertexCount++] = (int)vertex;
-                }
-            }
-        }
-        catch {
-            Dispose();
-            throw;
-        }
-    }
 
     public PbrResidentGeometry(PbrRasterGeometry geometry)
     {
         ArgumentNullException.ThrowIfNull(geometry);
-        _raster = geometry; Bounds = geometry.Bounds; Fine = (uint)(geometry.Indices.Length / 3);
+        _raster = geometry; Bounds = geometry.Bounds; TriangleCount = (uint)(geometry.Indices.Length / 3);
         // Compact only vertices referenced by this section; never allocate a remap for the whole product per section.
         var capacity = System.Math.Min(geometry.Product.Vertices.Length, geometry.Indices.Length);
         _rasterRemap = new(System.Math.Min(capacity, 4096));
@@ -77,7 +43,7 @@ internal sealed class PbrResidentGeometry : IDisposable
             || geometry.FirstTriangle > geometry.Page.Indices.Length / 3 - geometry.TriangleCount)
             throw new ArgumentException("Page geometry requires a nonempty triangle range.", nameof(geometry));
         _page = geometry;
-        Fine = (uint)geometry.TriangleCount;
+        TriangleCount = (uint)geometry.TriangleCount;
         // A shared page may contain many unrelated node ranges. Transparent draws
         // own only their selected range, just as Raster draws own one section.
         try {
@@ -103,8 +69,8 @@ internal sealed class PbrResidentGeometry : IDisposable
         if (first < 0 || count < 0 || first > VertexCount - count || stride < count || sourceInstance > 1u << 24
             || packed.Length < checked(stride * 3 + count))
             throw new ArgumentOutOfRangeException(nameof(count));
-        var vertices = _tree is not null ? _tree.Vertices : _raster is not null ? _raster.Product.Vertices : default;
-        var bakeUvs = _tree is not null ? _tree.BakeUvs : _raster is not null ? _raster.Product.BakeUvs : default;
+        var vertices = _raster is not null ? _raster.Product.Vertices : default;
+        var bakeUvs = _raster is not null ? _raster.Product.BakeUvs : default;
         var hasBake = _page is { } pageGeometry ? pageGeometry.Page.HasBakeUvs : !bakeUvs.IsEmpty;
         for (var v = 0; v < count; v++) {
             var source = _source is null ? first + v : _source[first + v];
@@ -154,24 +120,7 @@ internal sealed class PbrResidentGeometry : IDisposable
             foreach (var index in _raster.Indices) writer.Append(checked(vertexOffset + _rasterRemap![index]));
             return;
         }
-        if (_remap is not null) {
-            foreach (var cluster in _tree!.Meshlets) {
-                var vertices = _tree.MeshletVertexIndices.Slice(cluster.VertexOffset, cluster.VertexCount);
-                foreach (var local in _tree.MeshletTriangleIndices.Slice(cluster.TriangleOffset, cluster.TriangleCount * 3))
-                    writer.Append(checked(vertexOffset + (uint)_remap[vertices[local]]));
-            }
-        }
-        else {
-            foreach (var node in _tree!.Nodes.Span) {
-                if (node.ChildCount != 0) continue;
-                foreach (var index in _tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3))
-                    writer.Append(checked(vertexOffset + index));
-            }
-            foreach (var node in _tree.Nodes.Span[.._tree.RootCount]) {
-                foreach (var index in _tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3))
-                    writer.Append(checked(vertexOffset + index));
-            }
-        }
+        throw new InvalidOperationException("Resident geometry requires an acquired Raster section or page.");
     }
 
     public void Dispose()

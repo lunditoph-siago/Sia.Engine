@@ -4,13 +4,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal static partial class PbrShaderSource
 {
-    internal static string Compile(string entry, bool writableClusters = false, bool surfaceData = false, bool sceneGi = false,
-        bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false)
-        => CompileWithLookup(module => module.StartsWith("rendering/", StringComparison.Ordinal)
-            ? RenderingShaderSource.ReadModule(module) : Read(module), entry, writableClusters, surfaceData,
-            sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits);
-
-    internal static string CompileAcquired(World world, string entry, bool writableClusters = false, bool surfaceData = false,
+    internal static string Compile(World world, string entry, bool writableClusters = false, bool surfaceData = false,
         bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -46,7 +40,4 @@ internal static partial class PbrShaderSource
         return RenderingShaderSource.CompileResolved(source, (module, _) => read(module), definitions);
     }
 
-    private static string? Read(string module)
-        => RenderingShaderSource.ReadEmbeddedModule(typeof(PbrShaderSource).Assembly,
-            "pbr/", "Sia.Rendering.Pbr.Shaders.", module);
 }
