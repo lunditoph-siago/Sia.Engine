@@ -60,6 +60,7 @@ internal sealed unsafe partial class SceneExampleApp
 
         AcquireReferenceScene();
         AcquireLightingAssets();
+        AcquireCaptureAssets();
         BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
@@ -213,6 +214,8 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld?.Dispose();
         _sceneWorld = null;
         _sceneRenderer?.Dispose();
+        foreach (var root in _captureRoots) if (root.IsValid) root.Destroy();
+        _captureRoots.Clear(); _captureInputs = null; _preparedCaptures = null;
         if (_assetRoot.IsValid) _assetRoot.Destroy();
         _assetRoot = default;
         _referenceScene = null;

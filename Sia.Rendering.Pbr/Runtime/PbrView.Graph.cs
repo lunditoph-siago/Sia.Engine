@@ -60,6 +60,7 @@ internal sealed unsafe partial class PbrView
         }
         Import(ref graph, _frame.DepthTarget, _depth);
         Import(ref graph, _hdrKey, _hdr);
+        ImportReflectionTargets(ref graph);
         if (_owner.Settings.ExportSurfaceData) {
             Import(ref graph, _normalRoughnessKey, _normalRoughness);
             Import(ref graph, _baseMetallicKey, _baseMetallic);
@@ -116,9 +117,10 @@ internal sealed unsafe partial class PbrView
                     .Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Write(d.View._tilesKey, RenderGraphBufferUsage.Storage), Tiles, RenderGraphPassKind.Compute);
             graph.UsePass(new(_prefix + "shade"), "pbr-fused-shading", dependency, static (in d, p) =>
                 d.View.WriteSurface(d.View.ReadStreamWork(d.View.ReadLighting(p)).Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Read(d.Depth, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._tilesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect).Write(d.View._hdrKey, RenderGraphTextureUsage.StorageBinding)), Shade, RenderGraphPassKind.Compute);
+                    .Read(d.View._tilesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect).Write(d.View.OpaqueTargetKey, RenderGraphTextureUsage.StorageBinding)), Shade, RenderGraphPassKind.Compute);
         }
         TimingMarker(ref graph, dependency, 7);
+        BuildReflections(ref graph, dependency);
         if (_owner.Materials.HasTransmission)
             graph.UsePass(new(_prefix + "snapshot"), "pbr-opaque-snapshot", dependency, static (in d, p) =>
             d.View.ReadTiming(p).Read(d.View._hdrKey, RenderGraphTextureUsage.CopySource).Write(d.View._snapshotKey, RenderGraphTextureUsage.CopyDestination), Snapshot, RenderGraphPassKind.Compute);
@@ -126,10 +128,10 @@ internal sealed unsafe partial class PbrView
             graph.UsePass(new(_prefix + "transparent"), "pbr-transparent", dependency, static (in d, p) =>
             d.View.ReadLighting(p).Read(d.Depth, RenderGraphTextureUsage.RenderAttachment | RenderGraphTextureUsage.TextureBinding)
                 .Read(d.View._snapshotKey, RenderGraphTextureUsage.TextureBinding).ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Transparency);
-        TimingMarker(ref graph, dependency, 8);
+        TimingMarker(ref graph, dependency, 10);
         graph.UsePass(new(_prefix + "output"), "pbr-output", dependency, static (in d, p) =>
             d.View.ReadTiming(p).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
-        TimingMarker(ref graph, dependency, 9);
+        TimingMarker(ref graph, dependency, 11);
     }
 
     private RenderGraphPassDeclarationBuilder WriteSurface(RenderGraphPassDeclarationBuilder pass)
@@ -138,6 +140,7 @@ internal sealed unsafe partial class PbrView
             pass.Write(_normalRoughnessKey, RenderGraphTextureUsage.StorageBinding);
             pass.Write(_baseMetallicKey, RenderGraphTextureUsage.StorageBinding);
         }
+        if (HasReflections) pass.Write(_reflectionSpecularKey, RenderGraphTextureUsage.StorageBinding);
         return pass;
     }
 

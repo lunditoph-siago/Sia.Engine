@@ -15,7 +15,7 @@ internal sealed partial class PbrGpuScene
             using var layout=new PbrRasterLayout(source,materialBatches,budget);
             _instanceMotion = new(source, layout);
             var vertexBytes=(ulong)layout.VertexCount*PbrRasterVertex.Bytes;
-            var indexBytes=(ulong)layout.TriangleCount*12;
+            var indexBytes=(ulong)layout.IndexCount*4;
             layout.ValidateBindingLimit(_gpu.Limits.MaxStorageBufferBindingSize);
             VertexCount=layout.VertexCount; VertexPlanes=PbrRasterVertex.Planes; TriangleCount=layout.TriangleCount;
             SingleSidedTriangles=layout.SingleSidedTriangles; OpaqueTriangles=layout.OpaqueTriangles;
@@ -43,7 +43,9 @@ internal sealed partial class PbrGpuScene
             }
             var writer=new PbrResidentGeometry.IndexWriter(indices,
                 (values,first)=>Wgpu.WriteBuffer<uint>(_gpu.Queue,Topology.GetWgpu<WGPUBuffer>(),(ulong)first*4,values));
-            foreach(var slot in layout.SourceGeometry) layout.Geometry[slot].WriteIndices(ref writer,layout.VertexOffsets[slot]);
+            for (var slot = 0; slot < layout.Geometry.Length; slot++)
+                for (var lod = 0; lod < layout.Lods[slot].Length; lod++)
+                    layout.Geometry[slot].WriteIndices(ref writer, layout.VertexOffsets[slot], lod);
             writer.Flush();
             Group=GpuBinding.Group(_gpu,groupLayout,[GpuBinding.Buffer(0,Vertices),GpuBinding.Buffer(1,Topology),GpuBinding.Buffer(2,Instances)]);
         }

@@ -13,6 +13,12 @@ struct InstanceTraceHit {
     normal: vec3<f32>,
 }
 
+struct InstanceTraceResult {
+    hit: InstanceTraceHit,
+    complete: bool,
+    steps: u32,
+}
+
 fn instance_trace_word(word: u32) -> u32 {
     return instance_trace_geometry[word / 4u][word % 4u];
 }
@@ -84,26 +90,43 @@ fn trace_instances(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximu
 }
 
 fn trace_instances_domain(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximum: f32, reference: bool) -> InstanceTraceHit {
-    var hit = InstanceTraceHit(maximum, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, vec3<f32>(0.0), false, vec3<f32>(0.0));
-    if (arrayLength(&instance_trace_geometry) < 3u || instance_trace_rows(reference) < 5u) { return hit; }
+    return trace_instances_query(origin, direction, minimum, maximum, reference, 0u, false).hit;
+}
+
+// Count top/local nodes, instance candidates and triangles; slot lookup has a host-admitted logarithmic bound.
+// Invalid input or budget exhaustion discards every preliminary hit. A proved miss remains complete.
+fn trace_instances_bounded(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximum: f32,
+    reference: bool, maximum_steps: u32) -> InstanceTraceResult {
+    return trace_instances_query(origin, direction, minimum, maximum, reference, maximum_steps, true);
+}
+
+fn trace_instances_query(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximum: f32,
+    reference: bool, maximum_steps: u32, bounded: bool) -> InstanceTraceResult {
+    let miss = InstanceTraceHit(maximum, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, vec3<f32>(0.0), false, vec3<f32>(0.0));
+    var hit = miss; var steps = 0u;
+    if (arrayLength(&instance_trace_geometry) < 3u || instance_trace_rows(reference) < 5u) { return InstanceTraceResult(miss, false, steps); }
     let header = instance_trace_row(0u, reference); let tables = instance_trace_row(1u, reference);
     if (instance_trace_geometry[0].w != 0x32475453u || instance_trace_row(2u, reference).z != 0x31495453u
         || instance_trace_geometry[0].z != arrayLength(&instance_trace_geometry)
         || instance_trace_row(2u, reference).y != instance_trace_rows(reference)
         || any(instance_trace_geometry[1] != instance_trace_row(3u, reference))
-        || any(instance_trace_geometry[2] != instance_trace_row(4u, reference))) { return hit; }
+        || any(instance_trace_geometry[2] != instance_trace_row(4u, reference))) { return InstanceTraceResult(miss, false, steps); }
     if (minimum < 0.0 || maximum < minimum || any(origin != origin) || any(direction != direction)
         || any(abs(origin) > vec3<f32>(3.402823466e38)) || any(abs(direction) > vec3<f32>(3.402823466e38))
-        || minimum != minimum || maximum != maximum || maximum > 3.402823466e38 || all(direction == vec3<f32>(0.0))) { return hit; }
+        || minimum != minimum || maximum != maximum || maximum > 3.402823466e38 || all(direction == vec3<f32>(0.0))) { return InstanceTraceResult(miss, false, steps); }
     var best_rank = 0xffffffffu; var top = 0u;
     loop {
         if (top >= header.x) { break; }
+        if (bounded && steps >= maximum_steps) { return InstanceTraceResult(miss, false, steps); }
+        steps += select(0u, 1u, bounded);
         let lo = instance_trace_row(header.y + top * 3u, reference); let hi = instance_trace_row(header.y + top * 3u + 1u, reference);
         if (!instance_trace_box(bitcast<vec3<f32>>(lo.xyz), bitcast<vec3<f32>>(hi.xyz), origin, direction, minimum, hit.parameter)) {
             top = lo.w; continue;
         }
         let count = instance_trace_row(header.y + top * 3u + 2u, reference).x;
         for (var item = hi.w; item < hi.w + count; item++) {
+            if (bounded && steps >= maximum_steps) { return InstanceTraceResult(miss, false, steps); }
+            steps += select(0u, 1u, bounded);
             let index = instance_trace_row(instance_trace_row(2u, reference).x + item / 4u, reference)[item % 4u];
             let start = header.w + index * 5u; let instance = instance_trace_row(start, reference);
             if (instance.w != 0u) { continue; }
@@ -119,6 +142,8 @@ fn trace_instances_domain(origin: vec3<f32>, direction: vec3<f32>, minimum: f32,
             var node = 0u;
             loop {
                 if (node >= mesh.y) { break; }
+                if (bounded && steps >= maximum_steps) { return InstanceTraceResult(miss, false, steps); }
+                steps += select(0u, 1u, bounded);
                 let node_lo = instance_trace_geometry[mesh.x + node * 2u]; let node_hi = instance_trace_geometry[mesh.x + node * 2u + 1u];
                 if (!instance_trace_box(bitcast<vec3<f32>>(node_lo.xyz), bitcast<vec3<f32>>(node_hi.xyz), local_origin, local_direction, minimum, hit.parameter)) {
                     node = node_lo.w; continue;
@@ -126,6 +151,8 @@ fn trace_instances_domain(origin: vec3<f32>, direction: vec3<f32>, minimum: f32,
                 let triangles = node_hi.w & 127u;
                 let first = node_hi.w >> 7u;
                 for (var t = first; t < first + triangles; t++) {
+                    if (bounded && steps >= maximum_steps) { return InstanceTraceResult(miss, false, steps); }
+                    steps += select(0u, 1u, bounded);
                     let base = mesh.z + t * 5u;
                     let triangle = vec4<u32>(instance_trace_word(base), instance_trace_word(base + 1u), instance_trace_word(base + 2u), instance_trace_word(base + 3u));
                     let a = bitcast<vec3<f32>>(instance_trace_geometry[vertices + triangle.x].xyz);
@@ -153,5 +180,5 @@ fn trace_instances_domain(origin: vec3<f32>, direction: vec3<f32>, minimum: f32,
         }
         top++;
     }
-    return hit;
+    return InstanceTraceResult(hit, true, steps);
 }

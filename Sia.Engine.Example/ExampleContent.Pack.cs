@@ -19,11 +19,14 @@ internal static partial class ExampleContent
         recipePath = Path.GetFullPath(recipePath); var recipe = Read(recipePath);
         var inputs = new[] { recipe.Bunny, recipe.BistroExterior, recipe.BistroInterior, recipe.BistroWine };
         if (inputs.Any(entry => entry is null || string.IsNullOrWhiteSpace(entry.Scene)
-            || entry.Lightmaps is not null && string.IsNullOrWhiteSpace(entry.Lightmaps)))
+            || entry.Lightmaps is not null && string.IsNullOrWhiteSpace(entry.Lightmaps)
+            || entry.Environment is not null && string.IsNullOrWhiteSpace(entry.Environment)
+            || entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
+            || entry.ReflectionCaptures.Any(string.IsNullOrWhiteSpace)
+            || entry.ReflectionCaptures.Distinct(StringComparer.OrdinalIgnoreCase).Count() != entry.ReflectionCaptures.Length))
             throw new InvalidDataException("Every default requires nonempty selected input paths.");
         string Resolve(string path) => Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!);
-        inputs = inputs.Select(entry => entry with { Scene = Resolve(entry.Scene),
-            Lightmaps = entry.Lightmaps is { } lightmaps ? Resolve(lightmaps) : null }).ToArray();
+        inputs = inputs.Select(entry => MapPaths(entry, Resolve)).ToArray();
         if (inputs.Select(entry => entry.Scene).Distinct(StringComparer.OrdinalIgnoreCase).Count() != inputs.Length)
             throw new InvalidDataException("Default scene inputs must be distinct.");
         var output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
@@ -117,6 +120,7 @@ internal static partial class ExampleContent
                     }
                 }
             }
+            await AddReflectionsAsync(entry, raster, client, names, Admit, maximumFileBytes, maximumBundleBytes - encoded, cancellationToken);
             return names;
         }
         try {
@@ -157,9 +161,7 @@ internal static partial class ExampleContent
                 }
                 // Validate the owned snapshot, including cross-record build keys and every selected product.
                 var sceneName = Path.GetFileName(input.Scene);
-                var lightmapName = input.Lightmaps is { } selectedLightmaps ? Path.GetFileName(selectedLightmaps) : null;
-                var snapshot = new Entry { Scene = Path.Combine(folder, sceneName),
-                    Lightmaps = lightmapName is null ? null : Path.Combine(folder, lightmapName) };
+                var snapshot = MapPaths(input, path => Path.Combine(folder, Path.GetFileName(path)));
                 if (!required.Keys.ToHashSet(StringComparer.Ordinal).SetEquals((await RequiredFiles(snapshot)).Keys))
                     throw new InvalidDataException("Content references changed during packaging.");
                 var digest = Convert.ToHexStringLower(hash.GetHashAndReset());
@@ -167,14 +169,15 @@ internal static partial class ExampleContent
                 RequireOwnedDirectories(); Directory.Move(folder, version);
                 directories[directories.IndexOf(folder)] = version;
                 foreach (var file in copied) files[files.IndexOf(file)] = Path.Combine(version, Path.GetFileName(file));
-                roots.Add(new() { Scene = "Content/" + digest + "/" + sceneName,
-                    Lightmaps = lightmapName is null ? null : "Content/" + digest + "/" + lightmapName });
+                roots.Add(MapPaths(input, path => "Content/" + digest + "/" + Path.GetFileName(path)));
             }
             var catalog = new Catalog { Bunny = roots[0], BistroExterior = roots[1], BistroInterior = roots[2], BistroWine = roots[3] };
             Validate(catalog); RequireOwnedDirectories();
+            var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog, CatalogJsonContext.Default.Catalog);
+            if (catalogBytes.Length > 16384) throw new InvalidDataException("Example content catalog exceeds 16 KiB.");
             var descriptor = Path.Combine(stage, "default-scenes.json");
             using (var write = new FileStream(descriptor, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-                files.Add(descriptor); JsonSerializer.Serialize(write, catalog, CatalogJsonContext.Default.Catalog);
+                files.Add(descriptor); write.Write(catalogBytes);
             }
             cancellationToken.ThrowIfCancellationRequested(); RequireOwnedDirectories();
             OfflineDirectory.Publish(stage, output, cancellationToken);

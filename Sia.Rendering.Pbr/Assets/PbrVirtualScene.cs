@@ -28,7 +28,7 @@ public sealed class PbrVirtualScene
     internal PbrVirtualScene(PbrVirtualGeometry[] geometry, PbrMaterialAsset[] materials, PbrSceneInstance[] instances,
         string attribution, byte[] identity)
     {
-        PbrSceneAsset.ValidateTables(geometry.Length, materials, instances, attribution);
+        PbrSceneComposition.ValidateTables(geometry.Length, materials, instances, attribution);
         Geometry = geometry; Materials = materials; Instances = instances; Attribution = attribution; TransportIdentity = identity;
         var minimum = new float3(float.PositiveInfinity); var maximum = new float3(float.NegativeInfinity);
         foreach (var instance in instances) {

@@ -81,7 +81,7 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
                 GpuBinding.Buffer(6, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(7, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
             ]);
-            var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.CompileAcquired(frame.ResourceWorld, "stream_traversal.wgsl"), "pbr-stream-traversal"));
+            var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(frame.ResourceWorld, "stream_traversal.wgsl"), "pbr-stream-traversal"));
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, Layout);
             ResetFeedback = Compute(shader, pipelineLayout, "reset_feedback");
             ResetDraws = Compute(shader, pipelineLayout, "reset_draws");
@@ -101,7 +101,7 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
                 GpuBinding.Buffer(5, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
             ]);
             var expansionShader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-                PbrShaderSource.CompileAcquired(frame.ResourceWorld, "stream_expand.wgsl"), "pbr-stream-expand"));
+                PbrShaderSource.Compile(frame.ResourceWorld, "stream_expand.wgsl"), "pbr-stream-expand"));
             Expand = Compute(expansionShader, GpuBinding.PipelineLayout(_gpu, ExpansionLayout), "expand");
         }
         catch {

@@ -18,6 +18,36 @@ public sealed class IblEnvironmentAsset
     public ReadOnlyMemory<Half> Cube { get; }
     public ReadOnlyMemory<Half> BrdfLut { get; }
 
+    /// <summary>Snapshots one validated independent payload; no IO, asset acquisition or GPU effects.</summary>
+    public static IblEnvironmentAsset Create(ProceduralSky sky, ReadOnlySpan<float4> coefficients,
+        ReadOnlySpan<Half> cube, ReadOnlySpan<Half> lut, ulong maximumBytes = 4ul * 1024 * 1024)
+    {
+        ArgumentNullException.ThrowIfNull(sky);
+        if (coefficients.Length != 9 || cube.Length != CubeTexels * 4 || lut.Length != LutTexels * 4)
+            throw new ArgumentException("Environment arrays must match the fixed payload shape.");
+        if (9ul * 16 + ((ulong)cube.Length + (ulong)lut.Length) * 2 > maximumBytes)
+            throw new ArgumentException("Environment payload exceeds its owned-array admission.", nameof(maximumBytes));
+        return new(sky, coefficients.ToArray(), cube.ToArray(), lut.ToArray());
+    }
+
+    /// <summary>Snapshots new filtered specular data, sharing this immutable sky, diffuse SH and BRDF payload.</summary>
+    public IblEnvironmentAsset WithCube(ReadOnlySpan<Half> cube, ulong maximumBytes = 4ul * 1024 * 1024,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (cube.Length != CubeTexels * 4 || (ulong)cube.Length * 2 > maximumBytes)
+            throw new ArgumentException("Filtered cube shape or owned-array budget is invalid.", nameof(cube));
+        for (var at = 0; at < cube.Length; at++) {
+            if ((at & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+            if (!Half.IsFinite(cube[at])) throw new InvalidDataException("Filtered cube must contain finite values.");
+        }
+        var copied = cube.ToArray(); cancellationToken.ThrowIfCancellationRequested();
+        return new(this, copied);
+    }
+
+    private IblEnvironmentAsset(IblEnvironmentAsset source, Half[] cube)
+    { Sky = source.Sky; Coefficients = source.Coefficients; BrdfLut = source.BrdfLut; Cube = cube; }
+
     internal IblEnvironmentAsset(ProceduralSky sky, float4[] coefficients, Half[] cube, Half[] lut)
     {
         try { sky.ValidateData(); }
@@ -32,7 +62,8 @@ public sealed class IblEnvironmentAsset
         BrdfLut = lut;
     }
 
-    public void Write(Stream destination)
+    /// <summary>Writes the fixed payload and returns its complete encoded SHA-256 content identity.</summary>
+    public string Write(Stream destination)
     {
         using var payload = new MemoryStream(k_PayloadBytes);
         using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true)) {
@@ -62,8 +93,12 @@ public sealed class IblEnvironmentAsset
                 writer.Write(BitConverter.HalfToUInt16Bits(v));
         }
         var bytes = payload.GetBuffer().AsSpan(0, (int)payload.Length);
+        var checksum = SHA256.HashData(bytes);
         destination.Write(bytes);
-        destination.Write(SHA256.HashData(bytes));
+        destination.Write(checksum);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(bytes); hash.AppendData(checksum);
+        return Convert.ToHexString(hash.GetHashAndReset());
     }
 
     public static IblEnvironmentAsset Read(Stream source)

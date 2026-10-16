@@ -12,6 +12,20 @@ internal sealed class PbrInstanceMotion
     internal PbrInstanceGpu[] Rows { get; }
     internal Aabb[] WorldBounds { get; }
     internal Aabb Bounds { get; }
+    internal int ReflectionReceiverCount => _stream ? Rows.Length : Rows.Length == 0 ? 0 : checked((int)Rows.Max(static row => row.Material.y) + 1);
+
+    internal uint[] ReflectionReceiverMap(ReadOnlySpan<PbrReflectionInstancePose> poses)
+    {
+        var index = new Dictionary<Guid, uint>(poses.Length);
+        for (var at = 0; at < poses.Length; at++)
+            if (poses[at].Id == Guid.Empty || !index.TryAdd(poses[at].Id, (uint)at)) throw new ArgumentException("Pose identities must be unique and nonempty.", nameof(poses));
+        var mapping = new uint[ReflectionReceiverCount]; Array.Fill(mapping, uint.MaxValue);
+        foreach (var pair in _rowsById) {
+            if (!index.TryGetValue(pair.Key, out var pose)) throw new ArgumentException("A receiver is absent from acquired trace identities.", nameof(poses));
+            foreach (var row in pair.Value) mapping[_stream ? row : (int)Rows[row].Material.y] = pose;
+        }
+        return mapping;
+    }
 
     internal PbrInstanceMotion(PbrRasterScene source, PbrRasterLayout layout)
     {

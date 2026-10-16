@@ -128,7 +128,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _bounds = new Aabb[source.Instances.Length][];
         _instanceBounds = new Aabb[source.Instances.Length];
         var order = Enumerable.Range(0, source.Instances.Length)
-            .OrderBy(i => source.Bootstrap.Materials.Span[source.Instances.Span[i].MaterialIndex].DoubleSided)
+            .OrderBy(i => source.Materials.Span[source.Instances.Span[i].MaterialIndex].DoubleSided)
             .ThenBy(i => materialBatches[source.Instances.Span[i].MaterialIndex]);
         foreach (var i in order) {
             var instance = source.Instances.Span[i];
@@ -376,8 +376,8 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         var instance = _instances[index];
         return new(allocation.Triangles.Offset + (uint)part.First, (uint)part.Count, instance.MaterialIndex,
             bounds ?? BoundsTransform.Apply(PbrSceneStream.NodeBounds(node), instance.Transform),
-            _source.Bootstrap.Materials.Span[instance.MaterialIndex].DoubleSided,
-            (allocation.Triangles.Offset + (uint)part.First) * 3, (uint)index, 0, 0, 0);
+            _source.Materials.Span[instance.MaterialIndex].DoubleSided,
+            (allocation.Triangles.Offset + (uint)part.First) * 3, (uint)index);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]

@@ -19,7 +19,7 @@ internal sealed partial class SceneExampleApp
 
     private sealed record Workflow(string OpaquePath, bool BakedEnvironment, bool Finest, float PixelError,
         float ShadowTexelError, uint ShadowResolution, bool SurfaceData, bool DynamicProbes,
-        bool BakedProbes, uint ProbeUpdates, uint ProbeSamples);
+        bool BakedProbes, uint ProbeUpdates, uint ProbeSamples, int ReflectionCaptures, bool LiveReflections);
 
     private Workflow? _workflow;
 

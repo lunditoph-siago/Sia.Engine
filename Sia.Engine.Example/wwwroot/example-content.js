@@ -16,10 +16,16 @@ export async function defaultContent(pipeline, pageUrl, fetchContent = fetch) {
   const validPath = (value, suffix) => typeof value === 'string' && path(suffix).test(value)
     && !value.endsWith('/' + '0'.repeat(32) + '.' + suffix);
   const validEntry = entry => entry && typeof entry === 'object' && !Array.isArray(entry)
-    && Object.keys(entry).every(key => key === 'scene' || key === 'lightmaps')
+    && Object.keys(entry).every(key => ['scene', 'lightmaps', 'environment', 'reflectionCaptures'].includes(key))
     && validPath(entry.scene, 'siascene')
     && (entry.lightmaps == null || validPath(entry.lightmaps, 'siaasset')
-      && entry.lightmaps.slice(0, entry.lightmaps.lastIndexOf('/')) === entry.scene.slice(0, entry.scene.lastIndexOf('/')));
+      && entry.lightmaps.slice(0, entry.lightmaps.lastIndexOf('/')) === entry.scene.slice(0, entry.scene.lastIndexOf('/')))
+    && (entry.environment == null || validPath(entry.environment, 'siaasset')
+      && entry.environment.slice(0, entry.environment.lastIndexOf('/')) === entry.scene.slice(0, entry.scene.lastIndexOf('/')))
+    && (entry.reflectionCaptures === undefined || Array.isArray(entry.reflectionCaptures)
+      && entry.reflectionCaptures.length <= 16 && new Set(entry.reflectionCaptures).size === entry.reflectionCaptures.length
+      && entry.reflectionCaptures.every(value => validPath(value, 'siaasset')
+        && value.slice(0, value.lastIndexOf('/')) === entry.scene.slice(0, entry.scene.lastIndexOf('/'))));
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)
       || Object.keys(catalog).length !== keys.length
       || keys.some(key => !validEntry(catalog[key]))) {
@@ -27,7 +33,9 @@ export async function defaultContent(pipeline, pageUrl, fetchContent = fetch) {
   }
   const entry = pipeline === 'bunny' ? catalog.bunny : catalog.bistroExterior;
   return { scene: new URL(entry.scene, descriptor).href,
-    lightmaps: entry.lightmaps == null ? null : new URL(entry.lightmaps, descriptor).href };
+    lightmaps: entry.lightmaps == null ? null : new URL(entry.lightmaps, descriptor).href,
+    environment: entry.environment == null ? null : new URL(entry.environment, descriptor).href,
+    reflectionCaptures: (entry.reflectionCaptures ?? []).map(value => new URL(value, descriptor).href) };
 }
 
 async function readCatalog(descriptor, fetchContent) {
@@ -40,7 +48,7 @@ async function readCatalog(descriptor, fetchContent) {
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 4096) throw new Error('The default scene catalog exceeds 4 KiB.');
+      if (size > 16384) throw new Error('The default scene catalog exceeds 16 KiB.');
       chunks.push(value);
     }
   } catch (error) {

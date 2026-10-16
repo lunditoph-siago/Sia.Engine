@@ -26,6 +26,10 @@ struct Material {
 @group(0) @binding(7) var brdf_sampler: sampler;
 @group(0) @binding(11) var depth_sampler: sampler_comparison;
 @group(0) @binding(8) var<uniform> sh: array<vec4<f32>, 9>;
+#if REFLECTION_CAPTURES
+@group(0) @binding(15) var capture_environment: texture_2d_array<f32>;
+@group(0) @binding(16) var<uniform> capture_regions: array<vec4<f32>, #{CAPTURE_REGION_ROWS}>;
+#endif
 #if SCENE_GI
 @group(0) @binding(9) var probe_volume: texture_3d<f32>;
 @group(0) @binding(10) var<uniform> probe_header: array<vec4<f32>,3>;
