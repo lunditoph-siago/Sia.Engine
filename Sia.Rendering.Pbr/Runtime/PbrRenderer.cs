@@ -64,7 +64,7 @@ public sealed record PbrRendererSettings
     public static PbrRendererSettings ForQuality(RenderQuality quality) => quality switch {
         RenderQuality.Low => new() {
             OpaquePath = PbrOpaquePath.ForwardPlus,
-            GeometryBytes = 320ul * 1024 * 1024,
+            GeometryBytes = 256ul * 1024 * 1024,
             TargetPixelError = 1,
             ShadowTexelError = 1,
             ShadowResolution = 256,

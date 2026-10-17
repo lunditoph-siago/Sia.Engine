@@ -30,10 +30,11 @@ fn prepass_vertex(
 @vertex
 fn forward_vertex(
     @location(0) p: vec4<f32>,
-    @location(1) n: vec4<f32>,
 #if RESIDENT_INSTANCES
-    @location(2) words: vec4<u32>,
+    @location(1) n: vec4<u32>,
+    @location(2) words: vec2<u32>,
 #else
+    @location(1) n: vec4<f32>,
     @location(2) t: vec4<f32>,
     @location(3) b: vec4<f32>,
 #endif
@@ -43,11 +44,11 @@ fn forward_vertex(
 #if RESIDENT_INSTANCES
     let instance = instances[instance_id];
     let t = resident_tangent(words);
-    let b = bitcast<vec2<f32>>(words.zw);
+    let b = bitcast<vec2<f32>>(n.zw);
     let position = instance.transform * world;
     return ForwardVertex(frame.vp * position, position.xyz,
-        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
-        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, t.w), n.zw,
+        (instance.normal_transform * vec4<f32>(resident_normal(n.y), 0.0)).xyz,
+        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, t.w), vec2<f32>(p.w, bitcast<f32>(n.x)),
         instance.material.x, b, vec2<u32>(select(0u, 1u, (words.y & 2u) != 0u), instance.material.y));
 #else
     return ForwardVertex(frame.vp * world, world.xyz,

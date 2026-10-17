@@ -118,7 +118,8 @@ public sealed partial class MeshRasterData
             if (start < 0 || end <= start || end > _lods.Length || end - start > Settings.MaximumLods
                 || _lods[start] != new MeshRasterLod(part.FirstIndex, part.IndexCount, 0))
                 throw new ArgumentException("Raster LOD0 must match its source section.");
-            var vertices = new HashSet<uint>(Indices.Slice(part.FirstIndex, part.IndexCount).ToArray());
+            var vertices = new HashSet<uint>(System.Math.Min(_vertices.Length, part.IndexCount));
+            foreach (var index in Indices.Slice(part.FirstIndex, part.IndexCount)) vertices.Add(index);
             for (var at = start + 1; at < end; at++) {
                 var level = _lods[at]; var previous = _lods[at - 1];
                 if (level.FirstIndex != cursor || level.IndexCount <= 0 || level.IndexCount % 3 != 0 || level.IndexCount >= previous.IndexCount
@@ -133,7 +134,7 @@ public sealed partial class MeshRasterData
     }
 
     private static ulong OwnedBytes(int vertices, int indices, int sections, int lods, bool bake)
-        => (ulong)vertices * (ulong)(MeshVertex.Stride + (bake ? 8 : 0)) + (ulong)indices * 4
+        => (ulong)vertices * (ulong)(MeshVertex.Stride + (bake ? System.Runtime.CompilerServices.Unsafe.SizeOf<float2>() : 0)) + (ulong)indices * 4
             + (ulong)sections * 12 + (ulong)lods * 12 + (ulong)(sections + 1L) * 4;
 
     public MeshData CopyGeometry() => new([.. _vertices], Indices.ToArray(), Bounds) { BakeUvs = [.. _bakeUvs] };

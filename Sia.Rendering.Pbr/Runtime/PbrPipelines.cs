@@ -360,8 +360,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
             var attributes = stackalloc WGPUVertexAttribute[StreamGeometryPage.VertexPlanes];
             var buffers = stackalloc WGPUVertexBufferLayout[StreamGeometryPage.VertexPlanes];
             for (var index = 0; index < attributeCount; index++) {
-                attributes[index] = new() { Format = _residentInstances && index==2?WGPUVertexFormat.Uint32x4:WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
-                buffers[index] = new() { ArrayStride = 16, StepMode = WGPUVertexStepMode.Vertex, AttributeCount = 1, Attributes = &attributes[index] };
+                attributes[index] = new() { Format = _residentInstances && index>0 ? (index==1?WGPUVertexFormat.Uint32x4:WGPUVertexFormat.Uint32x2) : WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
+                buffers[index] = new() { ArrayStride = _residentInstances && index==2?8ul:16ul, StepMode = WGPUVertexStepMode.Vertex, AttributeCount = 1, Attributes = &attributes[index] };
             }
             descriptor.Vertex.BufferCount = (nuint)attributeCount;
             descriptor.Vertex.Buffers = attributeCount == 0 ? null : buffers;

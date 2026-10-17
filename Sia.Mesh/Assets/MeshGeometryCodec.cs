@@ -53,7 +53,7 @@ internal static class MeshGeometryCodec
         var encodedBytes = 77ul + (ulong)vertexCount * 48
             + (ulong)indexCount * 4 + (ulong)sectionCount * 12 + bakeBytes;
         var ownedBytes = (ulong)vertexCount * MeshVertex.Stride + (ulong)indexCount * 4
-            + (ulong)sectionCount * 12 + bakeBytes;
+            + (ulong)sectionCount * 12 + (flags == 0 ? 0ul : (ulong)vertexCount * (ulong)System.Runtime.CompilerServices.Unsafe.SizeOf<float2>());
         if (encodedBytes > maximumBytes || ownedBytes > maximumBytes)
             throw new InvalidDataException("Mesh geometry exceeds its encoded/owned payload budget.");
         if (stream.CanSeek && (ulong)(stream.Length - stream.Position) != encodedBytes - 77ul)

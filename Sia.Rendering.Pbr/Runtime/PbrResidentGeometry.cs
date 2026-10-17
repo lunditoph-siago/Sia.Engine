@@ -87,18 +87,18 @@ internal sealed class PbrResidentGeometry : IDisposable
         }
     }
 
-    internal void PackRasterVertices(Span<float4> attributes,Span<uint4> tangentBake,int first,int count,int planeStride=0)
+    internal void PackRasterVertices(Span<float4> positions, Span<uint4> attributes, Span<uint> tangents, int first, int count)
     {
         if(_raster is null) throw new InvalidOperationException("Compact Raster packing requires an acquired Raster section.");
-        var stride=planeStride==0?count:planeStride;
-        if(first<0 || count<0 || first>VertexCount-count || stride<count || attributes.Length<checked(stride+count) || tangentBake.Length<count)
+        if(first<0 || count<0 || first>VertexCount-count || positions.Length<count || attributes.Length<count || tangents.Length<checked(count*2))
             throw new ArgumentOutOfRangeException(nameof(count));
         var product=_raster.Product;
         for(var at=0;at<count;at++) {
             var index=_source![first+at]; var vertex=product.Vertices[index];
-            attributes[at]=new(vertex.Position,vertex.Normal.x);
-            attributes[stride+at]=new(vertex.Normal.y,vertex.Normal.z,vertex.UV.x,vertex.UV.y);
-            tangentBake[at]=PbrRasterVertex.Pack(vertex.Tangent,product.HasBakeUvs?product.BakeUvs[index]:default,product.HasBakeUvs);
+            var words=PbrRasterVertex.Pack(vertex.Tangent,product.HasBakeUvs?product.BakeUvs[index]:default,product.HasBakeUvs);
+            positions[at]=new(vertex.Position,vertex.UV.x);
+            attributes[at]=new(BitConverter.SingleToUInt32Bits(vertex.UV.y),PbrRasterVertex.PackNormal(vertex.Normal),words.z,words.w);
+            tangents[at*2]=words.x; tangents[at*2+1]=words.y;
         }
     }
 

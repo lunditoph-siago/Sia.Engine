@@ -74,8 +74,9 @@ public sealed partial class MeshRasterData
         if (!CryptographicOperations.FixedTimeEquals(digest, hash.GetHashAndReset()) || stream.ReadByte() != -1)
             throw new InvalidDataException("Raster checksum or payload length mismatch.");
         try {
-            var original = MeshSource.FromDecoded(new(vertexValues, indexValues.AsSpan(0, sourceCount).ToArray(), bounds) { BakeUvs = bakeUvs }, sectionValues, bakeUvs);
-            if (original.ContentHash != sourceHash) throw new InvalidDataException("Raster LOD0 differs from its canonical source revision.");
+            var original = indexValues.AsSpan(0, sourceCount);
+            MeshSource.ValidateGeometry(vertexValues, original, sectionValues, bakeUvs, bounds);
+            if (MeshSource.ComputeContentHash(vertexValues, original, sectionValues, bakeUvs, bounds, cancellationToken) != sourceHash) throw new InvalidDataException("Raster LOD0 differs from its canonical source revision.");
             return new(vertexValues, indexValues, sectionValues, bakeUvs, sourceCount, levelValues, offsets, bounds, sourceHash, settings);
         }
         catch (Exception error) when (error is ArgumentException or OverflowException or IndexOutOfRangeException) {

@@ -27,8 +27,8 @@ public sealed partial class MeshSource
         _sections = sections;
         _bakeUvs = bakeUvs;
         Bounds = data.Bounds;
-        Validate();
-        ContentHash = ComputeContentHash();
+        ValidateGeometry(_vertices, _indices, _sections, _bakeUvs, Bounds);
+        ContentHash = ComputeContentHash(_vertices, _indices, _sections, _bakeUvs, Bounds);
     }
 
     public static MeshSource Create(MeshData data, ReadOnlySpan<MeshSection> sections = default,
@@ -49,74 +49,62 @@ public sealed partial class MeshSource
 
     public MeshData CopyGeometry() => new([.. _vertices], [.. _indices], Bounds) { BakeUvs = [.. _bakeUvs] };
 
-    private void Validate()
+    internal static void ValidateGeometry(ReadOnlySpan<MeshVertex> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<MeshSection> sections, ReadOnlySpan<float2> bakeUvs, Aabb bounds)
     {
-        if (_vertices.Length == 0 || _indices.Length == 0 || _indices.Length % 3 != 0)
+        if (vertices.Length == 0 || indices.Length == 0 || indices.Length % 3 != 0)
             throw new ArgumentException("Mesh source must contain indexed triangles.");
-        if (!Finite(Bounds.Min) || !Finite(Bounds.Max)
-            || Bounds.Min.x > Bounds.Max.x || Bounds.Min.y > Bounds.Max.y || Bounds.Min.z > Bounds.Max.z)
+        if (!Finite(bounds.Min) || !Finite(bounds.Max)
+            || bounds.Min.x > bounds.Max.x || bounds.Min.y > bounds.Max.y || bounds.Min.z > bounds.Max.z)
             throw new ArgumentException("Mesh bounds must be finite and ordered.");
-        foreach (var vertex in _vertices) {
+        foreach (var vertex in vertices) {
             if (!Finite(vertex.Position) || !Finite(vertex.Normal)
                 || !float.IsFinite(vertex.UV.x) || !float.IsFinite(vertex.UV.y) || !vertex.HasFiniteTangent)
                 throw new ArgumentException("Mesh attributes must be finite.");
             var p = vertex.Position;
-            if (p.x < Bounds.Min.x || p.y < Bounds.Min.y || p.z < Bounds.Min.z
-                || p.x > Bounds.Max.x || p.y > Bounds.Max.y || p.z > Bounds.Max.z)
+            if (p.x < bounds.Min.x || p.y < bounds.Min.y || p.z < bounds.Min.z
+                || p.x > bounds.Max.x || p.y > bounds.Max.y || p.z > bounds.Max.z)
                 throw new ArgumentException("Mesh bounds must contain every source vertex.");
         }
-        foreach (var index in _indices)
-            if (index >= _vertices.Length) throw new ArgumentException("Mesh index is outside the vertex array.");
+        foreach (var index in indices)
+            if (index >= vertices.Length) throw new ArgumentException("Mesh index is outside the vertex array.");
         var first = 0;
-        foreach (var section in _sections) {
+        foreach (var section in sections) {
             if (section.FirstIndex != first || section.IndexCount <= 0 || section.IndexCount % 3 != 0
-                || section.IndexCount > _indices.Length - first || section.MaterialSlot < 0)
+                || section.IndexCount > indices.Length - first || section.MaterialSlot < 0)
                 throw new ArgumentException("Mesh sections must partition all triangles into nonnegative material slots.");
             first += section.IndexCount;
         }
-        if (first != _indices.Length) throw new ArgumentException("Mesh sections must cover every triangle.");
-        if (_bakeUvs.Length != 0 && _bakeUvs.Length != _vertices.Length)
+        if (first != indices.Length) throw new ArgumentException("Mesh sections must cover every triangle.");
+        if (bakeUvs.Length != 0 && bakeUvs.Length != vertices.Length)
             throw new ArgumentException("A present bake UV channel must have one value per vertex.");
-        foreach (var uv in _bakeUvs)
+        foreach (var uv in bakeUvs)
             if (!float.IsFinite(uv.x) || !float.IsFinite(uv.y))
                 throw new ArgumentException("Bake UVs must be finite.");
     }
 
     private static bool Finite(float3 v) => float.IsFinite(v.x) && float.IsFinite(v.y) && float.IsFinite(v.z);
 
-    private string ComputeContentHash()
+    internal static string ComputeContentHash(ReadOnlySpan<MeshVertex> vertices, ReadOnlySpan<uint> indices,
+        ReadOnlySpan<MeshSection> sections, ReadOnlySpan<float2> bakeUvs, Aabb bounds, CancellationToken cancellationToken = default)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData("SIAMESHSOURCE1"u8);
         Span<byte> bytes = stackalloc byte[48];
-        BinaryPrimitives.WriteInt32LittleEndian(bytes, _vertices.Length);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], _indices.Length);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes[8..], _sections.Length);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes[12..], _bakeUvs.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, vertices.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], indices.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[8..], sections.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[12..], bakeUvs.Length);
         hash.AppendData(bytes[..16]);
-        Write(bytes, 0, Bounds.Min); Write(bytes, 12, Bounds.Max);
+        Write(bytes, 0, bounds.Min); Write(bytes, 12, bounds.Max);
         hash.AppendData(bytes[..24]);
-        foreach (var vertex in _vertices) {
-            Write(bytes, 0, vertex.Position); Write(bytes, 12, vertex.Normal);
-            Write(bytes, 24, vertex.UV.x); Write(bytes, 28, vertex.UV.y);
-            Write(bytes, 32, vertex.Tangent.x); Write(bytes, 36, vertex.Tangent.y);
-            Write(bytes, 40, vertex.Tangent.z); Write(bytes, 44, vertex.Tangent.w);
-            hash.AppendData(bytes);
-        }
-        foreach (var index in _indices) {
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes, index);
-            hash.AppendData(bytes[..4]);
-        }
-        foreach (var section in _sections) {
-            BinaryPrimitives.WriteInt32LittleEndian(bytes, section.FirstIndex);
-            BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], section.IndexCount);
-            BinaryPrimitives.WriteInt32LittleEndian(bytes[8..], section.MaterialSlot);
-            hash.AppendData(bytes[..12]);
-        }
-        foreach (var uv in _bakeUvs) {
-            Write(bytes, 0, uv.x); Write(bytes, 4, uv.y);
-            hash.AppendData(bytes[..8]);
-        }
+        Span<byte> buffer = stackalloc byte[32 * 1024];
+        var writer = new MeshDataIO.Writer(Stream.Null, hash, buffer, cancellationToken);
+        foreach (var vertex in vertices) writer.Vertex(vertex);
+        foreach (var index in indices) writer.UInt(index);
+        foreach (var section in sections) { writer.Int(section.FirstIndex); writer.Int(section.IndexCount); writer.Int(section.MaterialSlot); }
+        foreach (var uv in bakeUvs) { writer.Float(uv.x); writer.Float(uv.y); }
+        writer.Flush(); cancellationToken.ThrowIfCancellationRequested();
         return Convert.ToHexString(hash.GetHashAndReset());
     }
 
