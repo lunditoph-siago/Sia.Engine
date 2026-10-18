@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices.JavaScript;
 using Sia.GLFW;
-using Sia.Math;
 using Sia.WebGPU;
 using Sia.Window;
 
@@ -10,15 +9,10 @@ namespace Sia.Engine.Example;
 internal sealed partial class SceneExampleApp
 {
     private double? _previousAnimationFrameTime;
-    private bool _cameraFocused;
     private WindowSize _browserSize;
     private WindowSize _appliedBrowserSize;
     private int _browserCommands;
     private double _browserDistance;
-    private float3 _browserMove;
-    private float2 _browserLook;
-    private float2 _browserTurn;
-    private float _browserSpeed = 4;
     private string _browserFeatureLevel = "core";
     private (double Distance, bool Touring, bool Triangles, string Description)? _browserInspection;
     private Task? _browserPublish;
@@ -116,15 +110,10 @@ internal sealed partial class SceneExampleApp
     private void CaptureBrowserState()
     {
         Program.BrowserOwner.VerifyGraphicsAccess();
-        _browserCommands &= 128; // Focus persists; commands are consumed once.
-        _browserLook = default;
+        _browserCommands = 0;
         while (Program.BrowserInputs.TryDequeue(out var input)) {
             _browserSize = new(input.Width, input.Height);
-            _browserMove = input.Move;
-            _browserLook += input.Look;
-            _browserTurn = input.Turn;
-            _browserSpeed = input.Speed;
-            _browserCommands = ((_browserCommands | input.Commands) & ~128) | (input.Commands & 128);
+            _browserCommands |= input.Commands;
             if ((input.Commands & 256) != 0) { _browserDistance = input.Distance; }
         }
     }

@@ -173,6 +173,7 @@ internal sealed unsafe partial class SceneExampleApp
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = PatchEye(aspect, target);
         }
+#if !BROWSER
         else if (_pipeline == ScenePipeline.Pbr) {
             UpdatePatchInspection(deltaTime);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
@@ -188,6 +189,7 @@ internal sealed unsafe partial class SceneExampleApp
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
             _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
         }
+#endif
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
         var world = _sceneWorld!;

@@ -1,16 +1,14 @@
-import { createBrowserInput } from './browser-input.js';
 import { readSceneOptions } from './scene-options.js';
 import { createSceneUI } from './scene-ui.js';
 import { defaultScene } from './example-content.js';
 
 let scene;
-let input;
 let updateBrowserInput;
 let commands = 0;
 let distance = NaN;
 let inputPending = false;
 let inputDirty = false;
-const ui = createSceneUI({ changed: sendBrowserInput, reset: () => input?.reset(),
+const ui = createSceneUI({ changed: sendBrowserInput,
   command(value) { commands |= value; sendBrowserInput(); },
   distance(value) { distance = value; sendBrowserInput(); } });
 
@@ -26,15 +24,13 @@ async function sendBrowserInput() {
   try {
     while (inputDirty && updateBrowserInput) {
       inputDirty = false;
-      const state = input.take();
-      const flags = commands | (ui.hasCameraFocus() ? 128 : 0) | (Number.isFinite(distance) ? 256 : 0);
+      const flags = commands | (Number.isFinite(distance) ? 256 : 0);
       const selectedDistance = distance;
       commands = 0;
       distance = NaN;
       const width = scene.width ?? Math.max(1, Math.round(window.innerWidth));
       const height = scene.height ?? Math.max(1, Math.round(window.innerHeight));
-      await updateBrowserInput(width, height, flags, selectedDistance,
-        state.right, state.forward, state.up, state.yaw, state.pitch, state.turnRight, state.turnUp, state.speed);
+      await updateBrowserInput(width, height, flags, selectedDistance);
     }
   } catch (error) { showError(String(error)); }
   finally { inputPending = false; }
@@ -82,12 +78,10 @@ async function enableIsolation() {
 try {
   scene = readSceneOptions(location.href);
   ui.configure(scene);
-  input = createBrowserInput(sendBrowserInput, ui.focusCamera,
-    () => scene.camera === 'free' && ui.hasCameraFocus(), () => { commands |= 4; sendBrowserInput(); });
   await enableIsolation();
   const { parameters, args } = scene;
   if (scene.quality) {
-    const path = parameters.get('scene') ?? await defaultScene(scene.pipeline, location.href);
+    const path = parameters.get('scene') ?? await defaultScene(location.href);
     args.push('--scene', new URL(path, location.href).href);
   }
   ui.setLoadingState('Loading engine modules', NaN);

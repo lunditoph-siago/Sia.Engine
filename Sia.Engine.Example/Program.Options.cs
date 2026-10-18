@@ -26,7 +26,11 @@ public static partial class Program
     private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool Finest,
         (float3 Eye, float3 Target)? Camera) ParseOptions(string[] args)
     {
+#if BROWSER
+        var pipeline = ScenePipeline.Bunny;
+#else
         var pipeline = ScenePipeline.Pbr;
+#endif
         VisibilityDebugMode? debugMode = null;
         float? distance = null;
         string? scenePath = null;
@@ -157,11 +161,11 @@ public static partial class Program
             }
         }
 #if BROWSER
+        if (pipeline == ScenePipeline.Pbr)
+            throw new ArgumentException("Browser examples support Bunny and Unlit. Bistro is available in the native example.");
         Quality = pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low;
         if (requestedQuality is { } requested && requested != Quality)
-            throw new ArgumentException("Browser Bistro supports Low; browser Bunny uses High.");
-        if (Quality == RenderQuality.Low && (OpaquePath == PbrOpaquePath.Visibility || DynamicSceneGi == true || ExportSurfaceData))
-            throw new ArgumentException("Browser Low does not support Visibility, dynamic scene GI or surface exports.");
+            throw new ArgumentException("Browser Bunny uses High.");
 #else
         if (requestedQuality is { } requested) Quality = requested;
 #endif

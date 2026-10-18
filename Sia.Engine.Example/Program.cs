@@ -42,10 +42,10 @@ public static partial class Program
                 return 0;
             }
 #endif
+            var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
 #if BROWSER
             BrowserOwner = await BrowserThread.StartAsync();
 #endif
-            var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
             using var streamHttp = new HttpClient();
             if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && scenePath is null) {
 #if BROWSER

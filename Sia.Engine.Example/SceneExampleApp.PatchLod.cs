@@ -75,7 +75,6 @@ internal sealed partial class SceneExampleApp
     {
 #if BROWSER
         var pressed = (uint)_browserCommands;
-        _cameraFocused = (pressed & 128) != 0;
         if ((pressed & 256) != 0) {
             var distance = _browserDistance;
             if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
@@ -97,10 +96,13 @@ internal sealed partial class SceneExampleApp
                 ? VisibilityDebugMode.Shaded : VisibilityDebugMode.Triangles;
         }
         if ((pressed & 4) != 0) {
+#if !BROWSER
             if (_pipeline == ScenePipeline.Pbr) {
                 _cameraEye = null;
             }
-            else {
+            else
+#endif
+            {
                 _patchDistance = 0;
             }
             _patchTour = false;
