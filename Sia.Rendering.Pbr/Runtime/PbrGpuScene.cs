@@ -50,17 +50,27 @@ internal sealed partial class PbrGpuScene : IDisposable
     public ulong Bytes => _gpu.Bytes + (_arena?.Bytes ?? 0) + (Streaming?.Hierarchy?.Bytes ?? 0);
 
     public PbrGpuScene(in GpuFrame frame, PbrSceneAsset source, Entity layout, ulong budget, int[] materialBatches, Entity instances = default)
+        : this(frame, source.Materials, source.Instances, source.Geometry.Length,
+            g => new(source.Geometry.Span[g].Build.Tree), layout, budget, materialBatches, instances) { }
+
+    public PbrGpuScene(in GpuFrame frame, PbrRasterScene source, Entity layout, ulong budget, int[] materialBatches)
+        : this(frame, source.Materials, source.Instances, source.Geometry.Length,
+            g => new(source.Geometry.Span[g]), layout, budget, materialBatches, default) { }
+
+    private PbrGpuScene(in GpuFrame frame, ReadOnlyMemory<PbrMaterialAsset> materials,
+        ReadOnlyMemory<PbrSceneInstance> sourceInstances, int geometryCount, Func<int, PbrResidentGeometry> prepareGeometry,
+        Entity layout, ulong budget, int[] materialBatches, Entity instanceBuffer)
     {
         _gpu = new(frame, budget);
-        var geometries = new PbrResidentGeometry?[source.Geometry.Length];
+        var geometries = new PbrResidentGeometry?[geometryCount];
         float4[]? vertexScratch = null;
         uint[]? indexScratch = null;
         try {
             for (var g = 0; g < geometries.Length; g++)
-                geometries[g] = new(source.Geometry.Span[g].Build.Tree);
+                geometries[g] = prepareGeometry(g);
             var totalVertices = 0;
             var totalTriangles = 0;
-            foreach (var instance in source.Instances.Span) {
+            foreach (var instance in sourceInstances.Span) {
                 var geometry = geometries[instance.Geometry]!;
                 totalVertices = checked(totalVertices + geometry.VertexCount);
                 totalTriangles = checked(totalTriangles + (int)checked(geometry.Fine + geometry.Coarse));
@@ -97,15 +107,15 @@ internal sealed partial class PbrGpuScene : IDisposable
             var maximum = new float3(float.NegativeInfinity);
             int Bin(int i)
             {
-                var m = source.Materials.Span[source.Instances.Span[i].Material];
+                var m = materials.Span[sourceInstances.Span[i].Material];
                 return m.AlphaBlend ? 2 : m.DoubleSided ? 1 : 0;
             }
-            var order = Enumerable.Range(0, source.Instances.Length).OrderBy(Bin)
-                .ThenBy(i => materialBatches[source.Instances.Span[i].Material]);
+            var order = Enumerable.Range(0, sourceInstances.Length).OrderBy(Bin)
+                .ThenBy(i => materialBatches[sourceInstances.Span[i].Material]);
             uint vertexOffset = 0, triangleOffset = 0;
             foreach (var i in order) {
-                var instance = source.Instances.Span[i];
-                var material = source.Materials.Span[instance.Material];
+                var instance = sourceInstances.Span[i];
+                var material = materials.Span[instance.Material];
                 var geometry = geometries[instance.Geometry]!;
                 var normal = math.transpose(math.inverse(instance.Transform));
                 for (var first = 0; first < geometry.VertexCount;) {
@@ -144,7 +154,7 @@ internal sealed partial class PbrGpuScene : IDisposable
                 GpuBinding.Buffer(0, Vertices),
                 GpuBinding.Buffer(1, Topology)
             };
-            if (instances != default) entries.Add(GpuBinding.Buffer(2, instances));
+            if (instanceBuffer != default) entries.Add(GpuBinding.Buffer(2, instanceBuffer));
             Group = GpuBinding.Group(_gpu, layout, CollectionsMarshal.AsSpan(entries));
         }
         catch {

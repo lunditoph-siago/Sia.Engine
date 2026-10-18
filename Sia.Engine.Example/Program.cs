@@ -1,5 +1,3 @@
-using Sia.Engine.Rendering.Pbr;
-
 namespace Sia.Engine.Example;
 
 public static partial class Program
@@ -8,36 +6,30 @@ public static partial class Program
     {
         try {
 #if !BROWSER
-            if (args.Length == 4 && args[0] == "--bake-environment" && args[2] == "--output") {
-                BakeEnvironment(args[1], args[3]);
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--bake-probes" && args[2] == "--output") {
-                BakeProbes(args[1], args[3]);
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--cook-stream" && args[2] == "--output") {
-                await CookStreamAsync(args[1], args[3]);
-                return 0;
-            }
+            if (await RunOfflineAsync(args)) return 0;
 #endif
+            var options = SceneOptions.Parse(args);
+            var pipeline = options.Pipeline;
+            var scenePath = options.ScenePath;
 #if BROWSER
             BrowserOwner = await BrowserThread.StartAsync();
 #endif
-            var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
             using var streamHttp = new HttpClient();
-            if (EnvironmentPath is not null)
-                BakedEnvironment = await LoadEnvironmentAsync(EnvironmentPath, streamHttp);
-            if (ProbesPath is not null)
-                BakedProbes = await LoadProbesAsync(ProbesPath, streamHttp);
-            var asset = pipeline == ScenePipeline.Bunny ? await LoadBunnyAsync() : null;
-            await using var streaming = asset is not null ? await OpenBunnyStreamAsync(asset)
-                : scenePath is not null && scenePath.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase)
-                    ? await OpenStreamAsync(scenePath, streamHttp) : null;
-            var scene = streaming?.Bootstrap
-                ?? (pipeline == ScenePipeline.Pbr ? await LoadPbrAsync(scenePath, finest, streamHttp) : null);
-            var app = new SceneExampleApp(pipeline, asset, debugMode, distance, scene, finest, camera, streaming);
-            scene = null;
+            if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && scenePath is null) {
+#if BROWSER
+                throw new ArgumentException("The browser entry point must supply its default reference-scene URL.");
+#else
+                scenePath = ExampleContent.DefaultScene(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"));
+#endif
+            }
+            PbrSceneFiles.Prepared? references = null;
+            if (scenePath is not null) references = options.Quality == Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp)
+                : await PbrSceneFiles.PrepareVirtualAsync(scenePath, streamHttp);
+            var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath, options.ProbesPath, streamHttp);
+            var app = new SceneExampleApp(options, references, lighting);
+            references = null;
+            lighting = null;
 #if BROWSER
             try {
                 SetLoadingState("Preparing graphics", double.NaN);
@@ -45,7 +37,6 @@ public static partial class Program
                 await app.RunAsync();
             }
             finally {
-                await app.StopSceneStreamingAsync();
                 await BrowserOwner.RunGraphicsAsync(() => {
                     app.Dispose();
                     return Task.FromResult(0);
@@ -53,10 +44,7 @@ public static partial class Program
             }
 #else
             using (app) {
-                try {
-                    app.Run();
-                }
-                finally { await app.StopSceneStreamingAsync(); }
+                app.Run();
             }
 #endif
             return 0;
@@ -69,4 +57,5 @@ public static partial class Program
             return 1;
         }
     }
+
 }

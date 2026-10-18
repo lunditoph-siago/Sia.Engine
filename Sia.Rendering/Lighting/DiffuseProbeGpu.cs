@@ -22,6 +22,8 @@ public sealed class DiffuseProbeGpu : IDisposable
     public Entity TextureView { get; }
     public Entity Header { get; }
     public Entity Tracing { get; }
+    public Entity TracingGeometry { get; }
+    public Entity TracingInstances { get; }
 
     public Entity Configuration => _config;
 
@@ -30,6 +32,22 @@ public sealed class DiffuseProbeGpu : IDisposable
     public bool Dynamic => _pipeline.IsValid;
 
     public int Count => _shape.Count;
+
+    internal static string ShaderSourceAcquired(World world)
+        => CompileProbe(world, false);
+
+    internal static string ShaderSourceInstanced(World world)
+        => CompileProbe(world, true);
+
+    private static string CompileProbe(World world, bool instanced)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        string? Read(string module) => RenderingShaderSource.AcquireModule(world, module) is { } entity
+            ? entity.Get<WgslSourceResource>().Source : null;
+        return RenderingShaderSource.CompileResolved(Read("rendering/Baking/probes")
+            ?? throw new InvalidOperationException("Missing probe bake source."), (module, _) => Read(module),
+            instanced ? new Dictionary<string, string> { ["INSTANCE_PROBE_TRACE"] = "1", ["INSTANCE_TRACE_FILTER"] = "1" } : null);
+    }
 
     public static ulong FieldBytes(uint3 dimensions, bool dynamic)
     {
@@ -75,19 +93,30 @@ public sealed class DiffuseProbeGpu : IDisposable
             if (!asset.SceneIdentity.Span.SequenceEqual(tracing.Identity.Span))
                 throw new ArgumentException("Probe volume and trace scene identities disagree.");
             Tracing = _gpu.Upload<float4>(tracing.Packed.Span, WGPUBufferUsage.Storage);
+            if (tracing.IsInstanced) {
+                TracingGeometry = _gpu.Upload<uint4>(tracing.Geometry.Span, WGPUBufferUsage.Storage);
+                TracingInstances = _gpu.Upload<uint4>(tracing.Instances.Span, WGPUBufferUsage.Storage);
+            }
             _config = _gpu.Buffer(176, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
-            var layout = GpuBinding.Layout(_gpu, [
+            var layoutEntries = new List<WGPUBindGroupLayoutEntry> {
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 176),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float, WGPUTextureViewDimension._3D)
-            ]);
-            _group = GpuBinding.Group(_gpu, layout, [
+            };
+            var groupEntries = new List<WGPUBindGroupEntry> {
                 GpuBinding.Buffer(0, _config), GpuBinding.Buffer(1, Tracing), GpuBinding.Buffer(2, Buffer),
                 GpuBinding.Texture(3, TextureView.GetWgpu<WGPUTextureView>())
-            ]);
+            };
+            if (tracing.IsInstanced) {
+                layoutEntries.Add(GpuBinding.Buffer(4, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
+                layoutEntries.Add(GpuBinding.Buffer(5, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
+                groupEntries.Add(GpuBinding.Buffer(4, TracingGeometry)); groupEntries.Add(GpuBinding.Buffer(5, TracingInstances));
+            }
+            var layout = GpuBinding.Layout(_gpu, [.. layoutEntries]);
+            _group = GpuBinding.Group(_gpu, layout, [.. groupEntries]);
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, layout);
-            var source = RenderingShaderSource.Compile(RenderingShaderSource.ReadModule("rendering/Baking/probes")!);
+            var source = tracing.IsInstanced ? ShaderSourceInstanced(frame.ResourceWorld) : ShaderSourceAcquired(frame.ResourceWorld);
             var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, source, "scene-probe-transport"));
             _pipeline = CreatePipeline(_gpu, pipelineLayout, shader);
         }

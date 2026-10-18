@@ -10,18 +10,43 @@ namespace Sia.Engine.Example;
 internal sealed partial class SceneExampleApp
 {
     private PbrSceneAsset? _materialScene;
-    private readonly PbrSceneStream? _materialStream;
-    private readonly int _materialInstanceCount;
-    private readonly bool _finest;
+    private PbrRasterScene? _rasterScene;
+    private int _materialInstanceCount;
+    private PbrSceneFiles.Prepared? _referenceScene;
+    private Entity _assetRoot;
     private Aabb _materialBounds;
+
+    private void AcquireReferenceScene()
+    {
+        if (_referenceScene is not { } prepared) return;
+        switch (prepared) {
+            case PbrSceneFiles.Prepared<MeshRasterRecord> raster: {
+                var acquired = PbrSceneFiles.AcquireRaster(_renderWorld!.Entities, raster);
+                _assetRoot = acquired.Root; _rasterScene = acquired.Scene;
+                _materialInstanceCount = acquired.Scene.Instances.Length;
+                break;
+            }
+            case PbrSceneFiles.Prepared<MeshVirtualRecord> virtuals: {
+                var acquired = PbrSceneFiles.AcquireVirtual(_renderWorld!.Entities, virtuals);
+                _assetRoot = acquired.Root; _materialScene = acquired.Scene;
+                _materialInstanceCount = acquired.Scene.Instances.Length;
+                break;
+            }
+            default: throw new InvalidOperationException("Unsupported prepared scene product.");
+        }
+        _referenceScene = null;
+        Console.WriteLine(prepared.Scene.Data.Attribution);
+        Console.WriteLine($"Reference PBR scene: {prepared.Scene.Data.Instances.Length} Mesh instances; {_materialInstanceCount} section instances.");
+    }
 
     private void BuildMaterialScene()
     {
-        var scene = _materialScene ?? throw new InvalidOperationException("A cooked PBR scene is required.");
+        if (_materialScene is null && _rasterScene is null) throw new InvalidOperationException("A PBR scene input is required.");
         var world = _sceneWorld!;
         _materialBounds = new(new float3(float.PositiveInfinity), new float3(float.NegativeInfinity));
-        foreach (var instance in scene.Instances.Span) {
-            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
+        if (_rasterScene is { } raster) _materialBounds = raster.Bounds;
+        else foreach (var instance in _materialScene!.Instances.Span) {
+            var tree = _materialScene.Geometry.Span[instance.Geometry].Build.Tree;
             foreach (var node in tree.Nodes.Span[..tree.RootCount]) {
                 for (var corner = 0; corner < 8; corner++) {
                     var p = math.mul(instance.Transform, new float4(new float3(
@@ -32,15 +57,12 @@ internal sealed partial class SceneExampleApp
                 }
             }
         }
-        if (_materialStream is { } stream) {
-            _materialBounds = new(math.min(_materialBounds.Min, stream.Bounds.Min), math.max(_materialBounds.Max, stream.Bounds.Max));
-        }
         var shadows = world.AcquireAddon<ShadowAtlasConfig>();
         shadows.TileResolution = _qualitySettings.ShadowResolution;
         shadows.CascadeCount = 3;
         shadows.MaxShadowedSpotLights = 1;
         shadows.ShadowDistance = 30;
-        world.AcquireAddon<EnvironmentLighting>().Sky = Program.BakedEnvironment?.Sky ?? new ProceduralSky { Intensity = .75f };
+        world.AcquireAddon<EnvironmentLighting>().Sky = _bakedEnvironment?.Sky ?? new ProceduralSky { Intensity = .75f };
         var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
         world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
             new GlobalTransform(new AffineTransform(float3.zero, sun))));
@@ -56,28 +78,17 @@ internal sealed partial class SceneExampleApp
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var preset = _qualitySettings;
         var settings = preset with {
-            Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
-            BakedEnvironment = Program.BakedEnvironment,
-            ExportSurfaceData = Program.ExportSurfaceData,
-            BakedProbes = Program.BakedProbes,
-            DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
-            OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
-            TargetPixelError = _finest ? 0 : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
-            ShadowTexelError = _finest ? 0 : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
-            GpuTiming = _gpuTimingEnabled
+            BakedEnvironment = _bakedEnvironment,
+            BakedProbes = _bakedProbes,
+            TargetPixelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
+            ShadowTexelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
         };
-        _sceneRenderer = _materialStream is { } stream
-            ? new PbrRenderer(in frame, stream, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
+        _sceneRenderer = _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
             : new PbrRenderer(in frame, _materialScene!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
-        _workflow = new(settings.OpaquePath.ToString(), settings.BakedEnvironment is not null, _finest,
-            settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData,
-            settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
-            settings.DynamicSceneGi ? settings.ProbeSamples : 0);
         InitializeInspectionControls();
-        Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
+        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}.");
         Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
         _materialScene = null;
+        _rasterScene = null;
     }
-
-    public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 }
