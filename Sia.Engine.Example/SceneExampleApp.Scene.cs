@@ -32,9 +32,9 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void InitializeScene()
     {
-        if (_pipeline == ScenePipeline.Pbr) {
-            _qualitySettings = PbrRendererSettings.ForQuality(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
-            Console.WriteLine($"Render quality: {Program.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
+        if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) {
+            _qualitySettings = PbrRendererSettings.ForQuality(_options.Quality).Resolve(WebGpuCapabilities.Read(_device));
+            Console.WriteLine($"Render quality: {_options.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
         }
         _sceneWorld = new World();
         _renderWorld = new RenderWorld();
@@ -45,7 +45,7 @@ internal sealed unsafe partial class SceneExampleApp
         _renderWorld.Entities.AcquireAddon<AssetLibrary>();
         _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
-        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(Program.Width, Program.Height);
+        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(InitialWidth, InitialHeight);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
         _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
@@ -63,7 +63,7 @@ internal sealed unsafe partial class SceneExampleApp
         BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
-            InitializePatchLod();
+            InitializeBunnyRendering();
             return;
         }
 
@@ -96,8 +96,7 @@ internal sealed unsafe partial class SceneExampleApp
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             CameraMatrices.Identity));
-        if (_pipeline == ScenePipeline.Bunny) { return; }
-        if (_pipeline == ScenePipeline.Pbr) { BuildMaterialScene(); return; }
+        if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) { BuildMaterialScene(); return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
         var groundMeshAsset = CreateRasterMesh(groundMesh);
@@ -161,11 +160,6 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
-        var nextScale = _resolutionController?.Scale ?? Program.RenderScale;
-        if (_renderScale != nextScale) {
-            _renderScale = nextScale;
-            OnFramebufferResized();
-        }
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
@@ -174,6 +168,7 @@ internal sealed unsafe partial class SceneExampleApp
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = PatchEye(aspect, target);
         }
+#if !BROWSER
         else if (_pipeline == ScenePipeline.Pbr) {
             UpdatePatchInspection(deltaTime);
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
@@ -182,13 +177,10 @@ internal sealed unsafe partial class SceneExampleApp
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
             eye = new float3(-16.1f, 4.0f, 1.7f);
             UpdateFreeCamera(deltaTime, ref eye, ref target);
-            if (Program.BenchmarkMotion && Program.BenchmarkFrames > 0) {
-                var yaw = 1.4f * MathF.Sin((_benchmarkFrames - 120) * MathF.Tau / Program.BenchmarkFrames);
-                target = eye + math.mul(quaternion.RotateY(yaw), target - eye);
-            }
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
             _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
         }
+#endif
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
         var world = _sceneWorld!;
@@ -203,7 +195,7 @@ internal sealed unsafe partial class SceneExampleApp
         if (_sceneWorld is not { } world) {
             return;
         }
-        world.AcquireAddon<Viewport>().Value = new ViewportSize(RenderWidth, RenderHeight);
+        world.AcquireAddon<Viewport>().Value = new ViewportSize(_framebufferWidth, _framebufferHeight);
     }
 
     private void DisposeScene()
