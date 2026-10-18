@@ -82,7 +82,7 @@ internal sealed partial class SceneExampleApp
         _surface = CreateSurface(_instance, _window);
         _adapter = await RequestBrowserAdapterAsync();
         ReadAdapterDescription();
-        var surfaceInfo = GetSurfaceInfo(_surface, _adapter);
+        var surfaceInfo = GetSurfaceInfo(_surface, _adapter, _options.ImmediatePresent);
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
@@ -111,7 +111,7 @@ internal sealed partial class SceneExampleApp
     {
         Program.BrowserOwner.VerifyGraphicsAccess();
         _browserCommands = 0;
-        while (Program.BrowserInputs.TryDequeue(out var input)) {
+        if (Program.TakeBrowserInput() is { } input) {
             _browserSize = new(input.Width, input.Height);
             _browserCommands |= input.Commands;
             if ((input.Commands & 256) != 0) { _browserDistance = input.Distance; }
@@ -207,8 +207,8 @@ internal sealed partial class SceneExampleApp
         var descriptor = CreateDeviceDescriptor();
         descriptor.RequiredLimits = &required;
         var timingFeature = WGPUFeatureName.TimestampQuery;
-        _gpuTimingEnabled = Program.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature((WGPUAdapter*)_adapter.DangerousGetHandle(), timingFeature) != 0;
-        if (Program.TargetFps != 0 && !_gpuTimingEnabled) throw new NotSupportedException("Dynamic resolution requires timestamp-query support.");
+        _gpuTimingEnabled = _options.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature((WGPUAdapter*)_adapter.DangerousGetHandle(), timingFeature) != 0;
+        if (_options.TargetFps != 0 && !_gpuTimingEnabled) throw new NotSupportedException("Dynamic resolution requires timestamp-query support.");
         descriptor.RequiredFeatureCount = _gpuTimingEnabled ? 1u : 0u;
         descriptor.RequiredFeatures = _gpuTimingEnabled ? &timingFeature : null;
         return Wgpu.RequestDeviceAsync(_adapter, descriptor);

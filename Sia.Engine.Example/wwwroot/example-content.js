@@ -15,20 +15,19 @@ async function readCatalog(descriptor, fetchContent) {
   const response = await fetchContent(descriptor, { cache: 'no-store' });
   if (!response.ok || !response.body) throw new Error('The default example content package is missing.');
   const reader = response.body.getReader();
-  const chunks = []; let size = 0;
+  const bytes = new Uint8Array(4096);
+  let size = 0;
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
+      if (size + value.byteLength > bytes.length) throw new Error('The default scene catalog exceeds 4 KiB.');
+      bytes.set(value, size);
       size += value.byteLength;
-      if (size > 4096) throw new Error('The default scene catalog exceeds 4 KiB.');
-      chunks.push(value);
     }
   } catch (error) {
     await reader.cancel(error);
     throw error;
   } finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(size); let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, size)));
 }

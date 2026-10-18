@@ -46,7 +46,7 @@ internal sealed partial class SceneExampleApp
             _firstFrameAllocatedBytes = GC.GetTotalAllocatedBytes(false);
             _firstFrameHeapBytes = GC.GetTotalMemory(false);
         }
-        if (Program.BenchmarkFrames == 0)
+        if (_options.BenchmarkFrames == 0)
             return;
         if (_benchmarkFrames == 120) {
             _measuredAllocatedStart = GC.GetTotalAllocatedBytes(false);
@@ -61,17 +61,17 @@ internal sealed partial class SceneExampleApp
                 new(GC.CollectionCount(0) - _gen0Start, GC.CollectionCount(1) - _gen1Start, GC.CollectionCount(2) - _gen2Start,
                     (GC.GetTotalPauseDuration() - _pauseStart).TotalMilliseconds)));
         }
-        if (_benchmarkFrames != Program.BenchmarkFrames + 120)
+        if (_benchmarkFrames != _options.BenchmarkFrames + 120)
             return;
         Console.WriteLine("BISTRO_BENCHMARK " + JsonSerializer.Serialize(new BenchmarkReport(
-            _pipeline == ScenePipeline.Unlit ? "unlit" : _materialStream is not null ? "hierarchical-stream" : _finest ? "resident-finest" : "resident-two-level", Program.Quality.ToString(),
+            _pipeline == ScenePipeline.Unlit ? "unlit" : _materialStream is not null ? "hierarchical-stream" : _finest ? "resident-finest" : "resident-two-level", _options.Quality.ToString(),
             _framebufferWidth, _framebufferHeight, RenderWidth, RenderHeight, _adapterDescription,
             _presentMode.ToString(),
             _renderGraph!.PreparePlan().Graph.Passes.Select(pass => pass.Name).ToArray(),
-            120, Program.BenchmarkFrames, Program.BenchmarkMotion,
+            120, _options.BenchmarkFrames, _options.BenchmarkMotion,
             _materialStream?.Statistics, GC.GetTotalMemory(false), _frameSamples.ToArray(), _gpuTimingEnabled,
             _timingDropped, _timingSlots.Count(s => s.Mapping is not null), _gpuSamples.ToArray(),
-            Program.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount, _workflow,
+            _options.TargetFps, _resolutionController?.Changes ?? 0, _renderGraph.CompilationCount, _workflow,
             new(_firstFrameAllocatedBytes, _firstFrameHeapBytes, GC.GetTotalAllocatedBytes(false) - _measuredAllocatedStart,
                 GC.CollectionCount(0) - _gen0Start, GC.CollectionCount(1) - _gen1Start, GC.CollectionCount(2) - _gen2Start,
                 (GC.GetTotalPauseDuration() - _pauseStart).TotalMilliseconds, GC.GetGCMemoryInfo().TotalCommittedBytes)), BenchmarkJsonContext.Default.BenchmarkReport));

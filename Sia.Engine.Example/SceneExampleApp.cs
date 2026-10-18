@@ -15,9 +15,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private float _renderScale;
     private readonly RenderResolutionController? _resolutionController;
 
-    private int RenderWidth => System.Math.Max(1, (int)((Program.BenchmarkFrames > 0 ? Program.Width : _framebufferWidth) * _renderScale));
+    private int RenderWidth => System.Math.Max(1, (int)((_options.BenchmarkFrames > 0 ? _options.Width : _framebufferWidth) * _renderScale));
 
-    private int RenderHeight => System.Math.Max(1, (int)((Program.BenchmarkFrames > 0 ? Program.Height : _framebufferHeight) * _renderScale));
+    private int RenderHeight => System.Math.Max(1, (int)((_options.BenchmarkFrames > 0 ? _options.Height : _framebufferHeight) * _renderScale));
 
     private GlfwWindow _window;
     private WgpuHandle<WGPUInstance> _instance;
@@ -36,26 +36,26 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private readonly ScenePipeline _pipeline;
     private static string? _gpuError;
 
-    public SceneExampleApp(ScenePipeline pipeline,
-        VisibilityDebugMode? debugMode = null, float? distance = null,
-        PbrSceneAsset? materialScene = null, bool finest = false,
-        (float3 Eye, float3 Target)? camera = null,
+    private readonly SceneOptions _options;
+
+    public SceneExampleApp(SceneOptions options, PbrSceneAsset? materialScene = null,
         PbrSceneStream? streaming = null, PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null)
     {
-        _pipeline = pipeline;
-        _renderScale = Program.RenderScale;
-        _resolutionController = Program.TargetFps == 0 ? null : new(800d / Program.TargetFps, Program.RenderScale);
+        _options = options;
+        _pipeline = options.Pipeline;
+        _renderScale = options.RenderScale;
+        _resolutionController = options.TargetFps == 0 ? null : new(800d / options.TargetFps, options.RenderScale);
         _materialScene = materialScene;
         _referenceScene = references;
         _preparedLighting = lighting;
         _materialStream = streaming;
         _materialInstanceCount = (materialScene?.Instances.Length ?? 0) + (streaming?.Instances.Length ?? 0);
-        _finest = finest;
-        _initialCamera = camera;
-        _patchDebugMode = debugMode ?? (pipeline == ScenePipeline.Bunny
+        _finest = options.Finest;
+        _initialCamera = options.Camera;
+        _patchDebugMode = options.DebugMode ?? (_pipeline == ScenePipeline.Bunny
             ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded);
-        _patchDistance = distance ?? (pipeline == ScenePipeline.Pbr ? .6f : 0);
-        _patchTour = distance is null && pipeline == ScenePipeline.Bunny;
+        _patchDistance = options.Distance ?? (_pipeline == ScenePipeline.Pbr ? .6f : 0);
+        _patchTour = options.Distance is null && _pipeline == ScenePipeline.Bunny;
     }
 
 #if !BROWSER
@@ -98,8 +98,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _glfwInitialized = true;
         _window = Glfw.CreateWindow(
             new WindowDescriptor(
-                Program.Width,
-                Program.Height,
+                _options.Width,
+                _options.Height,
                 $"Sia.Engine - {_pipeline} Example",
                 Resizable: true),
             new GlfwWindowOptions(ClientApi.NoApi));
@@ -111,7 +111,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _adapter = Wgpu.RequestAdapter(_instance, in adapterOptions);
         ReadAdapterDescription();
 
-        var surfaceInfo = GetSurfaceInfo(_surface, _adapter);
+        var surfaceInfo = GetSurfaceInfo(_surface, _adapter, _options.ImmediatePresent);
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
@@ -121,8 +121,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         var deviceDescriptor = CreateDeviceDescriptor();
         deviceDescriptor.RequiredLimits = &required;
         var timingFeature = WGPUFeatureName.TimestampQuery;
-        _gpuTimingEnabled = Program.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), timingFeature) != 0;
-        if (Program.TargetFps != 0 && !_gpuTimingEnabled)
+        _gpuTimingEnabled = _options.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), timingFeature) != 0;
+        if (_options.TargetFps != 0 && !_gpuTimingEnabled)
             throw new NotSupportedException("Dynamic resolution requires timestamp-query support.");
         deviceDescriptor.RequiredFeatureCount = _gpuTimingEnabled ? 1u : 0u;
         deviceDescriptor.RequiredFeatures = _gpuTimingEnabled ? &timingFeature : null;
@@ -239,7 +239,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private static SurfaceInfo GetSurfaceInfo(
         WgpuHandle<WGPUSurface> surface,
-        WgpuHandle<WGPUAdapter> adapter)
+        WgpuHandle<WGPUAdapter> adapter, bool immediatePresent)
     {
         var capabilities = default(WGPUSurfaceCapabilities);
         var status = WgpuUnsafe.wgpuSurfaceGetCapabilities(
@@ -262,7 +262,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
             var format = PickSurfaceFormat(in capabilities);
             var alphaMode = PickAlphaMode(in capabilities);
-            var presentMode = PickPresentMode(in capabilities);
+            var presentMode = PickPresentMode(in capabilities, immediatePresent);
             return new SurfaceInfo(format, alphaMode, presentMode);
         }
         finally {
@@ -303,10 +303,10 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             : capabilities.AlphaModes[0];
     }
 
-    private static WGPUPresentMode PickPresentMode(in WGPUSurfaceCapabilities capabilities)
+    private static WGPUPresentMode PickPresentMode(in WGPUSurfaceCapabilities capabilities, bool immediatePresent)
     {
 #if !BROWSER
-        if (Program.ImmediatePresent) {
+        if (immediatePresent) {
             for (nuint index = 0; index < capabilities.PresentModeCount; index++) {
                 if (capabilities.PresentModes[index] == WGPUPresentMode.Immediate)
                     return WGPUPresentMode.Immediate;
@@ -359,7 +359,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private void RenderFrame()
     {
-        var allocatedStart = Program.BenchmarkFrames > 0 ? GC.GetAllocatedBytesForCurrentThread() : 0;
+        var allocatedStart = _options.BenchmarkFrames > 0 ? GC.GetAllocatedBytesForCurrentThread() : 0;
         var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         if (surfaceTexture.Status is not (
             WGPUSurfaceGetCurrentTextureStatus.SuccessOptimal

@@ -44,7 +44,7 @@ internal sealed unsafe partial class SceneExampleApp
                     if (stages.Count != 0) {
                         var span = (last - first) / 1_000_000d;
                         _resolutionController?.Observe(slot.Sequence, _benchmarkFrames, slot.Scale, span);
-                        if (Program.BenchmarkFrames > 0 && slot.Sequence >= 120)
+                        if (_options.BenchmarkFrames > 0 && slot.Sequence >= 120)
                             _gpuSamples.Add(new(slot.Sequence, slot.Width, slot.Height, span, stages));
                     }
                 }

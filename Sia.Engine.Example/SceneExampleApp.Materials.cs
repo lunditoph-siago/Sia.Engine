@@ -83,12 +83,12 @@ internal sealed partial class SceneExampleApp
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var preset = _qualitySettings;
         var settings = preset with {
-            Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
+            Streaming = preset.Streaming with { GpuTraversal = _options.GpuTraversal },
             BakedEnvironment = _bakedEnvironment,
-            ExportSurfaceData = Program.ExportSurfaceData,
+            ExportSurfaceData = _options.ExportSurfaceData,
             BakedProbes = _bakedProbes,
-            DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
-            OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
+            DynamicSceneGi = _options.DynamicSceneGi ?? preset.DynamicSceneGi,
+            OpaquePath = _options.OpaquePath ?? preset.OpaquePath,
             TargetPixelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
             ShadowTexelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
             GpuTiming = _gpuTimingEnabled
@@ -102,7 +102,7 @@ internal sealed partial class SceneExampleApp
             settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
             settings.DynamicSceneGi ? settings.ProbeSamples : 0);
         InitializeInspectionControls();
-        Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
+        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
         Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
         _materialScene = null;
         _rasterScene = null;

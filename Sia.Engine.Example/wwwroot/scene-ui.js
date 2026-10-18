@@ -17,7 +17,6 @@ export function createSceneUI(actions) {
     settings.setAttribute('aria-expanded', String(open));
     const ready = phase === 'ready';
     credits.hidden = open || !ready || !scene?.quality;
-    actions.changed();
   }
 
   function focusCamera() {
@@ -36,8 +35,8 @@ export function createSceneUI(actions) {
     quality.textContent = scene.quality ? scene.quality[0].toUpperCase() + scene.quality.slice(1) : '';
     settings.hidden = !scene.quality;
     element('bunny-credit').hidden = scene.pipeline !== 'bunny';
-    element('inspection-distance-row').hidden = scene.camera !== 'distance';
-    tour.hidden = scene.camera !== 'distance';
+    element('inspection-distance-row').hidden = scene.pipeline !== 'bunny';
+    tour.hidden = scene.pipeline !== 'bunny';
     element('loading-note').textContent = 'Preparing the scene for your device.';
     for (const link of document.querySelectorAll('nav a')) {
       if (new URL(link.href).searchParams.get('pipeline') === scene.pipeline) link.setAttribute('aria-current', 'page');
@@ -67,7 +66,7 @@ export function createSceneUI(actions) {
   }
 
   function finish(next, title, message) {
-    if (phase === 'failed') return;
+    if (phase === 'failed' || phase === 'stopped') return;
     phase = next;
     setSettingsOpen(false);
     inspection.disabled = true;
@@ -99,6 +98,7 @@ export function createSceneUI(actions) {
   }
 
   function setSceneAttribution(attribution) {
+    if (phase === 'failed' || phase === 'stopped') return;
     const credit = element('scene-credit');
     credit.textContent = attribution;
     credit.hidden = false;
@@ -118,8 +118,7 @@ export function createSceneUI(actions) {
   material.addEventListener('click', () => actions.command(2));
   element('inspection-reset').addEventListener('click', () => actions.command(4));
   element('scene-stop').addEventListener('click', () => actions.command(512));
-  for (const type of ['resize', 'focus', 'blur']) window.addEventListener(type, actions.changed);
-  for (const type of ['focus', 'blur']) canvas.addEventListener(type, actions.changed);
+  window.addEventListener('resize', actions.changed);
 
   return { canvas, configure, setLoadingState, setSceneReady,
     setInspectionStatus, setSceneAttribution, showError,

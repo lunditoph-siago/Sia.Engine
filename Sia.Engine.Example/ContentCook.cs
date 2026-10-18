@@ -123,13 +123,6 @@ internal static partial class ContentCook
     }
 
     private static Recipe ReadRecipe(string path)
-    {
-        using var file = File.OpenRead(path);
-        if (file.Length > MaximumRecipeBytes) throw new InvalidDataException("Content recipe exceeds 1 MiB.");
-        var bytes = new byte[(int)file.Length]; file.ReadExactly(bytes);
-        if (file.ReadByte() != -1) throw new InvalidDataException("Content recipe changed while reading.");
-        return JsonSerializer.Deserialize(bytes, ContentRecipeJsonContext.Default.ContentRecipe)
-            ?? throw new InvalidDataException("Content recipe must be an object.");
-    }
+        => AssetInput.ReadJson(path, ContentRecipeJsonContext.Default.ContentRecipe, MaximumRecipeBytes);
 }
 #endif

@@ -33,8 +33,8 @@ internal sealed unsafe partial class SceneExampleApp
     private void InitializeScene()
     {
         if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) {
-            _qualitySettings = PbrRendererSettings.ForQuality(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
-            Console.WriteLine($"Render quality: {Program.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
+            _qualitySettings = PbrRendererSettings.ForQuality(_options.Quality).Resolve(WebGpuCapabilities.Read(_device));
+            Console.WriteLine($"Render quality: {_options.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
         }
         _sceneWorld = new World();
         _renderWorld = new RenderWorld();
@@ -45,7 +45,7 @@ internal sealed unsafe partial class SceneExampleApp
         _renderWorld.Entities.AcquireAddon<AssetLibrary>();
         _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
-        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(Program.Width, Program.Height);
+        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(_options.Width, _options.Height);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
         _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
@@ -160,7 +160,7 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
-        var nextScale = _resolutionController?.Scale ?? Program.RenderScale;
+        var nextScale = _resolutionController?.Scale ?? _options.RenderScale;
         if (_renderScale != nextScale) {
             _renderScale = nextScale;
             OnFramebufferResized();
@@ -182,8 +182,8 @@ internal sealed unsafe partial class SceneExampleApp
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
             eye = new float3(-16.1f, 4.0f, 1.7f);
             UpdateFreeCamera(deltaTime, ref eye, ref target);
-            if (Program.BenchmarkMotion && Program.BenchmarkFrames > 0) {
-                var yaw = 1.4f * MathF.Sin((_benchmarkFrames - 120) * MathF.Tau / Program.BenchmarkFrames);
+            if (_options.BenchmarkMotion && _options.BenchmarkFrames > 0) {
+                var yaw = 1.4f * MathF.Sin((_benchmarkFrames - 120) * MathF.Tau / _options.BenchmarkFrames);
                 target = eye + math.mul(quaternion.RotateY(yaw), target - eye);
             }
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));

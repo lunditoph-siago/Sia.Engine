@@ -23,14 +23,7 @@ internal static partial class ExampleContent
     private partial class CatalogJsonContext : JsonSerializerContext;
 
     internal static Catalog Read(string path)
-    {
-        using var input = File.OpenRead(path);
-        if (input.Length > 4096) throw new InvalidDataException("Example content catalog exceeds 4 KiB.");
-        var bytes = new byte[(int)input.Length]; input.ReadExactly(bytes);
-        if (input.ReadByte() != -1) throw new InvalidDataException("Example content catalog changed while reading.");
-        return JsonSerializer.Deserialize(bytes, CatalogJsonContext.Default.Catalog)
-            ?? throw new InvalidDataException("Example content catalog must be an object.");
-    }
+        => AssetInput.ReadJson(path, CatalogJsonContext.Default.Catalog, 4096);
 
     internal static void Validate(Catalog catalog)
     {

@@ -5,26 +5,41 @@ using Sia.Math;
 
 namespace Sia.Engine.Example;
 
-public static partial class Program
+internal sealed record SceneOptions
 {
-    internal static int BenchmarkFrames { get; private set; }
-    internal static bool BenchmarkMotion { get; private set; }
-    internal static RenderQuality Quality { get; private set; } = RenderQuality.Low;
-    internal static float RenderScale { get; private set; } = 1;
-    internal static int Width { get; private set; } = 1280;
-    internal static int Height { get; private set; } = 720;
-    internal static bool ImmediatePresent { get; private set; }
-    internal static bool GpuTiming { get; private set; }
-    internal static bool GpuTraversal { get; private set; } = true;
-    internal static PbrOpaquePath? OpaquePath { get; private set; }
-    internal static bool ExportSurfaceData { get; private set; }
-    internal static bool? DynamicSceneGi { get; private set; }
-    internal static string? ProbesPath { get; private set; }
-    internal static string? EnvironmentPath { get; private set; }
-    internal static int TargetFps { get; private set; }
+    internal int BenchmarkFrames { get; private set; }
+    internal bool BenchmarkMotion { get; private set; }
+    internal RenderQuality Quality { get; private set; } = RenderQuality.Low;
+    internal float RenderScale { get; private set; } = 1;
+    internal int Width { get; private set; } = 1280;
+    internal int Height { get; private set; } = 720;
+    internal bool ImmediatePresent { get; private set; }
+    internal bool GpuTiming { get; private set; }
+    internal bool GpuTraversal { get; private set; } = true;
+    internal PbrOpaquePath? OpaquePath { get; private set; }
+    internal bool ExportSurfaceData { get; private set; }
+    internal bool? DynamicSceneGi { get; private set; }
+    internal string? ProbesPath { get; private set; }
+    internal string? EnvironmentPath { get; private set; }
+    internal int TargetFps { get; private set; }
+    internal ScenePipeline Pipeline { get; private set; }
+    internal VisibilityDebugMode? DebugMode { get; private set; }
+    internal float? Distance { get; private set; }
+    internal string? ScenePath { get; private set; }
+    internal bool Finest { get; private set; }
+    internal (float3 Eye, float3 Target)? Camera { get; private set; }
 
-    private static (ScenePipeline Pipeline, VisibilityDebugMode? DebugMode, float? Distance, string? ScenePath, bool Finest,
-        (float3 Eye, float3 Target)? Camera) ParseOptions(string[] args)
+    private SceneOptions() { }
+
+    internal static SceneOptions Parse(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        var options = new SceneOptions();
+        options.Read(args);
+        return options;
+    }
+
+    private void Read(string[] args)
     {
 #if BROWSER
         var pipeline = ScenePipeline.Bunny;
@@ -179,16 +194,10 @@ public static partial class Program
             for (var i = 0; i < args.Length; i += 2) {
                 if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes"
                     or "--scene-gi" or "--surface-data"
-                    or "--render-scale" or "--target-fps") {
+                    or "--render-scale" or "--target-fps" or "--gpu-timing" or "--gpu-traversal") {
                     throw new ArgumentException($"{args[i]} requires --pipeline bunny|pbr.");
                 }
             }
-        }
-        if (pipeline == ScenePipeline.Unlit && args.Contains("--gpu-timing")) {
-            throw new ArgumentException("--gpu-timing requires --pipeline bunny|pbr.");
-        }
-        if (pipeline == ScenePipeline.Unlit && args.Contains("--gpu-traversal")) {
-            throw new ArgumentException("--gpu-traversal requires --pipeline bunny|pbr.");
         }
         if (TargetFps != 0) {
             GpuTiming = true;
@@ -205,7 +214,12 @@ public static partial class Program
         if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
             throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
         }
-        return (pipeline, debugMode, distance, scenePath, finest ?? false, camera);
+        Pipeline = pipeline;
+        DebugMode = debugMode;
+        Distance = distance;
+        ScenePath = scenePath;
+        Finest = finest ?? false;
+        Camera = camera;
     }
 
     private static ScenePipeline ParsePipeline(string name) => name switch {

@@ -7,7 +7,7 @@ using Sia.Engine.Rendering.Pbr;
 namespace Sia.Engine.Example;
 
 // Application file layout and workflow, deliberately outside the asset library.
-internal static partial class PbrSceneFiles
+internal static class PbrSceneFiles
 {
     internal abstract record Prepared(AssetId Id, PbrSceneRecord Scene,
         IReadOnlyDictionary<AssetId, MeshManifestRecord> Meshes,
@@ -35,6 +35,13 @@ internal static partial class PbrSceneFiles
         CancellationToken cancellationToken = default)
         => PrepareAsync(path, client, static m => m.Raster?.Id ?? throw new InvalidDataException("Selected Mesh has no Raster product."),
             static (MeshRasterRecord r) => r.Data.Sections.Length, MeshRasterRecord.Load,
+            maximumFileBytes, maximumTotalBytes, cancellationToken);
+
+    internal static Task<Prepared<MeshBvhRecord>> PrepareBvhAsync(string path, HttpClient client,
+        int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
+        CancellationToken cancellationToken = default)
+        => PrepareAsync(path, client, static m => m.Bvh?.Id ?? throw new InvalidDataException("Selected Mesh has no BVH product."),
+            static (MeshBvhRecord _) => 1, MeshBvhRecord.Load,
             maximumFileBytes, maximumTotalBytes, cancellationToken);
 
     private static async Task<Prepared<TProduct>> PrepareAsync<TProduct>(string path, HttpClient client,
@@ -143,6 +150,21 @@ internal static partial class PbrSceneFiles
                 r => r.Find(w)?.Get<MeshRasterAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException(), out var ids);
+            return (scene, ids);
+        });
+    }
+
+    internal static (Entity Root, PbrBvhScene Scene, Guid[] SourceInstances) AcquireBvh(World world, Prepared<MeshBvhRecord> prepared)
+    {
+        AssetLibrary.RegisterAsset<MeshBvhAsset, MeshBvhRecord>();
+        return Acquire<MeshBvhRecord, PbrBvhScene>(world, prepared, static (w, s) => {
+            var scene = PbrSceneComposition.ResolveBvh(s,
+                r => r.Find(w)?.Get<MeshManifestAsset>().Data ?? throw new AssetNotFoundException(),
+                r => r.Find(w)?.Get<MeshBvhAsset>().Data ?? throw new AssetNotFoundException(),
+                r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
+                r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException());
+            var ids = new Guid[scene.Instances.Length];
+            for (var i = 0; i < ids.Length; i++) ids[i] = scene.Instances[i].Id;
             return (scene, ids);
         });
     }

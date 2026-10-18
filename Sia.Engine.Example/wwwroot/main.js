@@ -79,9 +79,9 @@ try {
   scene = readSceneOptions(location.href);
   ui.configure(scene);
   await enableIsolation();
-  const { parameters, args } = scene;
+  const args = [...scene.args];
   if (scene.quality) {
-    const path = parameters.get('scene') ?? await defaultScene(location.href);
+    const path = scene.sceneUrl ?? await defaultScene(location.href);
     args.push('--scene', new URL(path, location.href).href);
   }
   ui.setLoadingState('Loading engine modules', NaN);

@@ -1,6 +1,6 @@
 const scenes = {
-  bunny: { title: 'Stanford Bunny', quality: 'high', camera: 'distance' },
-  unlit: { title: 'Unlit', quality: null, camera: null },
+  bunny: { title: 'Stanford Bunny', quality: 'high' },
+  unlit: { title: 'Unlit', quality: null },
 };
 
 export function readSceneOptions(pageUrl) {
@@ -35,5 +35,5 @@ export function readSceneOptions(pageUrl) {
   for (const name of forwarded) {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
   }
-  return { ...scene, pipeline, parameters, featureLevel, width, height, args };
+  return { ...scene, pipeline, sceneUrl: parameters.get('scene'), featureLevel, width, height, args };
 }
