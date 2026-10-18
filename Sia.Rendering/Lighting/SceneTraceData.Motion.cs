@@ -4,6 +4,20 @@ namespace Sia.Engine.Rendering;
 
 public sealed partial class SceneTraceData
 {
+    /// <summary>Replaces live transport surface values, preserving geometry, instances and authored identity.</summary>
+    public SceneTraceData WithSurfaces(ReadOnlySpan<float4> surfaces, ulong maximumBytes = 128ul * 1024 * 1024,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsInstanced || surfaces.Length != Packed.Length || (ulong)surfaces.Length * 16 > maximumBytes)
+            throw new ArgumentException("Live surfaces must match the existing material table and admitted replacement bytes.");
+        for (var at = 0; at < surfaces.Length; at++) {
+            cancellationToken.ThrowIfCancellationRequested(); var value = surfaces[at];
+            Require(math.all(math.isfinite(value)) && math.all(value.xyz >= 0) && (value.w == 0 || value.w == 1));
+        }
+        return new(this, surfaces.ToArray());
+    }
+
     /// <summary>
     /// Shares immutable local geometry and surfaces while replacing only validated instance/refit rows.
     /// Topology, identities, bindings and materials must remain identical. Identity remains authored.
@@ -26,7 +40,9 @@ public sealed partial class SceneTraceData
         for (uint instance = 0; instance < top.z; instance++) {
             if ((instance & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
             var at = (int)(top.w + instance * 5);
-            Require(instances[at].Equals(previous[at]) && instances[at + 1].Equals(previous[at + 1]));
+            Require(instances[at].x == previous[at].x && instances[at].y == previous[at].y
+                && instances[at].z == previous[at].z && instances[at].w <= 1
+                && instances[at + 1].Equals(previous[at + 1]));
             for (var row = 2; row < 5; row++) {
                 var value = instances[at + row];
                 Require(math.all(math.isfinite(Vector(value))) && float.IsFinite(BitConverter.UInt32BitsToSingle(value.w)));
@@ -44,5 +60,11 @@ public sealed partial class SceneTraceData
         TriangleCount = source.TriangleCount;
         Bounds = instances[0].x == 0 ? new(float3.zero, float3.zero)
             : new(Vector(instances[(int)instances[0].y]), Vector(instances[(int)instances[0].y + 1]));
+    }
+
+    private SceneTraceData(SceneTraceData source, float4[] surfaces)
+    {
+        Geometry = source.Geometry; Instances = source.Instances; Identity = source.Identity; Packed = surfaces;
+        TriangleCount = source.TriangleCount; Bounds = source.Bounds;
     }
 }
