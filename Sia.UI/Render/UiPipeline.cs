@@ -81,7 +81,7 @@ public sealed unsafe class UiPipeline
         var deviceHandle = device.GetWgpu<WGPUDevice>();
         var fragmentShaderModule = world.OwnWgpu(
             Wgpu.CreateWgslShaderModule(
-                deviceHandle, UiShaderSource.Load(legalizationPlan.VertexDataMode), "ui_node"));
+                deviceHandle, UiShaderSource.Load(world, legalizationPlan.VertexDataMode), "ui_node"));
         var vertexShaderModule = vertexSource.LoadVertexShaderModule(world, deviceHandle, fragmentShaderModule);
         var bindGroupLayout = world.OwnWgpu(
             CreateBindGroupLayout(deviceHandle, vertexSource));

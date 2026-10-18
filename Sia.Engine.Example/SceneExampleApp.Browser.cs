@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices.JavaScript;
 using Sia.GLFW;
-using Sia.Math;
 using Sia.WebGPU;
 using Sia.Window;
 
@@ -10,26 +9,16 @@ namespace Sia.Engine.Example;
 internal sealed partial class SceneExampleApp
 {
     private double? _previousAnimationFrameTime;
-    private bool _cameraFocused;
     private WindowSize _browserSize;
     private WindowSize _appliedBrowserSize;
     private int _browserCommands;
     private double _browserDistance;
-    private float3 _browserMove;
-    private float2 _browserLook;
-    private float2 _browserTurn;
-    private float _browserSpeed = 4;
-    private string _browserFeatureLevel = "core";
     private (double Distance, bool Touring, bool Triangles, string Description)? _browserInspection;
     private Task? _browserPublish;
 
     public async Task RunAsync()
     {
-        _browserFeatureLevel = GetBrowserFeatureLevel();
-        if (_browserFeatureLevel is not ("core" or "compatibility" or "auto"))
-            throw new ArgumentException("Expected feature-level core|compatibility|auto.");
-        if (_materialStream is { } stream) SetSceneAttribution(stream.Bootstrap.Attribution);
-        else if (_referenceScene is { } references) SetSceneAttribution(references.Scene.Data.Attribution);
+        if (_referenceScene is { } references) SetSceneAttribution(references.Scene.Data.Attribution);
         await Program.BrowserOwner.RunGraphicsAsync(async () => {
             CaptureBrowserState();
             await InitializeAsync();
@@ -45,8 +34,6 @@ internal sealed partial class SceneExampleApp
             return running;
         });
         if (_browserPublish is { } pending) { await pending; }
-        while (await Program.BrowserOwner.RunGraphicsAsync(() => Task.FromResult(DrainGpuTimingStep())))
-            await Task.Delay(1);
     }
 
     private bool RenderAnimationFrame(double timestampMilliseconds)
@@ -116,15 +103,10 @@ internal sealed partial class SceneExampleApp
     private void CaptureBrowserState()
     {
         Program.BrowserOwner.VerifyGraphicsAccess();
-        _browserCommands &= 128; // Focus persists; commands are consumed once.
-        _browserLook = default;
-        while (Program.BrowserInputs.TryDequeue(out var input)) {
+        _browserCommands = 0;
+        if (Program.TakeBrowserInput() is { } input) {
             _browserSize = new(input.Width, input.Height);
-            _browserMove = input.Move;
-            _browserLook += input.Look;
-            _browserTurn = input.Turn;
-            _browserSpeed = input.Speed;
-            _browserCommands = ((_browserCommands | input.Commands) & ~128) | (input.Commands & 128);
+            _browserCommands |= input.Commands;
             if ((input.Commands & 256) != 0) { _browserDistance = input.Distance; }
         }
     }
@@ -152,24 +134,19 @@ internal sealed partial class SceneExampleApp
 
     private async Task<WgpuHandle<WGPUAdapter>> RequestBrowserAdapterAsync()
     {
-        if (_browserFeatureLevel == "compatibility") {
-            return await Wgpu.RequestAdapterAsync(_instance,
-                BuildAdapterOptions(WGPUFeatureLevel.Compatibility, WGPUPowerPreference.Undefined));
-        }
         try {
             var adapter = await Wgpu.RequestAdapterAsync(_instance, BuildAdapterOptions());
-            _browserFeatureLevel = "core";
+            Console.WriteLine("Browser feature level: core.");
             return adapter;
         }
         catch (WgpuException coreError) {
-            if (_browserFeatureLevel == "core") throw;
             try {
                 var adapter = await Wgpu.RequestAdapterAsync(
                     _instance,
                     BuildAdapterOptions(
                         WGPUFeatureLevel.Compatibility,
                         WGPUPowerPreference.Undefined));
-                _browserFeatureLevel = "compatibility";
+                Console.WriteLine("Browser feature level: compatibility.");
                 return adapter;
             }
             catch (WgpuException compatibilityError) {
@@ -180,12 +157,8 @@ internal sealed partial class SceneExampleApp
         }
     }
 
-    [JSImport("getBrowserFeatureLevel", "main.js")]
-    private static partial string GetBrowserFeatureLevel();
-
     private unsafe Task<WgpuHandle<WGPUDevice>> RequestBrowserDeviceAsync()
     {
-        Console.WriteLine($"Browser feature level: {_browserFeatureLevel}.");
         var supportedStages = WGPUCompatibilityModeLimits.Default;
         var supported = WGPULimits.Default;
         supported.NextInChain = &supportedStages.Chain;
@@ -217,11 +190,6 @@ internal sealed partial class SceneExampleApp
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
         var descriptor = CreateDeviceDescriptor();
         descriptor.RequiredLimits = &required;
-        var timingFeature = WGPUFeatureName.TimestampQuery;
-        _gpuTimingEnabled = Program.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature((WGPUAdapter*)_adapter.DangerousGetHandle(), timingFeature) != 0;
-        if (Program.TargetFps != 0 && !_gpuTimingEnabled) throw new NotSupportedException("Dynamic resolution requires timestamp-query support.");
-        descriptor.RequiredFeatureCount = _gpuTimingEnabled ? 1u : 0u;
-        descriptor.RequiredFeatures = _gpuTimingEnabled ? &timingFeature : null;
         return Wgpu.RequestDeviceAsync(_adapter, descriptor);
     }
 }
