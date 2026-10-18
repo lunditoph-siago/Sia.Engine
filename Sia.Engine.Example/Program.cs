@@ -15,19 +15,24 @@ public static partial class Program
             BrowserOwner = await BrowserThread.StartAsync();
 #endif
             using var streamHttp = new HttpClient();
+            ExampleContent.Entry? content = null;
             if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && scenePath is null) {
 #if BROWSER
                 throw new ArgumentException("The browser entry point must supply its default reference-scene URL.");
 #else
-                scenePath = ExampleContent.DefaultScene(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"));
+                content = ExampleContent.Default(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"), options.Quality);
+                scenePath = content.Scene;
 #endif
             }
-            PbrSceneFiles.Prepared? references = null;
-            if (scenePath is not null) references = options.Quality == Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp)
-                : await PbrSceneFiles.PrepareStreamingAsync(scenePath, streamHttp);
-            var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath, options.ProbesPath, streamHttp);
-            var app = new SceneExampleApp(options, references, lighting);
+            await using var virtualUse = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareStreamingAsync(scenePath, streamHttp) : null;
+            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)virtualUse
+                ?? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp);
+            var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath ?? content?.Environment, options.ProbesPath, streamHttp);
+            var lightmapsPath = content?.Lightmaps;
+            await using var lightmaps = lightmapsPath is null ? null
+                : await LightmapFiles.PrepareAsync(lightmapsPath, streamHttp, references!);
+            var app = new SceneExampleApp(options, references, lighting, lightmaps);
             references = null;
             lighting = null;
 #if BROWSER
@@ -37,6 +42,7 @@ public static partial class Program
                 await app.RunAsync();
             }
             finally {
+                await app.StopSceneStreamingAsync();
                 await BrowserOwner.RunGraphicsAsync(() => {
                     app.Dispose();
                     return Task.FromResult(0);
@@ -44,7 +50,8 @@ public static partial class Program
             }
 #else
             using (app) {
-                app.Run();
+                try { app.Run(); }
+                finally { await app.StopSceneStreamingAsync(); }
             }
 #endif
             return 0;

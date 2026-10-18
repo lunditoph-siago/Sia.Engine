@@ -18,15 +18,15 @@ public sealed class StreamPageArena : IDisposable
 
         public StreamPageAllocation Allocation { get; }
 
-        public bool Complete => Plane == 4;
+        public bool Complete => Plane == StreamGeometryPage.VertexPlanes + 1;
 
-        public long StagingBytes => ((long)Allocation.Vertices.Count * 48) + ((long)Allocation.Triangles.Count * 12);
+        public long StagingBytes => ((long)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes) + ((long)Allocation.Triangles.Count * 12);
 
         internal ReadOnlySpan<float4> Vertices
-            => MemoryMarshal.Cast<byte, float4>(_storage.AsSpan(0, (int)Allocation.Vertices.Count * 48));
+            => MemoryMarshal.Cast<byte, float4>(_storage.AsSpan(0, (int)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes));
 
         internal ReadOnlySpan<uint> Indices
-            => MemoryMarshal.Cast<byte, uint>(_storage.AsSpan((int)Allocation.Vertices.Count * 48, (int)Allocation.Triangles.Count * 12));
+            => MemoryMarshal.Cast<byte, uint>(_storage.AsSpan((int)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes, (int)Allocation.Triangles.Count * 12));
 
         internal Upload(StreamPageAllocation allocation, byte[] storage)
         {
@@ -50,7 +50,7 @@ public sealed class StreamPageArena : IDisposable
 
     public ulong Bytes => _gpu.Bytes;
 
-    public ulong UsedBytes => ((ulong)_vertices.Used * 48) + ((ulong)_triangles.Used * 12);
+    public ulong UsedBytes => ((ulong)_vertices.Used * StreamGeometryPage.VertexBytes) + ((ulong)_triangles.Used * 12);
 
     public StreamPageArena(in GpuFrame frame, uint vertexCapacity, uint triangleCapacity, ulong budget)
     {
@@ -58,7 +58,7 @@ public sealed class StreamPageArena : IDisposable
         _vertices = new(vertexCapacity);
         _triangles = new(triangleCapacity);
         try {
-            Vertices = _gpu.Buffer((ulong)vertexCapacity * 48, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
+            Vertices = _gpu.Buffer((ulong)vertexCapacity * StreamGeometryPage.VertexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
             Topology = _gpu.Buffer((ulong)triangleCapacity * 12, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
         }
         catch { _gpu.Dispose(); throw; }
@@ -78,31 +78,46 @@ public sealed class StreamPageArena : IDisposable
         return true;
     }
 
-    public Upload Prepare(StreamGeometryPage page, StreamPageAllocation allocation, float4x4 transform, float tangentMagnitude = 1)
+    public Upload Prepare(StreamGeometryPage page, StreamPageAllocation allocation, float4x4 transform, uint sourceInstance, float tangentMagnitude = 1)
     {
+        ArgumentNullException.ThrowIfNull(page);
         Validate(allocation);
         if (_current is { Complete: false, Released: false })
             throw new InvalidOperationException("Complete or abort the current page upload first.");
         if (page.VertexCount != allocation.Vertices.Count || page.TriangleCount != allocation.Triangles.Count
             || !float.IsFinite(tangentMagnitude) || tangentMagnitude <= 0)
             throw new ArgumentException("Invalid geometry upload allocation.");
-        var normal = math.transpose(math.inverse(transform));
-        var packed = MemoryMarshal.Cast<byte, float4>(_staging.AsSpan(0, page.VertexCount * 48));
-        var source = page.Vertices;
-        for (var i = 0; i < page.VertexCount; i++) {
-            var p = source[i];
-            var n = source[page.VertexCount + i];
-            var t = source[(page.VertexCount * 2) + i];
-            var position = math.mul(transform, new float4(p.xyz, 1)).xyz;
-            var direction = math.mul(normal, new float4(p.w, n.x, n.y, 0)).xyz;
-            packed[i] = new(position, direction.x);
-            packed[page.VertexCount + i] = new(direction.y, direction.z, n.z, n.w);
-            packed[(page.VertexCount * 2) + i] = new(math.mul(transform, new float4(t.xyz, 0)).xyz, (t.w < 0 ? -1 : 1) * tangentMagnitude);
-        }
-        var indices = MemoryMarshal.Cast<byte, uint>(_staging.AsSpan(page.VertexCount * 48, page.TriangleCount * 12));
+        var packed = MemoryMarshal.Cast<byte, float4>(_staging.AsSpan(0, page.VertexCount * StreamGeometryPage.VertexBytes));
+        PackVertices(page, packed, transform, sourceInstance, tangentMagnitude);
+        var indices = MemoryMarshal.Cast<byte, uint>(_staging.AsSpan(page.VertexCount * StreamGeometryPage.VertexBytes, page.TriangleCount * 12));
         var sourceIndices = page.Indices;
         RelocateIndices(sourceIndices, indices, allocation.Vertices.Offset);
         return _current = new(allocation, _staging);
+    }
+
+    internal static void PackVertices(StreamGeometryPage page, Span<float4> packed, float4x4 transform, uint sourceInstance, float tangentMagnitude)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        if (packed.Length != page.VertexCount * StreamGeometryPage.VertexPlanes || sourceInstance > 1u << 24
+            || !float.IsFinite(tangentMagnitude) || tangentMagnitude <= 0
+            || !math.all(math.isfinite(transform.c0)) || !math.all(math.isfinite(transform.c1))
+            || !math.all(math.isfinite(transform.c2)) || !math.all(math.isfinite(transform.c3)))
+            throw new ArgumentException("Invalid vertex destination, source instance, transform or tangent magnitude.");
+        var normal = math.transpose(math.inverse(transform));
+        if (!math.all(math.isfinite(normal.c0)) || !math.all(math.isfinite(normal.c1))
+            || !math.all(math.isfinite(normal.c2)) || !math.all(math.isfinite(normal.c3)))
+            throw new ArgumentException("Geometry upload requires a finite invertible transform.", nameof(transform));
+        var source = page.Data.Vertices;
+        for (var i = 0; i < page.VertexCount; i++) {
+            var vertex = source[i]; var t = vertex.Tangent;
+            var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
+            var direction = math.mul(normal, new float4(vertex.Normal, 0)).xyz;
+            packed[i] = new(position, direction.x);
+            packed[page.VertexCount + i] = new(direction.y, direction.z, vertex.UV.x, vertex.UV.y);
+            packed[(page.VertexCount * 2) + i] = new(math.mul(transform, new float4(t.xyz, 0)).xyz, (t.w < 0 ? -1 : 1) * tangentMagnitude);
+            var bake = page.Data.HasBakeUvs ? page.Data.BakeUvs[i] : default;
+            packed[page.VertexCount * 3 + i] = new(bake.x, bake.y, page.Data.HasBakeUvs ? 1 : 0, sourceInstance);
+        }
     }
 
     internal static void RelocateIndices(ReadOnlySpan<uint> source, Span<uint> destination, uint vertexOffset)
@@ -130,7 +145,7 @@ public sealed class StreamPageArena : IDisposable
         if (upload.Released) throw new InvalidOperationException("Upload has been released.");
         uint written = 0;
         while (!upload.Complete) {
-            var vertex = upload.Plane < 3;
+            var vertex = upload.Plane < StreamGeometryPage.VertexPlanes;
             var stride = vertex ? 16u : 4u;
             var length = vertex ? (int)upload.Allocation.Vertices.Count : upload.Indices.Length;
             var count = (int)System.Math.Min((maximumBytes - written) / stride, (uint)(length - upload.Offset));

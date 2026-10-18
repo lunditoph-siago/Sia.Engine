@@ -1,0 +1,56 @@
+using System.Buffers;
+using Sia;
+using Sia.Math;
+using Sia.WebGPU;
+
+namespace Sia.Engine.Rendering.Pbr;
+
+internal sealed partial class PbrGpuScene
+{
+    public PbrGpuScene(in GpuFrame frame,PbrRasterScene source,Entity groupLayout,ulong budget,int[] materialBatches)
+    {
+        _gpu=new(frame,budget);
+        float4[]? vertices=null; uint4[]? tangentBake=null; uint[]? indices=null;
+        try {
+            using var layout=new PbrRasterLayout(source,materialBatches,budget);
+            var vertexBytes=(ulong)layout.VertexCount*PbrRasterVertex.Bytes;
+            var indexBytes=(ulong)layout.TriangleCount*12;
+            layout.ValidateBindingLimit(_gpu.Limits.MaxStorageBufferBindingSize);
+            VertexCount=layout.VertexCount; VertexPlanes=PbrRasterVertex.Planes; TriangleCount=layout.TriangleCount;
+            SingleSidedTriangles=layout.SingleSidedTriangles; OpaqueTriangles=layout.OpaqueTriangles;
+            Bounds=layout.Bounds; Opaque=layout.Opaque; Transparent=layout.Transparent;
+            Instances=_gpu.Upload<PbrInstanceGpu>(layout.Instances.Length==0?[default]:layout.Instances);
+            Vertices=_gpu.Buffer(vertexBytes,WGPUBufferUsage.Storage|WGPUBufferUsage.Vertex|WGPUBufferUsage.CopySrc|WGPUBufferUsage.CopyDst);
+            Topology=_gpu.Buffer(indexBytes,WGPUBufferUsage.Storage|WGPUBufferUsage.Index|WGPUBufferUsage.CopySrc|WGPUBufferUsage.CopyDst);
+            const int vertexBatch=16384;
+            vertices=ArrayPool<float4>.Shared.Rent(vertexBatch*2);
+            tangentBake=ArrayPool<uint4>.Shared.Rent(vertexBatch);
+            indices=ArrayPool<uint>.Shared.Rent(65536);
+            for(var slot=0;slot<layout.Geometry.Length;slot++) {
+                var geometry=layout.Geometry[slot];
+                for(var first=0;first<geometry.VertexCount;first+=vertexBatch) {
+                    var count=System.Math.Min(vertexBatch,geometry.VertexCount-first);
+                    geometry.PackRasterVertices(vertices,tangentBake,first,count,vertexBatch);
+                    for(var plane=0;plane<2;plane++) {
+                        var offset=((ulong)plane*VertexCount+layout.VertexOffsets[slot]+(uint)first)*16;
+                        Wgpu.WriteBuffer<float4>(_gpu.Queue,Vertices.GetWgpu<WGPUBuffer>(),offset,
+                            vertices.AsSpan(plane*vertexBatch,count));
+                    }
+                    var tangentOffset=((ulong)VertexCount*2+layout.VertexOffsets[slot]+(uint)first)*16;
+                    Wgpu.WriteBuffer<uint4>(_gpu.Queue,Vertices.GetWgpu<WGPUBuffer>(),tangentOffset,tangentBake.AsSpan(0,count));
+                }
+            }
+            var writer=new PbrResidentGeometry.IndexWriter(indices,
+                (values,first)=>Wgpu.WriteBuffer<uint>(_gpu.Queue,Topology.GetWgpu<WGPUBuffer>(),(ulong)first*4,values));
+            foreach(var slot in layout.SourceGeometry) layout.Geometry[slot].WriteIndices(ref writer,layout.VertexOffsets[slot]);
+            writer.Flush();
+            Group=GpuBinding.Group(_gpu,groupLayout,[GpuBinding.Buffer(0,Vertices),GpuBinding.Buffer(1,Topology),GpuBinding.Buffer(2,Instances)]);
+        }
+        catch { _gpu.Dispose(); throw; }
+        finally {
+            if(vertices is not null) ArrayPool<float4>.Shared.Return(vertices);
+            if(tangentBake is not null) ArrayPool<uint4>.Shared.Return(tangentBake);
+            if(indices is not null) ArrayPool<uint>.Shared.Return(indices);
+        }
+    }
+}

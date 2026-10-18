@@ -29,11 +29,12 @@ internal sealed partial class SceneExampleApp
             case PbrSceneFiles.PreparedStreaming virtuals: {
                 var acquired = PbrSceneFiles.AcquireStreaming(_renderWorld!.Entities, virtuals);
                 _assetRoot = acquired.Root; _materialStream = acquired.Stream;
-                _materialInstanceCount = acquired.SourceInstances.Length;
+                _materialInstanceCount = acquired.Stream.SourceInstanceCount;
                 break;
             }
             default: throw new InvalidOperationException("Unsupported prepared scene product.");
         }
+        AcquireLightmapAssets(prepared.Scene.Data);
         _referenceScene = null;
         Console.WriteLine(prepared.Scene.Data.Attribution);
         Console.WriteLine($"Reference PBR scene: {prepared.Scene.Data.Instances.Length} Mesh instances; {_materialInstanceCount} section instances.");
@@ -68,6 +69,7 @@ internal sealed partial class SceneExampleApp
         var preset = _qualitySettings;
         var settings = preset with {
             BakedEnvironment = _bakedEnvironment,
+            Lightmaps = _lightmapInput,
             BakedProbes = _bakedProbes,
             TargetPixelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
             ShadowTexelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
@@ -79,5 +81,7 @@ internal sealed partial class SceneExampleApp
         Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
         _materialStream = null;
         _rasterScene = null;
+        _lightmapInput = null;
     }
+    public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 }

@@ -10,15 +10,21 @@ namespace Sia.Engine.Example;
 // Offline application composition; domain builders and asset infrastructure stay independent.
 internal static partial class MeshCook
 {
-    internal readonly record struct Result(AssetId Id, IReadOnlyList<string> Files);
-
     internal const int MaximumRecipeBytes = 64 * 1024;
+    internal readonly record struct Result(AssetId Id, IReadOnlyList<string> Files)
+    {
+        // Exact offline metadata for the caller's subsequent light bake; never infer it by
+        // repacking an already canonical source, which may change chart order on complex topology.
+        internal MeshBakeLayout? BakeLayout { get; init; }
+    }
 
     internal sealed record Recipe
     {
         public required Guid Mesh { get; init; }
         public required Guid Source { get; init; }
         public required string Input { get; init; }
+        public int? BakeResolution { get; init; }
+        public int? MaximumBakeResolution { get; init; }
         public Guid? Raster { get; init; }
         public VirtualProduct? Virtual { get; init; }
         public BvhProduct? Bvh { get; init; }
@@ -67,6 +73,17 @@ internal static partial class MeshCook
         AssetLibrary.RegisterAsset<MeshManifestAsset, MeshManifestRecord>();
         var sourceEntity = world.AcquireAsset(new AssetId(recipe.Source), () => record);
         var source = sourceEntity.Get<MeshSourceAsset>().Source;
+        MeshBakeLayout? bakeLayout = null;
+        if (recipe.BakeResolution is { } resolution) {
+            bakeLayout = MeshBakeLayout.Generate(source, resolution, maximumArrayBytes: maximumBytes,
+                cancellationToken: cancellationToken, maximumResolution: recipe.MaximumBakeResolution);
+            var authored = bakeLayout.Source;
+            // The cook owns this isolated World. Replace its input value before creating any
+            // product, so the published source and all representations share one canonical revision.
+            sourceEntity.Destroy();
+            sourceEntity = world.AcquireAsset(new AssetId(recipe.Source), () => record with { Source = authored });
+            source = sourceEntity.Get<MeshSourceAsset>().Source;
+        }
         var stage = Path.Combine(parent, ".mesh-cook-" + Guid.NewGuid().ToString("N"));
         if (Path.Exists(stage)) throw new IOException("Mesh staging path already exists.");
         Directory.CreateDirectory(stage);
@@ -130,7 +147,7 @@ internal static partial class MeshCook
             cancellationToken.ThrowIfCancellationRequested();
             RequireStagingDirectory();
             OfflineDirectory.Publish(stage, output, cancellationToken);
-            return new(new(recipe.Mesh), files.Select(Path.GetFileName).ToArray()!);
+            return new(new(recipe.Mesh), files.Select(path => Path.GetFileName(path)).ToArray()) { BakeLayout = bakeLayout };
         }
         catch (Exception error) {
             // Exact files only; preserve unexpected files instead of deleting a directory recursively.
@@ -152,6 +169,11 @@ internal static partial class MeshCook
     private static void Validate(Recipe recipe)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recipe.Input);
+        if (recipe.BakeResolution is { } resolution && (resolution is < 8 or > 8192 || (resolution & (resolution - 1)) != 0))
+            throw new InvalidDataException("Canonical bake layout resolution must be a power of two between 8 and 8192.");
+        if (recipe.MaximumBakeResolution is { } maximum && (recipe.BakeResolution is not { } minimum
+            || maximum < minimum || maximum > 8192 || (maximum & (maximum - 1)) != 0))
+            throw new InvalidDataException("Maximum bake resolution requires a minimum and a power-of-two upper bound through 8192.");
         var ids = new HashSet<Guid>();
         void Claim(Guid id)
         {

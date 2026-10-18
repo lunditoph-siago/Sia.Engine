@@ -32,12 +32,13 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private readonly SceneOptions _options;
 
-    public SceneExampleApp(SceneOptions options, PbrSceneFiles.Prepared? references, LightingFiles.Prepared lighting)
+    public SceneExampleApp(SceneOptions options, PbrSceneFiles.Prepared? references, LightingFiles.Prepared lighting, LightmapFiles.Prepared? lightmaps)
     {
         _options = options;
         _pipeline = options.Pipeline;
         _referenceScene = references;
         _preparedLighting = lighting;
+        _preparedLightmaps = lightmaps;
         _patchDebugMode = _pipeline == ScenePipeline.Bunny
             ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded;
         _patchDistance = _pipeline == ScenePipeline.Pbr ? .6f : 0;

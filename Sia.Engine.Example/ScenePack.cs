@@ -40,7 +40,8 @@ internal static partial class ScenePack
 
     internal static async Task<AssetId> PackAsync(string recipePath, string outputDirectory,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, LightmapCook.Recipe? lightmap = null,
+        IReadOnlyDictionary<AssetId, MeshBakeLayout>? bakeLayouts = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recipePath); ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes); ArgumentOutOfRangeException.ThrowIfNegative(maximumTotalBytes);
@@ -51,6 +52,9 @@ internal static partial class ScenePack
         if (Path.Exists(output)) throw new IOException("Scene output must not already exist.");
         recipePath = Path.GetFullPath(recipePath);
         var recipe = ReadRecipe(recipePath);
+        var bakeSettings = lightmap?.Settings();
+        if (lightmap is not null && bakeLayouts is null)
+            throw new InvalidDataException("Lightmap scene publication requires exact canonical layouts.");
         var ids = new Dictionary<AssetId, Type>();
         void Claim(AssetId id, Type kind)
         {
@@ -80,26 +84,30 @@ internal static partial class ScenePack
         if (Path.Exists(stage)) throw new IOException("Scene staging path already exists.");
         Directory.CreateDirectory(stage);
         var files = new List<string>(); long total = 0;
+        var lightingDirectory = Path.Combine(stage, ".lighting");
+        IReadOnlyList<string>? lightingFiles = null;
         void RequireStage()
         {
             if ((File.GetAttributes(stage) & FileAttributes.ReparsePoint) != 0)
                 throw new IOException("Scene staging directory must not be a directory link.");
         }
         try {
-            async Task<T> Read<T>(AssetId id, string path, Func<Stream, string, T> decode, bool scene = false) where T : class, IAssetRecord
+            async Task<T> Read<T>(AssetId id, string path, Func<Stream, string, T> decode, bool scene = false, bool publish = true) where T : class, IAssetRecord
             {
                 cancellationToken.ThrowIfCancellationRequested(); Claim(id, typeof(T));
                 using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
-                var available = (int)System.Math.Min(maximumFileBytes, maximumTotalBytes - total);
+                // Offline-only BVHs have the same per-file decoder bound but do not spend runtime package admission.
+                var available = publish ? (int)System.Math.Min(maximumFileBytes, maximumTotalBytes - total) : maximumFileBytes;
                 if (input.Length > available)
                     throw new InvalidDataException($"Scene input {id.Value:N} requires {input.Length} encoded bytes; remaining admission {available}, consumed {total}, total limit {maximumTotalBytes}.");
                 var bytes = await AssetInput.ReadBoundedAsync(input, available, cancellationToken);
-                total += bytes.Length;
+                if (publish) total += bytes.Length;
                 if (!MemoryMarshal.TryGetArray(bytes, out var segment)) throw new InvalidOperationException("Expected encoded array.");
                 T record;
                 using (var payload = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false)) record = decode(payload, path);
                 cancellationToken.ThrowIfCancellationRequested(); RequireStage();
+                if (!publish) return record;
                 var target = Path.Combine(stage, id.Value.ToString("N") + (scene ? ".siascene" : ".siaasset"));
                 using var file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous);
                 files.Add(target); await file.WriteAsync(bytes, cancellationToken);
@@ -115,6 +123,13 @@ internal static partial class ScenePack
             var virtualPages = new Dictionary<AssetId, MeshVirtualPageRecord>();
             var materials = new Dictionary<AssetId, PbrMaterialRecord>(); var textures = new Dictionary<AssetId, PbrTextureRecord>();
             var used = new bool[scene.Data.Bindings.Length]; foreach (var instance in scene.Data.Instances) used[instance.Binding] = true;
+            var bakeMeshes = new HashSet<AssetId>();
+            if (lightmap is not null) {
+                _ = scene.Data.SelectInstances(lightmap.StaticInstances, cancellationToken);
+                var staticIds = lightmap.StaticInstances.ToHashSet();
+                foreach (var instance in scene.Data.Instances) if (staticIds.Contains(instance.Id))
+                    bakeMeshes.Add(scene.Data.Bindings[instance.Binding].Mesh.Value);
+            }
             for (var bindingIndex = 0; bindingIndex < used.Length; bindingIndex++) {
                 cancellationToken.ThrowIfCancellationRequested(); if (!used[bindingIndex]) continue;
                 var binding = scene.Data.Bindings[bindingIndex]; var meshId = binding.Mesh.Value;
@@ -146,9 +161,9 @@ internal static partial class ScenePack
                             }
                         }
                     }
-                    if (recipe.Bvh) {
+                    if (recipe.Bvh || bakeMeshes.Contains(meshId)) {
                         var id = mesh.Data.Bvh?.Id ?? throw new InvalidDataException("Selected Mesh has no BVH product.");
-                        if (!bvhs.ContainsKey(id)) bvhs.Add(id, await Read(id, Product(id), (s, n) => MeshBvhRecord.Load(s, (ulong)maximumFileBytes, n)));
+                        if (!bvhs.ContainsKey(id)) bvhs.Add(id, await Read(id, Product(id), (s, n) => MeshBvhRecord.Load(s, (ulong)maximumFileBytes, n), publish: recipe.Bvh));
                     }
                 }
                 for (var slotIndex = 0; slotIndex < binding.Materials.Length; slotIndex++) {
@@ -174,7 +189,37 @@ internal static partial class ScenePack
                 }
                 if (recipe.Bvh) PbrSceneFiles.AcquireBvh(world, new(sceneId, scene, meshes, bvhs, materials, textures)).Root.Destroy();
             }
+            if (lightmap is not null) {
+                if (ids.ContainsKey(new(lightmap.Product))) throw new InvalidDataException("Lightmap product aliases a scene input identity.");
+                var lighting = LightmapCook.Cook(new(sceneId, scene, meshes, bvhs, materials, textures), lightmap.StaticInstances,
+                    bakeLayouts!, new(lightmap.Product), lightingDirectory, bakeSettings,
+                    maximumMetadataBytes: System.Math.Min((ulong)maximumFileBytes, PbrLightmapData.MaximumEncodedBytes),
+                    maximumWorkingBytes: lightmap.MaximumWorkingBytes, maximumStagingBytes: lightmap.MaximumStagingBytes,
+                    cancellationToken: cancellationToken, maximumEncodedBytes: (ulong)(maximumTotalBytes - total),
+                    maximumFileBytes: (ulong)maximumFileBytes, maximumPageResolution: lightmap.MaximumPageResolution);
+                lightingFiles = lighting.Files;
+                foreach (var filename in lightingFiles) {
+                    cancellationToken.ThrowIfCancellationRequested(); var path = Path.Combine(lightingDirectory, filename);
+                    var id = new AssetId(Guid.ParseExact(Path.GetFileNameWithoutExtension(filename), "N"));
+                    if (ids.ContainsKey(id)) throw new InvalidDataException("Lighting output aliases a scene input identity.");
+                    var length = new FileInfo(path).Length;
+                    if (length > maximumFileBytes || length > maximumTotalBytes - total)
+                        throw new InvalidDataException("Lighting files exceed selected scene publication admission.");
+                    total += length;
+                }
+                foreach (var filename in lightingFiles) {
+                    cancellationToken.ThrowIfCancellationRequested(); RequireStage();
+                    if ((File.GetAttributes(lightingDirectory) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("Lightmap publication directory became a link.");
+                    var source = Path.Combine(lightingDirectory, filename); var target = Path.Combine(stage, filename);
+                    if ((File.GetAttributes(source) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("Lightmap publication file became a link.");
+                    File.Move(source, target, overwrite: false); files.Add(target);
+                }
+                Directory.Delete(lightingDirectory, recursive: false); lightingFiles = null;
+            }
             cancellationToken.ThrowIfCancellationRequested(); RequireStage();
+            OfflineDirectory.RequireFiles(stage, files, cancellationToken);
             OfflineDirectory.Publish(stage, output, cancellationToken);
             return sceneId;
         }
@@ -182,7 +227,28 @@ internal static partial class ScenePack
             try { RequireStage(); }
             catch (Exception cleanup) { throw new AggregateException("Scene packing failed; staging could not be verified and was preserved.", error, cleanup); }
             var failures = new List<Exception>();
-            foreach (var path in files) { try { File.Delete(path); } catch (Exception cleanup) { failures.Add(cleanup); } }
+            if (lightingFiles is not null) {
+                try {
+                    if ((File.GetAttributes(lightingDirectory) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("Lightmap publication link was preserved.");
+                    foreach (var filename in lightingFiles) {
+                        var path = Path.Combine(lightingDirectory, filename);
+                        if (Path.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                            throw new IOException("Lightmap publication file link was preserved.");
+                        File.Delete(path);
+                    }
+                    Directory.Delete(lightingDirectory, recursive: false);
+                }
+                catch (Exception cleanup) { failures.Add(cleanup); }
+            }
+            foreach (var path in files) {
+                try {
+                    if (Path.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("Scene publication file link was preserved.");
+                    File.Delete(path);
+                }
+                catch (Exception cleanup) { failures.Add(cleanup); }
+            }
             try { Directory.Delete(stage, recursive: false); } catch (Exception cleanup) { failures.Add(cleanup); }
             if (failures.Count != 0) throw new AggregateException("Scene packing failed and staging cleanup was incomplete.", [error, .. failures]);
             throw;

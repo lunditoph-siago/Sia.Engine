@@ -1,4 +1,5 @@
 using Sia.Engine.Rendering;
+using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
 
@@ -7,6 +8,15 @@ internal sealed partial class SceneExampleApp
     private LightingFiles.Prepared? _preparedLighting;
     private IblEnvironmentAsset? _bakedEnvironment;
     private DiffuseProbeAsset? _bakedProbes;
+    private LightmapFiles.Prepared? _preparedLightmaps;
+    private PbrLightmapInput? _lightmapInput;
+
+    private void AcquireLightmapAssets(PbrSceneData scene)
+    {
+        if (_preparedLightmaps is not { } prepared) return;
+        _lightmapInput = LightmapFiles.CreateInput(_renderWorld!.Entities, prepared, scene, _assetRoot);
+        _preparedLightmaps = null;
+    }
 
     private void AcquireLightingAssets()
     {
