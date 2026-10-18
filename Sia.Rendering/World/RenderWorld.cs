@@ -14,9 +14,14 @@ public sealed class RenderWorld : IDisposable
 
     public ulong FrameIndex { get; private set; }
 
+    internal void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+
+    internal bool ContainsView(RenderView? view)
+        => view is not null && _views.TryGetValue(view.Key, out var current) && ReferenceEquals(current, view);
+
     public RenderView GetOrCreateView(RenderViewKey key)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ThrowIfDisposed();
         if (_views.TryGetValue(key, out var view)) return view;
 
         view = new RenderView(key);
@@ -33,7 +38,7 @@ public sealed class RenderWorld : IDisposable
 
     public void BeginFrame()
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ThrowIfDisposed();
         FrameIndex++;
         foreach (var view in _views.Values) {
             view.BeginFrame();
