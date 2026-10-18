@@ -12,13 +12,7 @@ namespace Sia.Engine.Example;
 
 internal sealed unsafe partial class SceneExampleApp : IDisposable
 {
-    private float _renderScale;
-    private readonly RenderResolutionController? _resolutionController;
-
-    private int RenderWidth => System.Math.Max(1, (int)((_options.BenchmarkFrames > 0 ? _options.Width : _framebufferWidth) * _renderScale));
-
-    private int RenderHeight => System.Math.Max(1, (int)((_options.BenchmarkFrames > 0 ? _options.Height : _framebufferHeight) * _renderScale));
-
+    private const int InitialWidth = 1280, InitialHeight = 720;
     private GlfwWindow _window;
     private WgpuHandle<WGPUInstance> _instance;
     private WgpuHandle<WGPUSurface> _surface;
@@ -43,19 +37,15 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     {
         _options = options;
         _pipeline = options.Pipeline;
-        _renderScale = options.RenderScale;
-        _resolutionController = options.TargetFps == 0 ? null : new(800d / options.TargetFps, options.RenderScale);
         _materialScene = materialScene;
         _referenceScene = references;
         _preparedLighting = lighting;
         _materialStream = streaming;
         _materialInstanceCount = (materialScene?.Instances.Length ?? 0) + (streaming?.Instances.Length ?? 0);
-        _finest = options.Finest;
-        _initialCamera = options.Camera;
-        _patchDebugMode = options.DebugMode ?? (_pipeline == ScenePipeline.Bunny
-            ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded);
-        _patchDistance = options.Distance ?? (_pipeline == ScenePipeline.Pbr ? .6f : 0);
-        _patchTour = options.Distance is null && _pipeline == ScenePipeline.Bunny;
+        _patchDebugMode = _pipeline == ScenePipeline.Bunny
+            ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded;
+        _patchDistance = _pipeline == ScenePipeline.Pbr ? .6f : 0;
+        _patchTour = _pipeline == ScenePipeline.Bunny;
     }
 
 #if !BROWSER
@@ -98,8 +88,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _glfwInitialized = true;
         _window = Glfw.CreateWindow(
             new WindowDescriptor(
-                _options.Width,
-                _options.Height,
+                InitialWidth,
+                InitialHeight,
                 $"Sia.Engine - {_pipeline} Example",
                 Resizable: true),
             new GlfwWindowOptions(ClientApi.NoApi));
@@ -111,7 +101,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _adapter = Wgpu.RequestAdapter(_instance, in adapterOptions);
         ReadAdapterDescription();
 
-        var surfaceInfo = GetSurfaceInfo(_surface, _adapter, _options.ImmediatePresent);
+        var surfaceInfo = GetSurfaceInfo(_surface, _adapter);
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
@@ -120,12 +110,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         ConfigureSceneLimits(ref required);
         var deviceDescriptor = CreateDeviceDescriptor();
         deviceDescriptor.RequiredLimits = &required;
-        var timingFeature = WGPUFeatureName.TimestampQuery;
-        _gpuTimingEnabled = _options.GpuTiming && WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), timingFeature) != 0;
-        if (_options.TargetFps != 0 && !_gpuTimingEnabled)
-            throw new NotSupportedException("Dynamic resolution requires timestamp-query support.");
-        deviceDescriptor.RequiredFeatureCount = _gpuTimingEnabled ? 1u : 0u;
-        deviceDescriptor.RequiredFeatures = _gpuTimingEnabled ? &timingFeature : null;
         _device = Wgpu.RequestDevice(_adapter, deviceDescriptor);
         _queue = Wgpu.GetQueue(_device);
 
@@ -239,7 +223,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private static SurfaceInfo GetSurfaceInfo(
         WgpuHandle<WGPUSurface> surface,
-        WgpuHandle<WGPUAdapter> adapter, bool immediatePresent)
+        WgpuHandle<WGPUAdapter> adapter)
     {
         var capabilities = default(WGPUSurfaceCapabilities);
         var status = WgpuUnsafe.wgpuSurfaceGetCapabilities(
@@ -262,7 +246,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
             var format = PickSurfaceFormat(in capabilities);
             var alphaMode = PickAlphaMode(in capabilities);
-            var presentMode = PickPresentMode(in capabilities, immediatePresent);
+            var presentMode = PickPresentMode(in capabilities);
             return new SurfaceInfo(format, alphaMode, presentMode);
         }
         finally {
@@ -303,17 +287,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             : capabilities.AlphaModes[0];
     }
 
-    private static WGPUPresentMode PickPresentMode(in WGPUSurfaceCapabilities capabilities, bool immediatePresent)
+    private static WGPUPresentMode PickPresentMode(in WGPUSurfaceCapabilities capabilities)
     {
-#if !BROWSER
-        if (immediatePresent) {
-            for (nuint index = 0; index < capabilities.PresentModeCount; index++) {
-                if (capabilities.PresentModes[index] == WGPUPresentMode.Immediate)
-                    return WGPUPresentMode.Immediate;
-            }
-            Console.WriteLine("Immediate present unavailable; using the supported fallback reported in the benchmark.");
-        }
-#endif
         for (nuint index = 0; index < capabilities.PresentModeCount; index++) {
             if (capabilities.PresentModes[index] == WGPUPresentMode.Fifo) {
                 return WGPUPresentMode.Fifo;
@@ -359,7 +334,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private void RenderFrame()
     {
-        var allocatedStart = _options.BenchmarkFrames > 0 ? GC.GetAllocatedBytesForCurrentThread() : 0;
         var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         if (surfaceTexture.Status is not (
             WGPUSurfaceGetCurrentTextureStatus.SuccessOptimal
@@ -383,11 +357,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         try {
             UpdateRenderGraph(surfaceTexture.Texture);
             ExecuteRenderGraph();
-            SubmitGpuTiming();
 #if !BROWSER
             Wgpu.PresentSurfaceOrThrow(_surface);
 #endif
-            RecordBenchmark(allocatedStart);
         }
         finally {
             Wgpu.Release(ref surfaceTexture);
@@ -400,16 +372,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             return;
         }
         _disposed = true;
-
-        Exception? completionError = null;
-#if !BROWSER
-        try {
-            if (!_device.IsNull)
-                while (DrainGpuTimingStep())
-                    Thread.Yield();
-        }
-        catch (Exception error) { completionError = error; }
-#endif
 
         DisposeRenderGraph();
         DisposeScene();
@@ -435,8 +397,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             Glfw.Terminate();
             _glfwInitialized = false;
         }
-        if (completionError is not null)
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(completionError).Throw();
     }
 
     private static T* Pointer<T>(WgpuHandle<T> handle)
@@ -447,8 +407,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         WGPUCompositeAlphaMode AlphaMode,
         WGPUPresentMode PresentMode);
 
-    private string _adapterDescription = "unavailable";
-
     private void ReadAdapterDescription()
     {
         var info = WGPUAdapterInfo.Default;
@@ -456,8 +414,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             return;
         try {
             static string Text(WGPUStringView text) => Marshal.PtrToStringUTF8((nint)text.Data, checked((int)text.Length)) ?? "";
-            _adapterDescription = $"{Text(info.Vendor)}; {Text(info.Device)}; {Text(info.Description)}; {info.BackendType}";
-            Console.WriteLine("Adapter: " + _adapterDescription);
+            Console.WriteLine($"Adapter: {Text(info.Vendor)}; {Text(info.Device)}; {Text(info.Description)}; {info.BackendType}");
         }
         finally { WgpuUnsafe.wgpuAdapterInfoFreeMembers(info); }
     }

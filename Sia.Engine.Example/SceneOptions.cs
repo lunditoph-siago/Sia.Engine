@@ -1,231 +1,65 @@
-using System.Globalization;
 using Sia.Engine.Rendering;
-using Sia.Engine.Rendering.Pbr;
-using Sia.Math;
 
 namespace Sia.Engine.Example;
 
 internal sealed record SceneOptions
 {
-    internal int BenchmarkFrames { get; private set; }
-    internal bool BenchmarkMotion { get; private set; }
-    internal RenderQuality Quality { get; private set; } = RenderQuality.Low;
-    internal float RenderScale { get; private set; } = 1;
-    internal int Width { get; private set; } = 1280;
-    internal int Height { get; private set; } = 720;
-    internal bool ImmediatePresent { get; private set; }
-    internal bool GpuTiming { get; private set; }
-    internal bool GpuTraversal { get; private set; } = true;
-    internal PbrOpaquePath? OpaquePath { get; private set; }
-    internal bool ExportSurfaceData { get; private set; }
-    internal bool? DynamicSceneGi { get; private set; }
-    internal string? ProbesPath { get; private set; }
-    internal string? EnvironmentPath { get; private set; }
-    internal int TargetFps { get; private set; }
-    internal ScenePipeline Pipeline { get; private set; }
-    internal VisibilityDebugMode? DebugMode { get; private set; }
-    internal float? Distance { get; private set; }
-    internal string? ScenePath { get; private set; }
-    internal bool Finest { get; private set; }
-    internal (float3 Eye, float3 Target)? Camera { get; private set; }
+    internal ScenePipeline Pipeline { get; private init; }
+    internal RenderQuality Quality { get; private init; }
+    internal string? ScenePath { get; private init; }
+    internal string? EnvironmentPath { get; private init; }
+    internal string? ProbesPath { get; private init; }
 
     private SceneOptions() { }
 
     internal static SceneOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
-        var options = new SceneOptions();
-        options.Read(args);
-        return options;
-    }
-
-    private void Read(string[] args)
-    {
 #if BROWSER
         var pipeline = ScenePipeline.Bunny;
 #else
         var pipeline = ScenePipeline.Pbr;
 #endif
-        VisibilityDebugMode? debugMode = null;
-        float? distance = null;
-        string? scenePath = null;
-        bool? finest = null;
-        RenderQuality? requestedQuality = null;
-        (float3 Eye, float3 Target)? camera = null;
+        RenderQuality? quality = null;
+        string? scene = null, environment = null, probes = null;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i += 2) {
-            if (i + 1 == args.Length) {
-                throw new ArgumentException($"Missing value for {args[i]}.");
-            }
-            if (args[i] == "--pipeline") {
-                pipeline = ParsePipeline(args[i + 1]);
-            }
-            else if (args[i] == "--scene") {
-                scenePath = args[i + 1];
-            }
-            else if (args[i] == "--pbr-path") {
-                OpaquePath = args[i + 1] switch {
-                    "visibility" => PbrOpaquePath.Visibility,
-                    "forward" => PbrOpaquePath.ForwardPlus,
-                    _ => throw new ArgumentException("Expected --pbr-path visibility|forward.")
-                };
-            }
-            else if (args[i] == "--environment") {
-                EnvironmentPath = args[i + 1];
-            }
-            else if (args[i] == "--probes") {
-                ProbesPath = args[i + 1];
-            }
-            else if (args[i] == "--scene-gi") {
-                DynamicSceneGi = bool.Parse(args[i + 1]);
-            }
-            else if (args[i] == "--gpu-timing") {
-                GpuTiming = bool.Parse(args[i + 1]);
-            }
-            else if (args[i] == "--gpu-traversal") {
-                GpuTraversal = bool.Parse(args[i + 1]);
-            }
-            else if (args[i] == "--surface-data") {
-                ExportSurfaceData = bool.Parse(args[i + 1]);
-            }
-            else if (args[i] == "--target-fps") {
-                if (!int.TryParse(args[i + 1], out var fps) || fps is < 1 or > 1000)
-                    throw new ArgumentException("Expected --target-fps 1..1000.");
-                TargetFps = fps;
-            }
-            else if (args[i] == "--present") {
-                ImmediatePresent = args[i + 1] switch {
-                    "fifo" => false,
-                    "immediate" => true,
-                    _ => throw new ArgumentException("Expected --present fifo|immediate.")
-                };
-            }
-            else if (args[i] == "--render-scale") {
-                if (!float.TryParse(args[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out var scale)
-                    || !float.IsFinite(scale) || scale is < .0625f or > 1)
-                    throw new ArgumentException("Expected --render-scale 0.0625..1.");
-                RenderScale = scale;
-            }
-            else if (args[i] is "--width" or "--height") {
-                if (!int.TryParse(args[i + 1], out var size) || size is < 64 or > 8192)
-                    throw new ArgumentException("Expected --width/--height 64..8192.");
-                if (args[i] == "--width")
-                    Width = size;
-                else
-                    Height = size;
-            }
-            else if (args[i] == "--quality") {
-                requestedQuality = args[i + 1] switch {
-                    "low" => RenderQuality.Low,
-                    "medium" => RenderQuality.Medium,
-                    "high" => RenderQuality.High,
-                    _ => throw new ArgumentException("Expected --quality low|medium|high.")
-                };
-            }
-            else if (args[i] == "--benchmark-frames") {
-                if (!int.TryParse(args[i + 1], out var frames) || frames is < 120 or > 10000)
-                    throw new ArgumentException("Expected --benchmark-frames 120..10000.");
-                BenchmarkFrames = frames;
-            }
-            else if (args[i] == "--benchmark-motion") {
-                BenchmarkMotion = bool.Parse(args[i + 1]);
-            }
-            else if (args[i] == "--camera") {
-                var values = args[i + 1].Split(',');
-                var numbers = new float[6];
-                if (values.Length != numbers.Length) {
-                    throw new ArgumentException("Expected --camera x,y,z,targetX,targetY,targetZ.");
-                }
-                for (var j = 0; j < numbers.Length; j++) {
-                    if (!float.TryParse(values[j], NumberStyles.Float, CultureInfo.InvariantCulture, out numbers[j])
-                        || !float.IsFinite(numbers[j]) || MathF.Abs(numbers[j]) > 100000) {
-                        throw new ArgumentException("Camera coordinates must be finite and within -100000..100000.");
-                    }
-                }
-                var eye = new float3(numbers[0], numbers[1], numbers[2]);
-                var target = new float3(numbers[3], numbers[4], numbers[5]);
-                if (math.lengthsq(target - eye) < .000001f) {
-                    throw new ArgumentException("Camera eye and target must differ.");
-                }
-                camera = (eye, target);
-            }
-            else if (args[i] == "--lod") {
-                finest = args[i + 1] switch {
-                    "auto" => false,
-                    "finest" => true,
-                    _ => throw new ArgumentException("Expected --lod auto|finest.")
-                };
-            }
-            else if (args[i] == "--debug") {
-                debugMode = args[i + 1] switch {
-                    "shaded" => VisibilityDebugMode.Shaded,
-                    "triangles" => VisibilityDebugMode.Triangles,
-                    "normals" => VisibilityDebugMode.Normals,
-                    "albedo" => VisibilityDebugMode.Albedo,
-                    _ => throw new ArgumentException("Expected --debug shaded|triangles|normals|albedo.")
-                };
-            }
-            else if (args[i] == "--distance") {
-                if (!float.TryParse(args[i + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-                    || !float.IsFinite(value) || value is < 0 or > 1) {
-                    throw new ArgumentException("Expected --distance 0..1 (near to far; pauses the automatic tour).");
-                }
-                distance = value;
-            }
-            else {
-                throw new ArgumentException("Unknown option: " + args[i]);
-            }
-        }
-#if BROWSER
-        if (pipeline == ScenePipeline.Pbr)
-            throw new ArgumentException("Browser examples support Bunny and Unlit. Bistro is available in the native example.");
-        Quality = pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low;
-        if (requestedQuality is { } requested && requested != Quality)
-            throw new ArgumentException("Browser Bunny uses High.");
-#else
-        if (requestedQuality is { } requested) Quality = requested;
+            if (i + 1 == args.Length) throw new ArgumentException($"Missing value for {args[i]}.");
+            if (!seen.Add(args[i])) throw new ArgumentException($"Duplicate option: {args[i]}.");
+            var value = args[i + 1];
+            switch (args[i]) {
+                case "--pipeline":
+                    pipeline = value switch {
+                        "bunny" => ScenePipeline.Bunny,
+                        "unlit" => ScenePipeline.Unlit,
+#if !BROWSER
+                        "pbr" => ScenePipeline.Pbr,
 #endif
-        if (distance is not null && pipeline != ScenePipeline.Bunny) {
-            throw new ArgumentException("--distance requires --pipeline bunny; use --camera for PBR scenes.");
-        }
-        if (debugMode is not null && pipeline == ScenePipeline.Unlit) {
-            throw new ArgumentException("--debug requires --pipeline bunny|pbr.");
-        }
-        if (pipeline == ScenePipeline.Unlit) {
-            for (var i = 0; i < args.Length; i += 2) {
-                if (args[i] is "--quality" or "--pbr-path" or "--environment" or "--probes"
-                    or "--scene-gi" or "--surface-data"
-                    or "--render-scale" or "--target-fps" or "--gpu-timing" or "--gpu-traversal") {
-                    throw new ArgumentException($"{args[i]} requires --pipeline bunny|pbr.");
-                }
+                        _ => throw new ArgumentException("Unsupported scene pipeline.")
+                    };
+                    break;
+                case "--scene": scene = value; break;
+                case "--environment": environment = value; break;
+                case "--probes": probes = value; break;
+#if !BROWSER
+                case "--quality":
+                    quality = value switch {
+                        "low" => RenderQuality.Low,
+                        "medium" => RenderQuality.Medium,
+                        "high" => RenderQuality.High,
+                        _ => throw new ArgumentException("Expected --quality low|medium|high.")
+                    };
+                    break;
+#endif
+                default: throw new ArgumentException($"Unknown option: {args[i]}.");
             }
         }
-        if (TargetFps != 0) {
-            GpuTiming = true;
-        }
+        if (pipeline == ScenePipeline.Unlit && (quality is not null || scene is not null || environment is not null || probes is not null))
+            throw new ArgumentException("Unlit does not use scene, quality or lighting assets.");
 #if BROWSER
-        if (ImmediatePresent) throw new ArgumentException("Immediate present benchmarks are native-only.");
+        quality = pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low;
 #endif
-        if ((scenePath is not null || finest is not null) && pipeline == ScenePipeline.Unlit) {
-            throw new ArgumentException("--scene and --lod require --pipeline bunny|pbr.");
-        }
-        if (camera is not null && pipeline != ScenePipeline.Pbr) {
-            throw new ArgumentException("--camera requires --pipeline pbr.");
-        }
-        if (finest is not null && scenePath?.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase) == true) {
-            throw new ArgumentException("--lod selects a monolithic scene mode; streamed scenes select resident detail automatically.");
-        }
-        Pipeline = pipeline;
-        DebugMode = debugMode;
-        Distance = distance;
-        ScenePath = scenePath;
-        Finest = finest ?? false;
-        Camera = camera;
+        return new() { Pipeline = pipeline, Quality = quality ?? RenderQuality.Low,
+            ScenePath = scene, EnvironmentPath = environment, ProbesPath = probes };
     }
-
-    private static ScenePipeline ParsePipeline(string name) => name switch {
-        "pbr" => ScenePipeline.Pbr,
-        "unlit" => ScenePipeline.Unlit,
-        "bunny" => ScenePipeline.Bunny,
-        _ => throw new ArgumentException("Usage: --pipeline bunny|pbr|unlit")
-    };
 }

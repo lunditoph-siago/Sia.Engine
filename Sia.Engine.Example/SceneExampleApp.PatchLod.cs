@@ -126,7 +126,7 @@ internal sealed partial class SceneExampleApp
         if (_patchStatus != status) {
             _patchStatus = status;
             var scene = _pipeline == ScenePipeline.Bunny ? $"{_materialInstanceCount} instances | {_options.Quality} | {triangles:N0} triangles"
-                : $"{_materialInstanceCount} instances | {(_finest ? "Finest geometry" : "Automatic LOD")}";
+                : $"{_materialInstanceCount} instances | Automatic LOD";
             var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
                 : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
             Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_sceneRenderer.DebugMode} | {camera}");

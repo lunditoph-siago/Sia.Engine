@@ -6,7 +6,6 @@ namespace Sia.Engine.Example;
 
 internal sealed partial class SceneExampleApp
 {
-    private readonly (float3 Eye, float3 Target)? _initialCamera;
 #if !BROWSER
     private float3? _cameraEye;
     private float _cameraYaw;
@@ -19,7 +18,6 @@ internal sealed partial class SceneExampleApp
         var focused = GlfwUnsafe.GetWindowAttrib((WindowHandle*)_window.Handle, WindowAttribute.Focused) != 0;
         bool Down(Key key) => focused && (_cameraPressed.Contains(key) || Glfw.GetKey(_window, key) != InputAction.Release);
         if (_cameraEye is null) {
-            if (_initialCamera is { } initial) { (eye, target) = initial; }
             _cameraEye = eye;
             var direction = math.normalize(target - eye);
             _cameraYaw = MathF.Atan2(direction.x, -direction.z);

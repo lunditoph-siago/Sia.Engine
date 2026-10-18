@@ -28,8 +28,8 @@ async function sendBrowserInput() {
       const selectedDistance = distance;
       commands = 0;
       distance = NaN;
-      const width = scene.width ?? Math.max(1, Math.round(window.innerWidth));
-      const height = scene.height ?? Math.max(1, Math.round(window.innerHeight));
+      const width = Math.max(1, Math.round(window.innerWidth));
+      const height = Math.max(1, Math.round(window.innerHeight));
       await updateBrowserInput(width, height, flags, selectedDistance);
     }
   } catch (error) { showError(String(error)); }
@@ -93,7 +93,7 @@ try {
   Module.canvas = ui.canvas;
   Module.print = console.log;
   Module.printErr = line => console.error('[stderr]', line);
-  setModuleImports('main.js', { getBrowserFeatureLevel: () => scene.featureLevel,
+  setModuleImports('main.js', {
     setSceneAttribution: ui.setSceneAttribution, setLoadingState: ui.setLoadingState,
     setSceneReady: ui.setSceneReady, showError, setInspectionStatus: ui.setInspectionStatus });
   const exports = await getAssemblyExports(getConfig().mainAssemblyName);

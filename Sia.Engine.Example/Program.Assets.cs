@@ -4,7 +4,7 @@ namespace Sia.Engine.Example;
 
 public static partial class Program
 {
-    private static async Task<PbrSceneAsset> LoadPbrAsync(string? path, bool finest, HttpClient client)
+    private static async Task<PbrSceneAsset> LoadPbrAsync(string? path, HttpClient client)
     {
 #if BROWSER
         BrowserOwner.VerifyAccess();
@@ -17,7 +17,7 @@ public static partial class Program
         await Task.Delay(20);
 #else
         var source = path ?? Path.Combine(AppContext.BaseDirectory, "Assets",
-            finest ? "BistroFinest.siapbr" : "Bistro.siapbr");
+            "Bistro.siapbr");
         using var input = await AssetInput.OpenAsync(source, client);
         var bytes = await AssetInput.ReadBoundedAsync(input, int.MaxValue);
 #endif

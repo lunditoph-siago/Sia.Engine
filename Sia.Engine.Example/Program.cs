@@ -36,7 +36,7 @@ public static partial class Program
             await using var streaming = scenePath is not null && scenePath.Split('?')[0].EndsWith(".siastream", StringComparison.OrdinalIgnoreCase)
                     ? await OpenStreamAsync(scenePath, streamHttp) : null;
             var scene = streaming?.Bootstrap
-                ?? (pipeline == ScenePipeline.Pbr && references is null ? await LoadPbrAsync(scenePath, options.Finest, streamHttp) : null);
+                ?? (pipeline == ScenePipeline.Pbr && references is null ? await LoadPbrAsync(scenePath, streamHttp) : null);
             var app = new SceneExampleApp(options, scene, streaming, references, lighting);
             references = null;
             lighting = null;

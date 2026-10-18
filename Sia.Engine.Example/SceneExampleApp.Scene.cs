@@ -45,7 +45,7 @@ internal sealed unsafe partial class SceneExampleApp
         _renderWorld.Entities.AcquireAddon<AssetLibrary>();
         _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
-        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(_options.Width, _options.Height);
+        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(InitialWidth, InitialHeight);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
         _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
@@ -160,11 +160,6 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
-        var nextScale = _resolutionController?.Scale ?? _options.RenderScale;
-        if (_renderScale != nextScale) {
-            _renderScale = nextScale;
-            OnFramebufferResized();
-        }
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
@@ -182,10 +177,6 @@ internal sealed unsafe partial class SceneExampleApp
             var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
             eye = new float3(-16.1f, 4.0f, 1.7f);
             UpdateFreeCamera(deltaTime, ref eye, ref target);
-            if (_options.BenchmarkMotion && _options.BenchmarkFrames > 0) {
-                var yaw = 1.4f * MathF.Sin((_benchmarkFrames - 120) * MathF.Tau / _options.BenchmarkFrames);
-                target = eye + math.mul(quaternion.RotateY(yaw), target - eye);
-            }
             var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
             _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
         }
@@ -204,7 +195,7 @@ internal sealed unsafe partial class SceneExampleApp
         if (_sceneWorld is not { } world) {
             return;
         }
-        world.AcquireAddon<Viewport>().Value = new ViewportSize(RenderWidth, RenderHeight);
+        world.AcquireAddon<Viewport>().Value = new ViewportSize(_framebufferWidth, _framebufferHeight);
     }
 
     private void DisposeScene()
