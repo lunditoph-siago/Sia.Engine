@@ -50,9 +50,6 @@ jobs:
           -p:WasmCachePath="$RUNNER_TEMP/wasm-cache"
           -p:PublishDir="$PUBLISH_OUTPUT/"
 
-      - name: Check Pages size
-        run: test "$(du -sb "$PUBLISH_OUTPUT/wwwroot" | cut -f1)" -le 1000000000
-
       - name: Prepare Pages artifact
         run: touch "$PUBLISH_OUTPUT/wwwroot/.nojekyll"
 

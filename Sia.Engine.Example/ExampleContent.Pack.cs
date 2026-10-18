@@ -12,13 +12,15 @@ internal static partial class ExampleContent
     // Each entry selects a cooked scene and optional independent lighting, relative to the recipe.
     internal static async Task PackAsync(string recipePath, string outputDirectory,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumBundleBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool browser = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBundleBytes);
         recipePath = Path.GetFullPath(recipePath); var recipe = Read(recipePath);
-        var inputs = new[] { recipe.Bunny, recipe.BistroExterior, recipe.BistroInterior, recipe.BistroWine };
-        if (inputs.Any(entry => entry is null || string.IsNullOrWhiteSpace(entry.Scene)
+        var bunny = recipe.Bunny ?? throw new InvalidDataException("Bunny is required.");
+        var selected = browser ? new[] { new Entry { Scene = bunny.Scene } }
+            : new[] { recipe.Bunny, recipe.BistroExterior, recipe.BistroInterior, recipe.BistroWine };
+        if (selected.Any(entry => entry is null || string.IsNullOrWhiteSpace(entry.Scene)
             || entry.Lightmaps is not null && string.IsNullOrWhiteSpace(entry.Lightmaps)
             || entry.Environment is not null && string.IsNullOrWhiteSpace(entry.Environment)
             || entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
@@ -26,7 +28,7 @@ internal static partial class ExampleContent
             || entry.ReflectionCaptures.Distinct(StringComparer.OrdinalIgnoreCase).Count() != entry.ReflectionCaptures.Length))
             throw new InvalidDataException("Every default requires nonempty selected input paths.");
         string Resolve(string path) => Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!);
-        inputs = inputs.Select(entry => MapPaths(entry, Resolve)).ToArray();
+        var inputs = selected.Select(entry => MapPaths(entry!, Resolve)).ToArray();
         if (inputs.Select(entry => entry.Scene).Distinct(StringComparer.OrdinalIgnoreCase).Count() != inputs.Length)
             throw new InvalidDataException("Default scene inputs must be distinct.");
         var output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
@@ -171,7 +173,8 @@ internal static partial class ExampleContent
                 foreach (var file in copied) files[files.IndexOf(file)] = Path.Combine(version, Path.GetFileName(file));
                 roots.Add(MapPaths(input, path => "Content/" + digest + "/" + Path.GetFileName(path)));
             }
-            var catalog = new Catalog { Bunny = roots[0], BistroExterior = roots[1], BistroInterior = roots[2], BistroWine = roots[3] };
+            var catalog = browser ? new Catalog { Bunny = roots[0] }
+                : new Catalog { Bunny = roots[0], BistroExterior = roots[1], BistroInterior = roots[2], BistroWine = roots[3] };
             Validate(catalog); RequireOwnedDirectories();
             var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog, CatalogJsonContext.Default.Catalog);
             if (catalogBytes.Length > 16384) throw new InvalidDataException("Example content catalog exceeds 16 KiB.");

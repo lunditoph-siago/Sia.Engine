@@ -15,7 +15,6 @@ internal sealed partial class SceneExampleApp
     private int _materialInstanceCount;
     private PbrSceneFiles.Prepared? _referenceScene;
     private Entity _assetRoot;
-    private readonly bool _finest;
     private Aabb _materialBounds;
 
     private void AcquireReferenceScene()
@@ -43,9 +42,6 @@ internal sealed partial class SceneExampleApp
             default: throw new InvalidOperationException("Unsupported prepared scene product.");
         }
         AcquireLightmapAssets(prepared.Scene.Data);
-        if (Program.MovingInstance is { } moving)
-            foreach (var instance in prepared.Scene.Data.Instances)
-                if (instance.Id == moving) _movingInstance = instance;
         _referenceScene = null;
         Console.WriteLine(prepared.Scene.Data.Attribution);
         Console.WriteLine($"Reference PBR scene: {prepared.Scene.Data.Instances.Length} Mesh instances; {_materialInstanceCount} section instances.");
@@ -79,30 +75,18 @@ internal sealed partial class SceneExampleApp
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var preset = _qualitySettings;
         var settings = preset with {
-            Streaming = preset.Streaming with { GpuTraversal = Program.GpuTraversal },
             BakedEnvironment = _bakedEnvironment,
             ReflectionCaptures = _captureInputs ?? [],
-            Reflections = (Program.SceneReflections ?? ((Program.DynamicSceneGi ?? preset.DynamicSceneGi) && preset.Reflections is not null))
-                ? preset.Reflections ?? new PbrReflectionSettings() : null,
             Lightmaps = _lightmapInput,
-            ExportSurfaceData = Program.ExportSurfaceData,
             BakedProbes = _bakedProbes,
-            DynamicSceneGi = Program.DynamicSceneGi ?? preset.DynamicSceneGi,
             TraceScene = _traceScene,
-            OpaquePath = Program.OpaquePath ?? preset.OpaquePath,
-            TargetPixelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
-            ShadowTexelError = _finest ? 0 : _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
-            GpuTiming = _gpuTimingEnabled
+            TargetPixelError = _pipeline == ScenePipeline.Bunny && _options.Quality != RenderQuality.Low ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
+            ShadowTexelError = _pipeline == ScenePipeline.Bunny && _options.Quality != RenderQuality.Low ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
         };
         _sceneRenderer = _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
             : new PbrRenderer(in frame, _materialStream!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
-        _workflow = new(settings.OpaquePath.ToString(), settings.BakedEnvironment is not null, _finest,
-            settings.TargetPixelError, settings.ShadowTexelError, settings.ShadowResolution, settings.ExportSurfaceData || settings.Reflections is not null,
-            settings.DynamicSceneGi, settings.BakedProbes is not null, settings.DynamicSceneGi ? settings.ProbeUpdates : 0,
-            settings.DynamicSceneGi ? settings.Lightmaps is { } reference ? (uint)reference.Set.BakeSettings.Samples : settings.ProbeSamples : 0,
-            settings.ReflectionCaptures.Length, settings.Reflections is not null);
         InitializeInspectionControls();
-        Console.WriteLine($"PBR workflow: {Program.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Independent selected geometry.");
+        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Independent selected geometry.");
         Console.WriteLine($"Static reflection regions: {settings.ReflectionCaptures.Length}.");
         Console.WriteLine($"Live reflections: {settings.Reflections is not null}.");
         Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {(settings.DynamicSceneGi && settings.Lightmaps is { } bake ? bake.Set.BakeSettings.Samples : settings.ProbeSamples)}; signed correction {settings.DynamicSceneGi && settings.Lightmaps is not null}. Multiple bounces and temporal reconstruction are pending.");

@@ -27,7 +27,7 @@ internal sealed partial class SceneExampleApp
         PrepareBunnyBounds();
         InitializeMaterialRendering();
         _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer!).Build();
-        Console.WriteLine($"Bunny: {_materialInstanceCount} section instances; {Program.Quality}; pre-cooked selected geometry.");
+        Console.WriteLine($"Bunny: {_materialInstanceCount} section instances; {_options.Quality}; pre-cooked selected geometry.");
     }
 
     private void PrepareBunnyBounds()
@@ -72,7 +72,6 @@ internal sealed partial class SceneExampleApp
     {
 #if BROWSER
         var pressed = (uint)_browserCommands;
-        _cameraFocused = (pressed & 128) != 0;
         if ((pressed & 256) != 0) {
             var distance = _browserDistance;
             if (_pipeline == ScenePipeline.Bunny && double.IsFinite(distance)) {
@@ -94,10 +93,13 @@ internal sealed partial class SceneExampleApp
                 ? VisibilityDebugMode.Shaded : VisibilityDebugMode.Triangles;
         }
         if ((pressed & 4) != 0) {
+#if !BROWSER
             if (_pipeline == ScenePipeline.Pbr) {
                 _cameraEye = null;
             }
-            else {
+            else
+#endif
+            {
                 _patchDistance = 0;
             }
             _patchTour = false;
@@ -120,8 +122,8 @@ internal sealed partial class SceneExampleApp
         var status = ((int)(_patchDistance * 100), _patchTour, _sceneRenderer!.DebugMode, triangles);
         if (_patchStatus != status) {
             _patchStatus = status;
-            var scene = _pipeline == ScenePipeline.Bunny ? $"{_materialInstanceCount} instances | {Program.Quality} | {triangles:N0} triangles"
-                : $"{_materialInstanceCount} instances | {(_finest ? "Finest geometry" : "Automatic LOD")}";
+            var scene = _pipeline == ScenePipeline.Bunny ? $"{_materialInstanceCount} instances | {_options.Quality} | {triangles:N0} triangles"
+                : $"{_materialInstanceCount} instances | Automatic LOD";
             var camera = _pipeline == ScenePipeline.Pbr ? "Free camera"
                 : $"Near 0 -- {(int)(_patchDistance * 100)} -- 100 Far | {(_patchTour ? "Tour" : "Paused")}";
             Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_sceneRenderer.DebugMode} | {camera}");

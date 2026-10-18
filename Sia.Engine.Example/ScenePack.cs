@@ -256,13 +256,6 @@ internal static partial class ScenePack
     }
 
     private static Recipe ReadRecipe(string path)
-    {
-        using var file = File.OpenRead(path);
-        if (file.Length > MaximumRecipeBytes) throw new InvalidDataException("Scene recipe exceeds 1 MiB.");
-        var bytes = new byte[(int)file.Length]; file.ReadExactly(bytes);
-        if (file.ReadByte() != -1) throw new InvalidDataException("Scene recipe changed while reading.");
-        return JsonSerializer.Deserialize(bytes, SceneRecipeJsonContext.Default.Recipe)
-            ?? throw new InvalidDataException("Scene recipe must be an object.");
-    }
+        => AssetInput.ReadJson(path, SceneRecipeJsonContext.Default.Recipe, MaximumRecipeBytes);
 }
 #endif
