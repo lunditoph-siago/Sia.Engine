@@ -11,6 +11,7 @@ internal sealed partial class SceneExampleApp
 {
     private PbrSceneStream? _materialStream;
     private PbrRasterScene? _rasterScene;
+    private PbrBvhScene? _traceScene;
     private int _materialInstanceCount;
     private PbrSceneFiles.Prepared? _referenceScene;
     private Entity _assetRoot;
@@ -20,6 +21,12 @@ internal sealed partial class SceneExampleApp
     {
         if (_referenceScene is not { } prepared) return;
         switch (prepared) {
+            case PbrSceneFiles.PreparedMixed mixed: {
+                var acquired = PbrSceneFiles.AcquireMixed(_renderWorld!.Entities, mixed);
+                _assetRoot = acquired.Root; _materialStream = acquired.Stream; _traceScene = acquired.Trace;
+                _materialInstanceCount = acquired.Stream.SourceInstanceCount;
+                break;
+            }
             case PbrSceneFiles.Prepared<MeshRasterRecord> raster: {
                 var acquired = PbrSceneFiles.AcquireRaster(_renderWorld!.Entities, raster);
                 _assetRoot = acquired.Root; _rasterScene = acquired.Scene;
@@ -71,6 +78,7 @@ internal sealed partial class SceneExampleApp
             BakedEnvironment = _bakedEnvironment,
             Lightmaps = _lightmapInput,
             BakedProbes = _bakedProbes,
+            TraceScene = _traceScene,
             TargetPixelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
             ShadowTexelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
         };
@@ -82,6 +90,7 @@ internal sealed partial class SceneExampleApp
         _materialStream = null;
         _rasterScene = null;
         _lightmapInput = null;
+        _traceScene = null;
     }
     public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 }

@@ -24,9 +24,10 @@ public static partial class Program
                 scenePath = content.Scene;
 #endif
             }
-            await using var virtualUse = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareStreamingAsync(scenePath, streamHttp) : null;
-            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)virtualUse
+            var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
+            await using var mixedUse = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi) : null;
+            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)mixedUse
                 ?? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp);
             var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath ?? content?.Environment, options.ProbesPath, streamHttp);
             var lightmapsPath = content?.Lightmaps;

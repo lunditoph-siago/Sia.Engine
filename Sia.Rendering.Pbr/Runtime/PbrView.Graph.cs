@@ -42,6 +42,10 @@ internal sealed unsafe partial class PbrView
             Import(ref graph, _probeHeaderKey, probes.Header, RenderGraphBufferUsage.Uniform);
             if (probes.Dynamic) {
                 Import(ref graph, _traceKey, probes.Tracing, RenderGraphBufferUsage.Storage);
+                if (probes.TracingGeometry.IsValid) {
+                    Import(ref graph, _traceGeometryKey, probes.TracingGeometry, RenderGraphBufferUsage.Storage);
+                    Import(ref graph, _traceInstancesKey, probes.TracingInstances, RenderGraphBufferUsage.Storage);
+                }
                 Import(ref graph, _probeConfigKey, probes.Configuration, RenderGraphBufferUsage.Uniform);
             }
         }
@@ -96,8 +100,7 @@ internal sealed unsafe partial class PbrView
             // Measure transport separately from material reconstruction and lighting.
             if (_owner.Probes is { Dynamic: true })
                 graph.UsePass(new(_prefix + "probe-update"), "scene-probe-update", dependency,
-                    static (in d, p) => p
-                        .Read(d.View._traceKey, RenderGraphBufferUsage.Storage)
+                    static (in d, p) => d.View.ReadProbeTrace(p)
                         .Read(d.View._probeConfigKey, RenderGraphBufferUsage.Uniform)
                         .Write(d.View._probesKey, RenderGraphBufferUsage.Storage)
                         .Write(d.View._probeTextureKey, RenderGraphTextureUsage.StorageBinding),
@@ -166,6 +169,14 @@ internal sealed unsafe partial class PbrView
         if (_owner.Probes is not null)
             p.Read(_probeTextureKey, RenderGraphTextureUsage.TextureBinding).Read(_probeHeaderKey, RenderGraphBufferUsage.Uniform);
         return p;
+    }
+
+    private RenderGraphPassDeclarationBuilder ReadProbeTrace(RenderGraphPassDeclarationBuilder pass)
+    {
+        pass.Read(_traceKey, RenderGraphBufferUsage.Storage);
+        if (_owner.Probes!.TracingGeometry.IsValid)
+            pass.Read(_traceGeometryKey, RenderGraphBufferUsage.Storage).Read(_traceInstancesKey, RenderGraphBufferUsage.Storage);
+        return pass;
     }
 
     private static void Import(ref RenderGraphBuildContext graph, RenderGraphBufferKey key, Entity entity, RenderGraphBufferUsage usage)

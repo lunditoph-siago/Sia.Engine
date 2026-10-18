@@ -13,6 +13,10 @@ struct InstanceTraceHit {
     normal: vec3<f32>,
 }
 
+fn instance_trace_word(word: u32) -> u32 {
+    return instance_trace_geometry[word / 4u][word % 4u];
+}
+
 fn instance_trace_box(lo: vec3<f32>, hi: vec3<f32>, origin: vec3<f32>, direction: vec3<f32>, lower: f32, upper: f32) -> bool {
     var minimum = lower; var maximum = upper;
     for (var axis = 0u; axis < 3u; axis++) {
@@ -65,7 +69,7 @@ fn trace_instances(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximu
     var hit = InstanceTraceHit(maximum, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, vec3<f32>(0.0), false, vec3<f32>(0.0));
     if (arrayLength(&instance_trace_geometry) < 3u || arrayLength(&instance_trace_instances) < 5u) { return hit; }
     let header = instance_trace_instances[0]; let tables = instance_trace_instances[1];
-    if (instance_trace_geometry[0].w != 0x31475453u || instance_trace_instances[2].z != 0x31495453u
+    if (instance_trace_geometry[0].w != 0x32475453u || instance_trace_instances[2].z != 0x31495453u
         || instance_trace_geometry[0].z != arrayLength(&instance_trace_geometry)
         || instance_trace_instances[2].y != arrayLength(&instance_trace_instances)
         || any(instance_trace_geometry[1] != instance_trace_instances[3])
@@ -96,13 +100,15 @@ fn trace_instances(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximu
             var node = 0u;
             loop {
                 if (node >= mesh.y) { break; }
-                let node_lo = instance_trace_geometry[mesh.x + node * 3u]; let node_hi = instance_trace_geometry[mesh.x + node * 3u + 1u];
+                let node_lo = instance_trace_geometry[mesh.x + node * 2u]; let node_hi = instance_trace_geometry[mesh.x + node * 2u + 1u];
                 if (!instance_trace_box(bitcast<vec3<f32>>(node_lo.xyz), bitcast<vec3<f32>>(node_hi.xyz), local_origin, local_direction, minimum, hit.parameter)) {
                     node = node_lo.w; continue;
                 }
-                let triangles = instance_trace_geometry[mesh.x + node * 3u + 2u].x;
-                for (var t = node_hi.w; t < node_hi.w + triangles; t++) {
-                    let triangle = instance_trace_geometry[mesh.z + t * 2u];
+                let triangles = node_hi.w & 127u;
+                let first = node_hi.w >> 7u;
+                for (var t = first; t < first + triangles; t++) {
+                    let base = mesh.z + t * 5u;
+                    let triangle = vec4<u32>(instance_trace_word(base), instance_trace_word(base + 1u), instance_trace_word(base + 2u), instance_trace_word(base + 3u));
                     let a = bitcast<vec3<f32>>(instance_trace_geometry[vertices + triangle.x].xyz);
                     let b = bitcast<vec3<f32>>(instance_trace_geometry[vertices + triangle.y].xyz);
                     let c = bitcast<vec3<f32>>(instance_trace_geometry[vertices + triangle.z].xyz);
@@ -110,7 +116,7 @@ fn trace_instances(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, maximu
                     if (result.x < 0.0 || result.w != result.w || result.w < minimum || result.w > hit.parameter) { continue; }
                     if (result.w == hit.parameter && hit.instance != 0xffffffffu
                         && (instance.y > best_rank || (instance.y == best_rank && triangle.w >= hit.primitive))) { continue; }
-                    let slot = instance_trace_geometry[mesh.z + t * 2u + 1u].x;
+                    let slot = instance_trace_word(base + 4u);
                     let material = instance_trace_material(binding, slot);
                     if (material == 0xffffffffu) { continue; }
 #ifdef INSTANCE_TRACE_FILTER

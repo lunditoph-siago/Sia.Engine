@@ -42,6 +42,8 @@ public sealed record PbrRendererSettings
     public IblEnvironmentAsset? BakedEnvironment { get; init; }
     public DiffuseProbeAsset? BakedProbes { get; init; }
     public bool DynamicSceneGi { get; init; }
+    /// <summary>Explicit acquired independent BVH input for dynamic transport; no implicit product acquisition.</summary>
+    public PbrBvhScene? TraceScene { get; init; }
     public uint ProbeUpdates { get; init; } = 4;
     public uint ProbeSamples { get; init; } = 64;
     public uint3 ProbeDimensions { get; init; } = new(4, 4, 4);
@@ -104,6 +106,9 @@ public sealed class PbrRenderer :
     private bool _disposed;
     private RenderWorld? _streamWorld;
     private ulong _streamFrame;
+    private readonly HashSet<Guid>? _staticInstanceIds;
+    private PbrBvhTrace? _trace, _pendingTrace;
+    private SceneTraceData? _traceData, _pendingTraceData;
 
     public RenderFeatureKey Key { get; } = new("pbr");
     public VisibilityDebugMode DebugMode { get; set; }
@@ -173,6 +178,13 @@ public sealed class PbrRenderer :
             throw new ArgumentException("Shared surface export requires the Visibility path.", nameof(settings));
         if (Settings.DynamicSceneGi && Settings.OpaquePath != PbrOpaquePath.Visibility)
             throw new ArgumentException("Dynamic scene GI requires the Visibility path.", nameof(settings));
+        if (Settings.DynamicSceneGi) {
+            if (Settings.TraceScene is not { } traceScene)
+                throw new ArgumentException("Dynamic scene GI requires explicitly acquired independent Mesh BVHs.", nameof(settings));
+            var identity = stream?.Identity ?? (raster?.TransportIdentity ?? scene!.TransportIdentity);
+            if (!traceScene.TransportIdentity.Span.SequenceEqual(identity.Span))
+                throw new ArgumentException("Trace input differs from authored render geometry/materials/instances.", nameof(settings));
+        }
         if (Settings.GpuTiming && !WebGpuCapabilities.Read(frame.Device.GetWgpu<WGPUDevice>()).TimestampQueries)
             throw new NotSupportedException("GPU timing requires timestamp-query to be enabled on the device.");
         if (Settings.ShadowResolution is < 64 or > 4096) throw new ArgumentOutOfRangeException(nameof(settings));
@@ -185,9 +197,13 @@ public sealed class PbrRenderer :
             ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
             lightmapRows = stream is not null ? input.Set.BindReceivers(stream)
                 : input.Set.BindReceivers((raster?.Instances ?? scene!.Instances).Span);
+            _staticInstanceIds = [];
+            foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
         }
         try {
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
+            if (stream?.RequiresInstancing == true && !Settings.Streaming.GpuTraversal)
+                throw new NotSupportedException("Mixed scene input requires local shared GPU instance storage.");
             if (stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
@@ -210,10 +226,11 @@ public sealed class PbrRenderer :
                 var traceBudget = Settings.DynamicSceneGi
                     ? System.Math.Min(Settings.SceneGiBytes - probeBytes,
                         System.Math.Min(limits.MaxStorageBufferBindingSize, limits.MaxBufferSize)) : 0;
-                var tracing = Settings.DynamicSceneGi
-                    ? raster is not null ? PbrSceneTransport.Build(raster, traceBudget)
-                        : stream is null ? PbrSceneTransport.Build(scene!, traceBudget)
-                        : PbrSceneTransport.Build(stream, traceBudget) : null;
+                if (Settings.DynamicSceneGi) {
+                    _trace = PbrBvhTrace.Build(Settings.TraceScene!, Settings.SceneGiBytes);
+                    _traceData = PbrSceneTransport.Build(_trace, traceBudget);
+                }
+                var tracing = _traceData;
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
                 var identity = tracing is not null ? tracing.Identity.ToArray() : raster is not null ? PbrSceneTransport.Identity(raster)
@@ -235,6 +252,27 @@ public sealed class PbrRenderer :
     }
 
     public RenderGraphBufferKey GetGpuTimingsTarget(RenderViewKey view) => new("pbr/" + view.Value + "/timings");
+
+    /// <summary>
+    /// Stages absolute transforms by authored instance ID for the next frame preparation on this renderer's
+    /// owner context. All sections move together; acquired geometry and authored bake identity remain unchanged.
+    /// Static lightmap receivers cannot move. Shared Raster or local GPU Virtual storage is required.
+    /// </summary>
+    public void UpdateInstanceTransforms(ReadOnlySpan<PbrInstanceTransform> updates)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var update in updates)
+            if (_staticInstanceIds?.Contains(update.Id) == true)
+                throw new ArgumentException("Static lightmap receivers cannot receive runtime transforms.", nameof(updates));
+        PbrBvhTrace? nextTrace = null; SceneTraceData? nextData = null;
+        if (_trace is not null && !updates.IsEmpty) {
+            nextTrace = (_pendingTrace ?? _trace).WithTransforms(updates, Settings.SceneGiBytes);
+            var currentData = _pendingTraceData ?? _traceData!;
+            nextData = currentData.WithInstances(nextTrace.PackGpuInstances((ulong)currentData.Instances.Length * 16));
+        }
+        Scene.StageTransforms(updates);
+        if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; }
+    }
 
     public VisibilitySurfaceTargets GetSurfaceTargets(RenderViewKey view, RenderGraphTextureKey depth)
     {
@@ -281,6 +319,12 @@ public sealed class PbrRenderer :
         if (Scene.Streaming is not null || Lightmaps is not null) {
             _streamWorld = world;
             _streamFrame = world.FrameIndex;
+        }
+        if (_pendingTraceData is { } pendingTraceData) Probes!.UpdateInstances(pendingTraceData);
+        Scene.ApplyTransforms();
+        if (_pendingTrace is { } pendingTrace) {
+            _trace = pendingTrace; _traceData = _pendingTraceData;
+            _pendingTrace = null; _pendingTraceData = null;
         }
         Scene.Streaming?.BeginFrame();
         Materials.BeginFrame();
@@ -339,6 +383,7 @@ public sealed class PbrRenderer :
         if (Materials is not null && !Materials.IsStopped)
             throw new InvalidOperationException("Await StopStreamingAsync before disposing streaming materials.");
         _disposed = true;
+        _trace = null; _pendingTrace = null; _traceData = null; _pendingTraceData = null;
         while (_views.Count != 0)
             _views[^1].Dispose();
         Environment?.Dispose();

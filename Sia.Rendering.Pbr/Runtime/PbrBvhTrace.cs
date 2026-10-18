@@ -25,8 +25,10 @@ public sealed partial class PbrBvhTrace
     private readonly InstanceData[] _instances;
     private readonly int[] _order;
     private readonly Node[] _nodes;
+    /// <summary>Borrowed authored geometry, bindings and identities. Runtime transforms belong to this trace snapshot.</summary>
     public PbrBvhScene Scene { get; }
     public int NodeCount => _nodes.Length;
+    public Aabb Bounds => _nodes.Length == 0 ? new(float3.zero, float3.zero) : _nodes[0].Bounds;
     /// <summary>Owned array elements only; excludes shared scene/geometry, object headers and build scratch.</summary>
     public ulong PayloadBytes { get; }
 
@@ -45,13 +47,7 @@ public sealed partial class PbrBvhTrace
         var instances = new InstanceData[count]; var order = new int[count]; var nodes = new Node[nodeCount];
         for (var i = 0; i < count; i++) {
             cancellationToken.ThrowIfCancellationRequested();
-            var instance = scene.Instances[i]; var t = instance.Transform;
-            var a = (double3)t.c0.xyz; var b = (double3)t.c1.xyz; var c = (double3)t.c2.xyz;
-            var determinant = math.dot(a, math.cross(b, c));
-            if (!double.IsFinite(determinant) || determinant <= 0) throw new ArgumentException("Instance has no positive affine inverse.", nameof(scene));
-            var localBounds = scene.Geometry[scene.Bindings[instance.Binding].Geometry].Bounds;
-            instances[i] = new(math.cross(b, c) / determinant, math.cross(c, a) / determinant,
-                math.cross(a, b) / determinant, (double3)t.c3.xyz, TransformBounds(localBounds, t));
+            instances[i] = CreateInstance(scene, i, scene.Instances[i].Transform);
             order[i] = i;
         }
         var comparisons = new Comparison<int>[3];
@@ -87,6 +83,22 @@ public sealed partial class PbrBvhTrace
 
     private static int CountNodes(int count) => count == 0 ? 0 : count <= 4 ? 1 : 1 + CountNodes(count / 2) + CountNodes(count - count / 2);
     private static double Center(Aabb bounds, int axis) => ((double)bounds.Min[axis] + bounds.Max[axis]) * .5;
+
+    private static InstanceData CreateInstance(PbrBvhScene scene, int index, float4x4 transform)
+    {
+        if (!PbrSceneData.ValidTransform(transform))
+            throw new ArgumentException("Instance requires a finite nonsingular positive affine transform.", nameof(transform));
+        var a = (double3)transform.c0.xyz; var b = (double3)transform.c1.xyz; var c = (double3)transform.c2.xyz;
+        var determinant = math.dot(a, math.cross(b, c));
+        if (!double.IsFinite(determinant) || determinant <= 0)
+            throw new ArgumentException("Instance has no positive affine inverse.", nameof(transform));
+        var localBounds = scene.Geometry[scene.Bindings[scene.Instances[index].Binding].Geometry].Bounds;
+        var bounds = TransformBounds(localBounds, transform);
+        if (!math.all(math.isfinite(bounds.Min)) || !math.all(math.isfinite(bounds.Max)))
+            throw new ArgumentException("Conservative transformed instance bounds must remain finite.", nameof(transform));
+        return new(math.cross(b, c) / determinant, math.cross(c, a) / determinant,
+            math.cross(a, b) / determinant, (double3)transform.c3.xyz, bounds);
+    }
 
     private static Aabb TransformBounds(Aabb bounds, float4x4 transform)
     {
