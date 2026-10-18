@@ -27,7 +27,7 @@ internal sealed partial class PbrGpuScene
                 Instances = _gpu.Upload<PbrInstanceGpu>(instances);
             }
             var arenaBudget = budget - _gpu.Bytes;
-            using var bootstrap = new PbrGpuScene(frame, source.Bootstrap, layout, arenaBudget, materialBatches, Instances);
+            using var bootstrap = new PbrGpuScene(frame, source, layout, arenaBudget, materialBatches, Instances);
             ulong rootsV = bootstrap.VertexCount, rootsT = bootstrap.TriangleCount;
             var sharedRoots = new HashSet<string>(StringComparer.Ordinal);
             foreach (var instance in source.Instances.Span) {

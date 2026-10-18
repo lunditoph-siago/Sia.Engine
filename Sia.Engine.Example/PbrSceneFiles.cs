@@ -7,17 +7,24 @@ using Sia.Engine.Rendering.Pbr;
 namespace Sia.Engine.Example;
 
 // Application file layout and workflow, deliberately outside the asset library.
-internal static class PbrSceneFiles
+internal static partial class PbrSceneFiles
 {
     internal abstract record Prepared(AssetId Id, PbrSceneRecord Scene,
         IReadOnlyDictionary<AssetId, MeshManifestRecord> Meshes,
         IReadOnlyDictionary<AssetId, PbrMaterialRecord> Materials,
-        IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures);
+        IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures)
+    {
+        internal long EncodedBytes { get; init; }
+    }
 
     internal sealed record Prepared<TProduct>(AssetId Id, PbrSceneRecord Scene,
         IReadOnlyDictionary<AssetId, MeshManifestRecord> Meshes, IReadOnlyDictionary<AssetId, TProduct> Products,
         IReadOnlyDictionary<AssetId, PbrMaterialRecord> Materials, IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures)
         : Prepared(Id, Scene, Meshes, Materials, Textures) where TProduct : class, IAssetRecord;
+
+    internal static bool IsReferenceScene(string path)
+        => (AssetInput.TryGetHttpUri(path, out var uri) ? uri!.AbsolutePath : path)
+            .EndsWith(".siascene", StringComparison.OrdinalIgnoreCase);
 
     internal static Task<Prepared<MeshVirtualRecord>> PrepareVirtualAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
@@ -33,13 +40,6 @@ internal static class PbrSceneFiles
             static (MeshRasterRecord r) => r.Data.Sections.Length, MeshRasterRecord.Load,
             maximumFileBytes, maximumTotalBytes, cancellationToken);
 
-    internal static Task<Prepared<MeshBvhRecord>> PrepareBvhAsync(string path, HttpClient client,
-        int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
-        => PrepareAsync(path, client, static m => m.Bvh?.Id ?? throw new InvalidDataException("Selected Mesh has no BVH product."),
-            static (MeshBvhRecord _) => 1, MeshBvhRecord.Load,
-            maximumFileBytes, maximumTotalBytes, cancellationToken);
-
     private static async Task<Prepared<TProduct>> PrepareAsync<TProduct>(string path, HttpClient client,
         Func<MeshManifest, AssetId> selectProduct, Func<TProduct, int> partCount, Func<Stream, ulong, string?, TProduct> decodeProduct,
         int maximumFileBytes, long maximumTotalBytes, CancellationToken cancellationToken) where TProduct : class, IAssetRecord
@@ -48,10 +48,8 @@ internal static class PbrSceneFiles
         ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes); ArgumentOutOfRangeException.ThrowIfNegative(maximumTotalBytes);
         cancellationToken.ThrowIfCancellationRequested();
         var http = AssetInput.TryGetHttpUri(path, out var uri);
-        var sourcePath = http ? uri!.AbsolutePath : path;
-        var filename = Path.GetFileNameWithoutExtension(sourcePath);
-        if (!sourcePath.EndsWith(".siascene", StringComparison.OrdinalIgnoreCase)
-            || !Guid.TryParseExact(filename, "N", out var guid) || guid == Guid.Empty)
+        var filename = Path.GetFileNameWithoutExtension(http ? uri!.AbsolutePath : path);
+        if (!IsReferenceScene(path) || !Guid.TryParseExact(filename, "N", out var guid) || guid == Guid.Empty)
             throw new ArgumentException("Reference scenes require a nonempty Guid in N format and .siascene suffix.", nameof(path));
         var root = http ? null : Path.GetDirectoryName(Path.GetFullPath(path))!;
         string Locate(AssetId id) => http ? new Uri(uri!, id.Value.ToString("N") + ".siaasset").AbsoluteUri
@@ -121,15 +119,15 @@ internal static class PbrSceneFiles
             }
         }
         cancellationToken.ThrowIfCancellationRequested();
-        return new(id, scene, meshes, products, materials, textures);
+        return new(id, scene, meshes, products, materials, textures) { EncodedBytes = total };
     }
 
     // Must run synchronously on the target World's owner context after preparation.
     // Each use owns an anonymous root; scene identity and selected assets can be shared.
-    internal static (Entity Root, PbrSceneAsset Scene, Guid[] SourceInstances) AcquireVirtual(World world, Prepared<MeshVirtualRecord> prepared)
+    internal static (Entity Root, PbrVirtualScene Scene, Guid[] SourceInstances) AcquireVirtual(World world, Prepared<MeshVirtualRecord> prepared)
     {
         AssetLibrary.RegisterAsset<MeshVirtualAsset, MeshVirtualRecord>();
-        return Acquire<MeshVirtualRecord, PbrSceneAsset>(world, prepared, static (w, s) => {
+        return Acquire<MeshVirtualRecord, PbrVirtualScene>(world, prepared, static (w, s) => {
             var scene = PbrSceneComposition.ResolveVirtual(s,
                 r => r.Find(w)?.Get<MeshManifestAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<MeshVirtualAsset>().Data ?? throw new AssetNotFoundException(),
@@ -148,21 +146,6 @@ internal static class PbrSceneFiles
                 r => r.Find(w)?.Get<MeshRasterAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException(), out var ids);
-            return (scene, ids);
-        });
-    }
-
-    internal static (Entity Root, PbrBvhScene Scene, Guid[] SourceInstances) AcquireBvh(World world, Prepared<MeshBvhRecord> prepared)
-    {
-        AssetLibrary.RegisterAsset<MeshBvhAsset, MeshBvhRecord>();
-        return Acquire<MeshBvhRecord, PbrBvhScene>(world, prepared, static (w, s) => {
-            var scene = PbrSceneComposition.ResolveBvh(s,
-                r => r.Find(w)?.Get<MeshManifestAsset>().Data ?? throw new AssetNotFoundException(),
-                r => r.Find(w)?.Get<MeshBvhAsset>().Data ?? throw new AssetNotFoundException(),
-                r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
-                r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException());
-            var ids = new Guid[scene.Instances.Length];
-            for (var i = 0; i < ids.Length; i++) ids[i] = scene.Instances[i].Id;
             return (scene, ids);
         });
     }

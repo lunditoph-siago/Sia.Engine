@@ -211,7 +211,7 @@ internal sealed unsafe partial class SceneExampleApp
         _preparedLighting = null;
         _bakedEnvironment = null;
         _bakedProbes = null;
-        _materialScene = null;
+        _materialStream = null;
         _rasterScene = null;
         _renderWorld?.Dispose();
         _renderWorld = null;

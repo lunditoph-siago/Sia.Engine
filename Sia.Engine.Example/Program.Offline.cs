@@ -31,7 +31,7 @@ public static partial class Program
             }
             case ["--cook-mesh", var recipe, "--output", var output]: {
                 var mesh = MeshCook.Cook(recipe, output);
-                Console.WriteLine($"Cooked Mesh {mesh.Value:N}: {Path.GetFullPath(output)}");
+                Console.WriteLine($"Cooked Mesh {mesh.Id.Value:N}: {Path.GetFullPath(output)}");
                 return true;
             }
             case ["--bake-environment", var intensity, "--output", var output]:

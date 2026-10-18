@@ -78,8 +78,21 @@ internal static partial class ExampleContent
         using var client = new HttpClient();
         async Task<HashSet<string>> RequiredFiles(string scene) {
             var virtuals = await PbrSceneFiles.PrepareVirtualAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
+            await using (var pageSource = new PbrSceneFiles.PageSource(scene, client, virtuals)) {
+                long total = virtuals.EncodedBytes;
+                foreach (var product in virtuals.Products.Values) {
+                    for (var p = 0; p < product.Data.Pages.Length; p++) {
+                        var page = product.Data.Pages[p];
+                        if (page.EncodedBytes > maximumFileBytes || page.EncodedBytes > maximumBundleBytes - total)
+                            throw new InvalidDataException("Virtual pages exceed the package encoded admission.");
+                        total += page.EncodedBytes;
+                        _ = await pageSource.ReadAsync(page.Reference, cancellationToken);
+                    }
+                }
+            }
             var ids = virtuals.Meshes.Keys.Concat(virtuals.Materials.Keys).Concat(virtuals.Textures.Keys)
-                .Concat(virtuals.Products.Keys);
+                .Concat(virtuals.Products.Keys)
+                .Concat(virtuals.Products.Values.SelectMany(p => p.Data.Pages.ToArray()).Select(p => p.Id));
             if (!browser) {
                 var raster = await PbrSceneFiles.PrepareRasterAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
                 var bvh = await PbrSceneFiles.PrepareBvhAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
