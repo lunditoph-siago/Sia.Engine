@@ -24,6 +24,7 @@ public readonly record struct MeshVirtualPageDescriptor(AssetId Id, string Conte
 /// <summary>Mesh-local virtual hierarchy and typed page references; no page payload, shading or instances.</summary>
 public sealed partial class MeshVirtualPagesData
 {
+    public const int MaximumParts = 4096;
     public const int MaximumPages = 65536;
     public const int MaximumNodes = 1000000;
     public const int MaximumRanges = 1000000;
@@ -101,7 +102,7 @@ public sealed partial class MeshVirtualPagesData
     private void Validate(CancellationToken token)
     {
         Require(ProductId.IsValid && Settings.IsValid && SourceVertexCount > 0 && SourceTriangleCount > 0 && Valid(Bounds)
-            && _parts.Length is > 0 and <= MeshVirtualData.MaximumParts && _nodes.Length <= MaximumNodes
+            && _parts.Length is > 0 and <= MaximumParts && _nodes.Length <= MaximumNodes
             && _ranges.Length <= MaximumRanges && _pages.Length <= MaximumPages && EncodedBytes <= MaximumEncodedBytes,
             "Invalid virtual page index summary.");
         long sourceTriangles = 0; var nextNode = 0; var nextRange = 0;
@@ -178,7 +179,17 @@ public sealed partial class MeshVirtualPagesData
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData("SIAMESHVIRTUALPAGES"u8);
-        hash.AppendData(Convert.FromHexString(MeshVirtualData.ComputeBuildKey(sourceHash, settings)));
+        using var derivation = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        derivation.AppendData("SIAMESHVIRTUAL1"u8);
+        derivation.AppendData(Convert.FromHexString(sourceHash));
+        Span<byte> options = stackalloc byte[20];
+        BinaryPrimitives.WriteInt32LittleEndian(options, settings.MaxLeafTriangles);
+        BinaryPrimitives.WriteInt32LittleEndian(options[4..], settings.MaxChildren);
+        BinaryPrimitives.WriteSingleLittleEndian(options[8..], settings.ParentTriangleRatio);
+        BinaryPrimitives.WriteSingleLittleEndian(options[12..], settings.NormalWeight);
+        BinaryPrimitives.WriteSingleLittleEndian(options[16..], settings.UVWeight);
+        derivation.AppendData(options);
+        hash.AppendData(derivation.GetHashAndReset());
         Span<byte> size = stackalloc byte[4]; BinaryPrimitives.WriteInt32LittleEndian(size, MeshVirtualPageData.MaximumTriangles);
         hash.AppendData(size); return Convert.ToHexString(hash.GetHashAndReset());
     }

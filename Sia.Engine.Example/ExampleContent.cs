@@ -12,6 +12,7 @@ internal static partial class ExampleContent
         public required string Scene { get; init; }
         public string? Lightmaps { get; init; }
         public string? Environment { get; init; }
+        public string[] ReflectionCaptures { get; init; } = [];
     }
 
     internal sealed record Catalog
@@ -52,7 +53,10 @@ internal static partial class ExampleContent
         foreach (var entry in new[] { catalog.Bunny }.Concat(bistro.OfType<Entry>())) {
             if (entry is null) throw new InvalidDataException("Every default requires a scene entry.");
             Path(entry.Scene, ".siascene");
-            foreach (var lighting in new[] { entry.Lightmaps, entry.Environment }.OfType<string>()) {
+            if (entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
+                || entry.ReflectionCaptures.Distinct(StringComparer.Ordinal).Count() != entry.ReflectionCaptures.Length)
+                throw new InvalidDataException("Default captures require at most sixteen distinct references.");
+            foreach (var lighting in entry.ReflectionCaptures.Concat(new[] { entry.Lightmaps, entry.Environment }.OfType<string>())) {
                 Path(lighting, ".siaasset");
                 if (lighting[..lighting.LastIndexOf('/')] != entry.Scene[..entry.Scene.LastIndexOf('/')])
                     throw new InvalidDataException("Default scene and lighting must belong to the same checked content snapshot.");
@@ -62,7 +66,8 @@ internal static partial class ExampleContent
 
     internal static Entry MapPaths(Entry entry, Func<string, string> map)
         => entry with { Scene = map(entry.Scene), Lightmaps = entry.Lightmaps is { } lightmaps ? map(lightmaps) : null,
-            Environment = entry.Environment is { } environment ? map(environment) : null };
+            Environment = entry.Environment is { } environment ? map(environment) : null,
+            ReflectionCaptures = entry.ReflectionCaptures.Select(map).ToArray() };
 
     internal static Entry Default(ScenePipeline pipeline, string assetsDirectory, RenderQuality quality = RenderQuality.High)
     {

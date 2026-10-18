@@ -12,16 +12,22 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe partial class PbrView
 {
-    private static PbrGpuScene.Draw SelectGeometry(PbrGpuScene.Draw draw, float4x4 vp,
+    internal static PbrGpuScene.Draw SelectRasterLod(PbrGpuScene.Draw draw, in float4x4 matrix,
         in ProjectedGeometryError.LodProjection projection, uint width, uint height, float target)
     {
-        if (target <= 0 || draw.CoarseCount == 0) return draw;
-        var error = ProjectedGeometryError.ProjectLodError(draw.Bounds, draw.Error, projection, vp, width, height);
-        return error <= target ? draw with {
-            First = draw.CoarseFirst,
-            Count = draw.CoarseCount,
-            FirstIndex = draw.CoarseFirst * 3
-        } : draw;
+        if (target <= 0 || draw.Lods.Length <= 1) return draw;
+        var levels = draw.Lods.Span;
+        for (var lod = levels.Length - 1; lod > 0; lod--) {
+            var level = levels[lod];
+            var error = ProjectedGeometryError.ProjectLodError(draw.Bounds, level.Error * draw.ErrorScale,
+                projection, matrix, width, height);
+            if (error <= target) {
+                var offset = ((uint)level.FirstIndex - draw.FirstIndex) / 3;
+                return draw with { Count = (uint)(level.IndexCount / 3), FirstIndex = (uint)level.FirstIndex,
+                    First = checked(draw.First + offset), TriangleOffset = offset };
+            }
+        }
+        return draw;
     }
 
     private void AddRange(List<PbrGpuScene.Draw> list, PbrGpuScene.Draw draw, bool matchBatch = false)
@@ -72,6 +78,7 @@ internal sealed unsafe partial class PbrView
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
         if (shadow) Wgpu.SetVertexBuffer(pass, 0, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>());
         if (shadow) Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
+        BindDrawInstances(pass, shadow ? 1u : 0u);
         bool? doubleSided = null;
         foreach (var draw in shadow ? _shadowDraws[layer] : _opaque) {
             if (doubleSided != draw.DoubleSided) {
@@ -81,8 +88,10 @@ internal sealed unsafe partial class PbrView
                 doubleSided = draw.DoubleSided;
             }
             if (shadow)
-                Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.FirstIndex, firstInstance: (draw.Instance << 3) | layer);
-            else Wgpu.Draw(pass, draw.Count * 3, 1, draw.First * 3);
+                Wgpu.DrawIndexed(pass, draw.Count * 3, draw.InstanceCount, draw.FirstIndex,
+                    firstInstance: _instanceIds == default ? (draw.Instance << 3) | layer : draw.Instance);
+            else Wgpu.Draw(pass, draw.Count * 3, draw.InstanceCount, _instanceIds == default ? draw.First * 3 : 0,
+                firstInstance: draw.Instance);
         }
     }
 

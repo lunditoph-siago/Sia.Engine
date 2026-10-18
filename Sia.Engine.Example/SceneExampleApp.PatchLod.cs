@@ -37,7 +37,9 @@ internal sealed partial class SceneExampleApp
         if (_rasterScene is { } raster) {
             foreach (var geometry in raster.Geometry.Span) Include(geometry.Bounds);
         }
-        else if (_materialStream is { } scene) Include(scene.GeometryBounds);
+        else if (_materialStream is { } scene) {
+            Include(scene.GeometryBounds);
+        }
         else throw new InvalidOperationException("Bunny requires an acquired Raster or Virtual scene.");
         _patchSceneBounds = _materialBounds;
     }

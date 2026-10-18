@@ -41,7 +41,6 @@ internal sealed record SceneOptions
                 case "--scene": scene = value; break;
                 case "--environment": environment = value; break;
                 case "--probes": probes = value; break;
-#if !BROWSER
                 case "--quality":
                     quality = value switch {
                         "low" => RenderQuality.Low,
@@ -50,16 +49,12 @@ internal sealed record SceneOptions
                         _ => throw new ArgumentException("Expected --quality low|medium|high.")
                     };
                     break;
-#endif
                 default: throw new ArgumentException($"Unknown option: {args[i]}.");
             }
         }
         if (pipeline == ScenePipeline.Unlit && (quality is not null || scene is not null || environment is not null || probes is not null))
             throw new ArgumentException("Unlit does not use scene, quality or lighting assets.");
-#if BROWSER
-        quality = pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low;
-#endif
-        return new() { Pipeline = pipeline, Quality = quality ?? RenderQuality.Low,
+        return new() { Pipeline = pipeline, Quality = quality ?? (pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low),
             ScenePath = scene, EnvironmentPath = environment, ProbesPath = probes };
     }
 }

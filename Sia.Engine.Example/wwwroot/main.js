@@ -10,7 +10,12 @@ let inputPending = false;
 let inputDirty = false;
 const ui = createSceneUI({ changed: sendBrowserInput,
   command(value) { commands |= value; sendBrowserInput(); },
-  distance(value) { distance = value; sendBrowserInput(); } });
+  distance(value) { distance = value; sendBrowserInput(); },
+  quality(value) {
+    const target = new URL(location.href);
+    target.searchParams.set('quality', value);
+    location.assign(target.href);
+  } });
 
 function showError(message) {
   updateBrowserInput = undefined;

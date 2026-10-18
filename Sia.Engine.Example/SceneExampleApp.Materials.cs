@@ -59,7 +59,7 @@ internal sealed partial class SceneExampleApp
         shadows.CascadeCount = 3;
         shadows.MaxShadowedSpotLights = 1;
         shadows.ShadowDistance = 30;
-        world.AcquireAddon<EnvironmentLighting>().Sky = _bakedEnvironment?.Sky ?? new ProceduralSky { Intensity = .75f };
+        world.AcquireAddon<EnvironmentLighting>().Sky = _bakedEnvironment?.Sky ?? _lightmapInput?.Set.BakeSettings.Sky ?? new ProceduralSky { Intensity = .75f };
         var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
         world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
             new GlobalTransform(new AffineTransform(float3.zero, sun))));
@@ -76,21 +76,25 @@ internal sealed partial class SceneExampleApp
         var preset = _qualitySettings;
         var settings = preset with {
             BakedEnvironment = _bakedEnvironment,
+            ReflectionCaptures = _captureInputs ?? [],
             Lightmaps = _lightmapInput,
             BakedProbes = _bakedProbes,
             TraceScene = _traceScene,
-            TargetPixelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
-            ShadowTexelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
+            TargetPixelError = _pipeline == ScenePipeline.Bunny && _options.Quality != RenderQuality.Low ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
+            ShadowTexelError = _pipeline == ScenePipeline.Bunny && _options.Quality != RenderQuality.Low ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
         };
         _sceneRenderer = _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
             : new PbrRenderer(in frame, _materialStream!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
         InitializeInspectionControls();
-        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}.");
+        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Independent selected geometry.");
+        Console.WriteLine($"Static reflection regions: {settings.ReflectionCaptures.Length}.");
+        Console.WriteLine($"Live reflections: {settings.Reflections is not null}.");
         Console.WriteLine($"Scene diffuse GI: {(settings.Lightmaps is null ? "environment/probes" : "static surface lightmaps")}; dynamic probes {settings.DynamicSceneGi}; updates {settings.ProbeUpdates}; samples {(settings.DynamicSceneGi && settings.Lightmaps is { } bake ? bake.Set.BakeSettings.Samples : settings.ProbeSamples)}; signed correction {settings.DynamicSceneGi && settings.Lightmaps is not null}. Multiple bounces and temporal reconstruction are pending.");
         _materialStream = null;
         _rasterScene = null;
-        _lightmapInput = null;
         _traceScene = null;
+        _lightmapInput = null;
     }
+
     public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 }

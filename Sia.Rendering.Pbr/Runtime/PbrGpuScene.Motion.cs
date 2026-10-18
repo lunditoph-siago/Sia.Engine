@@ -9,6 +9,8 @@ internal sealed partial class PbrGpuScene
     private PbrInstanceMotion? _pendingInstanceMotion;
     private ulong _instanceRevision;
     internal ulong GeometryRevision => _instanceRevision + (Streaming?.Revision ?? 0);
+    internal uint[] ReflectionReceiverMap(ReadOnlySpan<PbrReflectionInstancePose> poses)
+        => (_instanceMotion ?? throw new NotSupportedException("Reflection history requires authored local instance rows.")).ReflectionReceiverMap(poses);
     internal bool IsInstanceEnabled(uint row) => _instanceMotion is null || (_instanceMotion.Rows[(int)row].Material.x & PbrInstanceMotion.DisabledBit) == 0;
 
     internal void StageVisibility(ReadOnlySpan<PbrInstanceVisibility> updates)
@@ -53,7 +55,8 @@ internal sealed partial class PbrGpuScene
         }
         else {
             foreach (var draws in new[] { Opaque, Transparent })
-                for (var i = 0; i < draws.Length; i++) draws[i] = draws[i] with { Bounds = pending.WorldBounds[(int)draws[i].Instance] };
+                for (var i = 0; i < draws.Length; i++) draws[i] = draws[i] with { Bounds = pending.WorldBounds[(int)draws[i].Instance],
+                    ErrorScale = TransformNorm(pending.Rows[(int)draws[i].Instance].Transform) };
             Bounds = pending.Bounds;
         }
         _instanceMotion = pending; _pendingInstanceMotion = null;

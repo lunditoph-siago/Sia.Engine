@@ -15,7 +15,9 @@ internal sealed unsafe partial class PbrView
     private void Timestamp(WgpuReactiveRenderGraphPassContext context)
     {
         if (!_owner.SampleGpuTiming) return;
-        var point = (uint)(context.Pass.Name[^1] - '0');
+        var start = context.Pass.Name.Length;
+        while (start > 0 && char.IsAsciiDigit(context.Pass.Name[start - 1])) start--;
+        var point = uint.Parse(context.Pass.Name.AsSpan(start), System.Globalization.CultureInfo.InvariantCulture);
         var writes = new WGPUPassTimestampWrites {
             QuerySet = (WGPUQuerySet*)_queries.GetWgpu<WGPUQuerySet>().DangerousGetHandle(),
             BeginningOfPassWriteIndex = point * 2,

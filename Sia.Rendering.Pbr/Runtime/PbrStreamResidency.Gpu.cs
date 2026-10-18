@@ -40,7 +40,7 @@ internal sealed partial class PbrStreamResidency
         for (var instance = 0; instance < _source.Instances.Length; instance++) {
             var info = _source.Instances.Span[instance];
             var tree = _source.Hierarchies[info.AssetIndex];
-            var side = _source.Bootstrap.Materials.Span[info.MaterialIndex].DoubleSided ? 1u : 0u;
+            var side = _source.Materials.Span[info.MaterialIndex].DoubleSided ? 1u : 0u;
             if (!geometries.TryGetValue(info.AssetIndex, out var geometry)) {
                 var cut = PbrGpuHierarchy.MaximumCut(tree);
                 geometry = (nodes.Count, cut.Triangles, cut.Nodes, cut.Records);

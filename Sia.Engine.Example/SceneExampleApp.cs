@@ -32,13 +32,15 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private readonly SceneOptions _options;
 
-    public SceneExampleApp(SceneOptions options, PbrSceneFiles.Prepared? references, LightingFiles.Prepared lighting, LightmapFiles.Prepared? lightmaps)
+    public SceneExampleApp(SceneOptions options, PbrSceneFiles.Prepared? references, LightingFiles.Prepared lighting, LightmapFiles.Prepared? lightmaps,
+        ReflectionCaptureFiles.Prepared[] captures)
     {
         _options = options;
         _pipeline = options.Pipeline;
         _referenceScene = references;
         _preparedLighting = lighting;
         _preparedLightmaps = lightmaps;
+        _preparedCaptures = captures;
         _patchDebugMode = _pipeline == ScenePipeline.Bunny
             ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded;
         _patchDistance = _pipeline == ScenePipeline.Pbr ? .6f : 0;
@@ -151,6 +153,17 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         }
         required.MaxStorageBufferBindingSize = System.Math.Min(supported.MaxStorageBufferBindingSize, 256ul * 1024 * 1024);
         required.MaxBufferSize = System.Math.Min(supported.MaxBufferSize, 256ul * 1024 * 1024);
+        var preset = PbrRendererSettings.ForQuality(_options.Quality);
+        var probes = preset.DynamicSceneGi || _preparedLighting?.Probes is not null;
+        var textures = 10u + (probes ? 1u : 0u) + (_preparedLightmaps is not null ? 3u : 0u) + (_preparedCaptures is { Length: > 0 } ? 1u : 0u);
+        if (supported.MaxSampledTexturesPerShaderStage < textures || supported.MaxVertexBuffers < 4 || supported.MaxVertexAttributes < 4)
+            throw new NotSupportedException("The selected PBR lighting requires more sampled textures or vertex attributes than this adapter provides.");
+        required.MaxSampledTexturesPerShaderStage = textures;
+        required.MaxVertexBuffers = 4; required.MaxVertexAttributes = 4;
+        if (preset.Reflections is not null) {
+            if (supported.MaxStorageTexturesPerShaderStage < 4) throw new NotSupportedException("Live reflections require four compute storage textures.");
+            required.MaxStorageTexturesPerShaderStage = 4;
+        }
     }
 
 #if BROWSER

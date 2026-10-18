@@ -26,6 +26,10 @@ struct Material {
 @group(0) @binding(7) var brdf_sampler: sampler;
 @group(0) @binding(11) var depth_sampler: sampler_comparison;
 @group(0) @binding(8) var<uniform> sh: array<vec4<f32>, 9>;
+#if REFLECTION_CAPTURES
+@group(0) @binding(15) var capture_environment: texture_2d_array<f32>;
+@group(0) @binding(16) var<uniform> capture_regions: array<vec4<f32>, #{CAPTURE_REGION_ROWS}>;
+#endif
 #if SCENE_GI
 @group(0) @binding(9) var probe_volume: texture_3d<f32>;
 @group(0) @binding(10) var<uniform> probe_header: array<vec4<f32>,3>;
@@ -37,7 +41,7 @@ struct Material {
 @group(0) @binding(14) var lightmap_pages: texture_2d_array<u32>;
 #endif
 #if RESIDENT_INSTANCES
-@group(1) @binding(0) var<storage, read> vertices: array<vec4<u32>>;
+@group(1) @binding(0) var<storage, read> vertices: array<u32>;
 #else
 @group(1) @binding(0) var<storage, read> vertices: array<vec4<f32>>;
 #endif
@@ -87,22 +91,36 @@ fn unit(v: vec3<f32>) -> vec3<f32> {
     return v * inverseSqrt(max(dot(v, v), 1e-20));
 }
 
+#if RESIDENT_INSTANCES
+fn resident_vec4(offset: u32) -> vec4<u32> {
+    return vec4<u32>(vertices[offset], vertices[offset+1u], vertices[offset+2u], vertices[offset+3u]);
+}
+#endif
+
 fn vertex_plane(index: u32) -> vec4<f32> {
 #if RESIDENT_INSTANCES
-    return bitcast<vec4<f32>>(vertices[index]);
+    return bitcast<vec4<f32>>(resident_vec4(index * 4u));
 #else
     return vertices[index];
 #endif
 }
 
 #if RESIDENT_INSTANCES
-fn resident_tangent(words: vec4<u32>) -> vec4<f32> {
-    let oct = unpack2x16snorm(words.x);
+fn resident_direction(word: u32) -> vec3<f32> {
+    let oct = unpack2x16snorm(word);
     var direction = vec3<f32>(oct, 1.0 - abs(oct.x) - abs(oct.y));
     let fold = clamp(-direction.z, 0.0, 1.0);
     direction = vec3<f32>(direction.xy + select(vec2<f32>(fold), vec2<f32>(-fold), direction.xy >= vec2<f32>(0.0)), direction.z);
+    return unit(direction);
+}
+
+fn resident_normal(word: u32) -> vec3<f32> {
+    return select(resident_direction(word), vec3<f32>(0.0), word == 0x80008000u);
+}
+
+fn resident_tangent(words: vec2<u32>) -> vec4<f32> {
     let magnitude = bitcast<f32>(words.y & 0xfffffffcu);
-    return vec4<f32>(unit(direction) * magnitude, select(1.0, -1.0, (words.y & 1u) != 0u));
+    return vec4<f32>(resident_direction(words.x) * magnitude, select(1.0, -1.0, (words.y & 1u) != 0u));
 }
 #endif
 
@@ -114,6 +132,9 @@ fn shadow_matrix(layer: u32) -> mat4x4<f32> {
 fn vertex_index(triangle: u32, corner: u32) -> u32 {
 #if SHADING_WORK
     return topology[stream_triangle(triangle).x * 3u + corner];
+#elif RESIDENT_INSTANCES
+    let instance = instances[resident_instance(triangle)];
+    return topology[(instance.geometry.x + triangle - instance.material.z) * 3u + corner];
 #else
     return topology[triangle * 3u + corner];
 #endif
@@ -132,18 +153,20 @@ struct Vertex {
 fn vertex_data(triangle: u32, corner: u32) -> Vertex {
     let index = vertex_index(triangle, corner);
     let p = vertex_plane(index);
-    let n = vertex_plane(frame.geometry.x + index);
 #if RESIDENT_INSTANCES
-    let words = vertices[frame.geometry.x * 2u + index];
+    let n = resident_vec4(frame.geometry.x * 4u + index * 4u);
+    let offset = frame.geometry.x * 8u + index * 2u;
+    let words = vec2<u32>(vertices[offset], vertices[offset+1u]);
     let instance = instances[resident_instance(triangle)];
     let tangent = resident_tangent(words);
     return Vertex(
         (instance.transform * vec4<f32>(p.xyz, 1.0)).xyz,
-        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
-        n.zw,
+        (instance.normal_transform * vec4<f32>(resident_normal(n.y), 0.0)).xyz,
+        vec2<f32>(p.w, bitcast<f32>(n.x)),
         vec4<f32>((instance.transform * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w),
-        bitcast<vec2<f32>>(words.zw), (words.y & 2u) != 0u, instance.material.y);
+        bitcast<vec2<f32>>(n.zw), (words.y & 2u) != 0u, instance.material.y);
 #else
+    let n = vertex_plane(frame.geometry.x + index);
     let bake = vertices[frame.geometry.x * 3u + index];
 #if SHADING_WORK
     let instance = instances[stream_triangle(triangle).y];

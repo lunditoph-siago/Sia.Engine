@@ -22,7 +22,10 @@ internal static partial class ExampleContent
             : new[] { recipe.Bunny, recipe.BistroExterior, recipe.BistroInterior, recipe.BistroWine };
         if (selected.Any(entry => entry is null || string.IsNullOrWhiteSpace(entry.Scene)
             || entry.Lightmaps is not null && string.IsNullOrWhiteSpace(entry.Lightmaps)
-            || entry.Environment is not null && string.IsNullOrWhiteSpace(entry.Environment)))
+            || entry.Environment is not null && string.IsNullOrWhiteSpace(entry.Environment)
+            || entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
+            || entry.ReflectionCaptures.Any(string.IsNullOrWhiteSpace)
+            || entry.ReflectionCaptures.Distinct(StringComparer.OrdinalIgnoreCase).Count() != entry.ReflectionCaptures.Length))
             throw new InvalidDataException("Every default requires nonempty selected input paths.");
         string Resolve(string path) => Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!);
         var inputs = selected.Select(entry => MapPaths(entry!, Resolve)).ToArray();
@@ -119,6 +122,7 @@ internal static partial class ExampleContent
                     }
                 }
             }
+            await AddReflectionsAsync(entry, raster, client, names, Admit, maximumFileBytes, maximumBundleBytes - encoded, cancellationToken);
             return names;
         }
         try {

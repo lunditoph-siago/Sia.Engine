@@ -2,7 +2,6 @@ using Sia.Graphics.Text;
 
 namespace Sia.UI;
 
-/// <summary>Owned font bytes and their existing CPU parser value; no atlas or GPU ownership.</summary>
 public sealed class UiFontData
 {
     public const int MaximumBytes = 16 * 1024 * 1024;
