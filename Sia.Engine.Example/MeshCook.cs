@@ -10,6 +10,8 @@ namespace Sia.Engine.Example;
 // Offline application composition; domain builders and asset infrastructure stay independent.
 internal static partial class MeshCook
 {
+    internal readonly record struct Result(AssetId Id, IReadOnlyList<string> Files);
+
     internal const int MaximumRecipeBytes = 64 * 1024;
 
     internal sealed record Recipe
@@ -40,7 +42,7 @@ internal static partial class MeshCook
     [JsonSerializable(typeof(Recipe))]
     private partial class RecipeJsonContext : JsonSerializerContext;
 
-    internal static AssetId Cook(string recipePath, string outputDirectory,
+    internal static Result Cook(string recipePath, string outputDirectory,
         ulong maximumBytes = 128ul * 1024 * 1024, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recipePath);
@@ -108,10 +110,16 @@ internal static partial class MeshCook
             var raster = recipe.Raster is { } rasterId
                 ? Product<MeshRasterAsset, MeshRasterRecord>(rasterId,
                     () => new() { Data = MeshRasterData.Build(source) }, a => a.Data.BuildKey, (a, s) => a.Data.Save(s)) : null;
-            var virtualData = recipe.Virtual is { } virtualRecipe
-                ? Product<MeshVirtualAsset, MeshVirtualRecord>(virtualRecipe.Id,
-                    () => new() { Data = MeshVirtualData.Build(source, virtualRecipe.Settings, maximumBytes, cancellationToken) },
-                    a => a.Data.BuildKey, (a, s) => a.Data.Save(s)) : null;
+            MeshProductReference<MeshVirtualRecord>? virtualData = null;
+            if (recipe.Virtual is { } virtualRecipe) {
+                var derived = MeshVirtualPagesData.Build(source, new(virtualRecipe.Id), virtualRecipe.Settings, maximumBytes, cancellationToken);
+                foreach (var page in derived.Index.Pages) {
+                    Product<MeshVirtualPageAsset, MeshVirtualPageRecord>(page.Id.Value,
+                        () => new() { Data = derived.Pages[page.Id] }, a => a.Data.ContentHash, (a, s) => a.Data.Save(s));
+                }
+                virtualData = Product<MeshVirtualAsset, MeshVirtualRecord>(virtualRecipe.Id,
+                    () => new() { Data = derived.Index }, a => a.Data.BuildKey, (a, s) => a.Data.Save(s));
+            }
             var bvh = recipe.Bvh is { } bvhRecipe
                 ? Product<MeshBvhAsset, MeshBvhRecord>(bvhRecipe.Id,
                     () => new() { Data = MeshBvhData.Build(source, bvhRecipe.Settings, maximumBytes, cancellationToken) },
@@ -122,7 +130,7 @@ internal static partial class MeshCook
             cancellationToken.ThrowIfCancellationRequested();
             RequireStagingDirectory();
             OfflineDirectory.Publish(stage, output, cancellationToken);
-            return new(recipe.Mesh);
+            return new(new(recipe.Mesh), files.Select(Path.GetFileName).ToArray()!);
         }
         catch (Exception error) {
             // Exact files only; preserve unexpected files instead of deleting a directory recursively.

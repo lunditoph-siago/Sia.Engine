@@ -57,6 +57,10 @@ internal sealed partial class PbrGpuScene : IDisposable
         : this(frame, source.Materials, source.Instances, source.Geometry.Length,
             g => new(source.Geometry.Span[g]), layout, budget, materialBatches, default) { }
 
+    private PbrGpuScene(in GpuFrame frame, PbrSceneStream source, Entity layout, ulong budget, int[] materialBatches, Entity instances)
+        : this(frame, source.Bootstrap.Materials, source.TransparentInstances, source.TransparentGeometry.Length,
+            g => new(source.TransparentGeometry[g]), layout, budget, materialBatches, instances) { }
+
     private PbrGpuScene(in GpuFrame frame, ReadOnlyMemory<PbrMaterialAsset> materials,
         ReadOnlyMemory<PbrSceneInstance> sourceInstances, int geometryCount, Func<int, PbrResidentGeometry> prepareGeometry,
         Entity layout, ulong budget, int[] materialBatches, Entity instanceBuffer)

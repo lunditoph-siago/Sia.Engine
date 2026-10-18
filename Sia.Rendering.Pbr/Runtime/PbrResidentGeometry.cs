@@ -10,6 +10,7 @@ internal sealed class PbrResidentGeometry : IDisposable
 
     private readonly MeshPatchTree? _tree;
     private readonly PbrRasterGeometry? _raster;
+    private readonly PbrSceneStream.PageGeometry? _page;
     private readonly Dictionary<uint, uint>? _rasterRemap;
     private int[]? _remap;
     private int[]? _source;
@@ -69,6 +70,12 @@ internal sealed class PbrResidentGeometry : IDisposable
         catch { Dispose(); throw; }
     }
 
+    public PbrResidentGeometry(PbrSceneStream.PageGeometry geometry)
+    {
+        _page = geometry; VertexCount = geometry.Page.Vertices.Length;
+        Fine = (uint)geometry.TriangleCount; Bounds = geometry.Page.Bounds;
+    }
+
     public void PackVertices(Span<float4> packed, int first, int count, float4x4 transform,
         float4x4 normal, int material, int planeStride = 0)
     {
@@ -76,7 +83,7 @@ internal sealed class PbrResidentGeometry : IDisposable
         if (first < 0 || count < 0 || first > VertexCount - count || stride < count
             || packed.Length < checked(stride * 2 + count))
             throw new ArgumentOutOfRangeException(nameof(count));
-        var vertices = _tree is not null ? _tree.Vertices : _raster!.Product.Vertices;
+        var vertices = _tree is not null ? _tree.Vertices : _raster is not null ? _raster.Product.Vertices : _page!.Value.Page.Vertices;
         for (var v = 0; v < count; v++) {
             var vertex = vertices[_source is null ? first + v : _source[first + v]];
             var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
@@ -98,6 +105,10 @@ internal sealed class PbrResidentGeometry : IDisposable
 
     public void WriteIndices(ref IndexWriter writer, uint vertexOffset)
     {
+        if (_page is { } page) {
+            foreach (var index in page.Page.Indices.Slice(page.FirstTriangle * 3, page.TriangleCount * 3)) writer.Append(checked(vertexOffset + index));
+            return;
+        }
         if (_raster is not null) {
             foreach (var index in _raster.Indices) writer.Append(checked(vertexOffset + _rasterRemap![index]));
             return;

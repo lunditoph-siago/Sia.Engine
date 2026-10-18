@@ -76,9 +76,10 @@ internal static partial class ContentCook
             foreach (var input in meshInputs) {
                 cancellationToken.ThrowIfCancellationRequested(); RequireStage();
                 var bundle = Path.Combine(stage, input.Id.Value.ToString("N"));
-                var cookedId = MeshCook.Cook(input.Path, bundle, (ulong)maximumFileBytes, cancellationToken);
-                if (cookedId != input.Id) throw new InvalidDataException("Mesh recipe identity changed during preparation.");
-                meshes.Add(new() { Id = cookedId.Value, Input = Path.Combine(bundle, cookedId.Value.ToString("N") + ".siaasset") });
+                var cooked = MeshCook.Cook(input.Path, bundle, (ulong)maximumFileBytes, cancellationToken);
+                foreach (var file in cooked.Files) input.Files.Add(file);
+                if (cooked.Id != input.Id) throw new InvalidDataException("Mesh recipe identity changed during preparation.");
+                meshes.Add(new() { Id = cooked.Id.Value, Input = Path.Combine(bundle, cooked.Id.Value.ToString("N") + ".siaasset") });
             }
             var preparedRecipe = JsonSerializer.SerializeToUtf8Bytes(scene with { Meshes = meshes.ToArray() },
                 ContentRecipeJsonContext.Default.SceneRecipe);

@@ -112,6 +112,7 @@ internal static partial class ScenePack
             var meshes = new Dictionary<AssetId, MeshManifestRecord>();
             var rasters = new Dictionary<AssetId, MeshRasterRecord>(); var virtuals = new Dictionary<AssetId, MeshVirtualRecord>();
             var bvhs = new Dictionary<AssetId, MeshBvhRecord>();
+            var virtualPages = new Dictionary<AssetId, MeshVirtualPageRecord>();
             var materials = new Dictionary<AssetId, PbrMaterialRecord>(); var textures = new Dictionary<AssetId, PbrTextureRecord>();
             var used = new bool[scene.Data.Bindings.Length]; foreach (var instance in scene.Data.Instances) used[instance.Binding] = true;
             for (var bindingIndex = 0; bindingIndex < used.Length; bindingIndex++) {
@@ -131,7 +132,19 @@ internal static partial class ScenePack
                     }
                     if (recipe.Virtual) {
                         var id = mesh.Data.Virtual?.Id ?? throw new InvalidDataException("Selected Mesh has no Virtual product.");
-                        if (!virtuals.ContainsKey(id)) virtuals.Add(id, await Read(id, Product(id), (s, n) => MeshVirtualRecord.Load(s, (ulong)maximumFileBytes, n)));
+                        if (!virtuals.TryGetValue(id, out var virtualRecord)) {
+                            virtualRecord = await Read(id, Product(id), (s, n) => MeshVirtualRecord.Load(s, (ulong)maximumFileBytes, n));
+                            if (virtualRecord.Data.ProductId != id) throw new InvalidAssetException("Virtual index belongs to another logical product.");
+                            virtuals.Add(id, virtualRecord);
+                            for (var p = 0; p < virtualRecord.Data.Pages.Length; p++) {
+                                var page = virtualRecord.Data.Pages[p];
+                                if (!virtualPages.TryGetValue(page.Id, out var pageRecord)) {
+                                    pageRecord = await Read(page.Id, Product(page.Id), (s, n) => MeshVirtualPageRecord.Load(s, (ulong)MeshVirtualPageData.MaximumEncodedBytes, n));
+                                    virtualPages.Add(page.Id, pageRecord);
+                                }
+                                virtualRecord.Data.ValidatePage(p, pageRecord.Data, cancellationToken);
+                            }
+                        }
                     }
                     if (recipe.Bvh) {
                         var id = mesh.Data.Bvh?.Id ?? throw new InvalidDataException("Selected Mesh has no BVH product.");
@@ -153,7 +166,12 @@ internal static partial class ScenePack
             using (var world = new World()) {
                 world.AddAddon<AssetLibrary>();
                 if (recipe.Raster) PbrSceneFiles.AcquireRaster(world, new(sceneId, scene, meshes, rasters, materials, textures)).Root.Destroy();
-                if (recipe.Virtual) PbrSceneFiles.AcquireVirtual(world, new(sceneId, scene, meshes, virtuals, materials, textures)).Root.Destroy();
+                if (recipe.Virtual) {
+                    AssetLibrary.RegisterAsset<MeshVirtualPageAsset, MeshVirtualPageRecord>();
+                    var use = PbrSceneFiles.AcquireVirtual(world, new(sceneId, scene, meshes, virtuals, materials, textures));
+                    try { foreach (var page in virtualPages) world.AcquireAsset(page.Key, () => page.Value, use.Root); }
+                    finally { use.Root.Destroy(); }
+                }
                 if (recipe.Bvh) PbrSceneFiles.AcquireBvh(world, new(sceneId, scene, meshes, bvhs, materials, textures)).Root.Destroy();
             }
             cancellationToken.ThrowIfCancellationRequested(); RequireStage();

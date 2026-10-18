@@ -12,24 +12,26 @@ public readonly record struct PageSchedulerStatistics(
     long Failed,
     long Cancelled);
 
-public sealed class BoundedPageScheduler : IAsyncDisposable
+public sealed class BoundedPageScheduler<TPrepared> : IAsyncDisposable
 {
     private sealed class Request(
         StreamPageDemand demand,
-        Task<StreamGeometryPage> task,
+        Task<TPrepared> task,
         CancellationTokenSource cancellation)
     {
         public readonly StreamPageDemand Demand = demand;
         public readonly CancellationTokenSource Cancellation = cancellation;
-        public readonly Task<StreamGeometryPage> Task = task;
+        public readonly Task<TPrepared> Task = task;
     }
 
-    private readonly Func<string, CancellationToken, Task<StreamGeometryPage>> _read;
+    private readonly Func<string, CancellationToken, Task<TPrepared>> _read;
     private readonly Dictionary<string, Request> _requests = [with(StringComparer.Ordinal)];
     private readonly Dictionary<string, DateTime> _retry = [with(StringComparer.Ordinal)];
     private readonly Dictionary<string, StreamPageDemand> _wanted = [with(StringComparer.Ordinal)];
     private readonly List<string> _expiredRetries = [];
     private readonly List<KeyValuePair<string, Request>> _requestSnapshot = [];
+    private readonly Func<TPrepared, int> _decodedBytes;
+    private readonly int _maximumPageBytes;
     private readonly int _maximumRequests;
     private readonly long _maximumBytes;
     private long _reserved, _peak, _completed, _failed, _cancelled;
@@ -40,13 +42,14 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
     public IEnumerable<string> ReadyIds => _requests.Where(p => !p.Value.Cancellation.IsCancellationRequested
         && p.Value.Task.IsCompletedSuccessfully).Select(p => p.Key);
 
-    public BoundedPageScheduler(Func<string, CancellationToken, Task<StreamGeometryPage>> read,
-        int maximumRequests = 2, long maximumDecodedBytes = 2 * StreamGeometryPage.MaximumBytes)
+    public BoundedPageScheduler(Func<string, CancellationToken, Task<TPrepared>> read, Func<TPrepared, int> decodedBytes, int maximumPageBytes,
+        int maximumRequests = 2, long maximumDecodedBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(read);
-        if (maximumRequests < 1 || maximumDecodedBytes < StreamGeometryPage.MaximumBytes)
+        if (maximumRequests < 1 || maximumPageBytes < 1 || maximumDecodedBytes < maximumPageBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumRequests));
-        (_read, _maximumRequests, _maximumBytes) = (read, maximumRequests, maximumDecodedBytes);
+        ArgumentNullException.ThrowIfNull(decodedBytes);
+        (_read, _decodedBytes, _maximumPageBytes, _maximumRequests, _maximumBytes) = (read, decodedBytes, maximumPageBytes, maximumRequests, maximumDecodedBytes);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -62,7 +65,7 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
         foreach (var id in _expiredRetries)
             _retry.Remove(id);
         foreach (var d in demands) {
-            if (string.IsNullOrEmpty(d.Id) || d.DecodedBytes is < 28 or > StreamGeometryPage.MaximumBytes || !float.IsFinite(d.Priority))
+            if (string.IsNullOrEmpty(d.Id) || (d.DecodedBytes < 1 || d.DecodedBytes > _maximumPageBytes) || !float.IsFinite(d.Priority))
                 throw new ArgumentException("Invalid page demand.");
             ref var previous = ref CollectionsMarshal.GetValueRefOrAddDefault(wanted, d.Id, out var exists);
             if (exists) {
@@ -107,11 +110,11 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
             }
             if (best is not { } d) break;
             var cancellation = new CancellationTokenSource();
-            Task<StreamGeometryPage> task;
+            Task<TPrepared> task;
             try {
                 task = Task.Run(() => _read(d.Id, cancellation.Token));
             }
-            catch (Exception error) { task = Task.FromException<StreamGeometryPage>(error); }
+            catch (Exception error) { task = Task.FromException<TPrepared>(error); }
             var request = new Request(d, task, cancellation);
             _requests.Add(d.Id, request);
             _reserved += d.DecodedBytes;
@@ -119,13 +122,13 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
         }
     }
 
-    public bool TryGetReady(string id, out StreamGeometryPage? page)
+    public bool TryGetReady(string id, out TPrepared? page)
     {
-        page = null;
+        page = default;
         if (!_requests.TryGetValue(id, out var request) || request.Cancellation.IsCancellationRequested || !request.Task.IsCompletedSuccessfully)
             return false;
         page = request.Task.Result;
-        if (page.Bytes.Length != request.Demand.DecodedBytes)
+        if (_decodedBytes(page!) != request.Demand.DecodedBytes)
             throw new InvalidDataException("Decoded page exceeded its reservation.");
         return true;
     }

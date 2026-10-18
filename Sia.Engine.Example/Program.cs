@@ -25,7 +25,7 @@ public static partial class Program
             PbrSceneFiles.Prepared? references = null;
             if (scenePath is not null) references = options.Quality == Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp)
-                : await PbrSceneFiles.PrepareVirtualAsync(scenePath, streamHttp);
+                : await PbrSceneFiles.PrepareStreamingAsync(scenePath, streamHttp);
             var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath, options.ProbesPath, streamHttp);
             var app = new SceneExampleApp(options, references, lighting);
             references = null;
