@@ -22,7 +22,6 @@ internal static class AssetInput
     internal static bool TryGetHttpUri(string path, out Uri? uri)
         => Uri.TryCreate(path, UriKind.Absolute, out uri) && uri.Scheme is "http" or "https";
 
-    // The caller owns the returned stream; the shared client remains alive for scene chunks.
     internal static async Task<Stream> OpenAsync(string path, HttpClient client,
         CancellationToken cancellationToken = default)
         => TryGetHttpUri(path, out var uri)

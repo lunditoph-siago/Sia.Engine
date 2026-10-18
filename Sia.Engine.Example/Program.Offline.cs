@@ -40,9 +40,6 @@ public static partial class Program
             case ["--bake-probes", var scene, "--output", var output]:
                 BakeProbes(scene, output);
                 return true;
-            case ["--cook-stream", var scene, "--output", var output]:
-                await CookStreamAsync(scene, output);
-                return true;
         }
         return false;
     }
@@ -99,20 +96,7 @@ public static partial class Program
     private static void BakeProbes(string scenePath, string output)
     {
         using var client = new HttpClient();
-        SceneTraceData tracing;
-        if (PbrSceneFiles.IsReferenceScene(scenePath)) {
-            tracing = PrepareReferenceProbeTraceAsync(scenePath, client).GetAwaiter().GetResult();
-        }
-        else {
-            var streaming = scenePath.EndsWith(".siastream", StringComparison.OrdinalIgnoreCase)
-                ? OpenStreamAsync(scenePath, client).GetAwaiter().GetResult() : null;
-            try {
-                tracing = streaming is null
-                    ? PbrSceneTransport.Build(PbrSceneAsset.Decode(File.ReadAllBytes(scenePath), 1024 * 1024 * 1024))
-                    : PbrSceneTransport.Build(streaming);
-            }
-            finally { if (streaming is not null) streaming.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
-        }
+        var tracing = PrepareReferenceProbeTraceAsync(scenePath, client).GetAwaiter().GetResult();
         var sky = new ProceduralSky { Intensity = .75f };
         var volume = PbrSceneTransport.CreateVolume(tracing, new(4, 4, 4), sky);
         var instance = Wgpu.CreateInstance();

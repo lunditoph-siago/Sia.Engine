@@ -32,16 +32,12 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private readonly SceneOptions _options;
 
-    public SceneExampleApp(SceneOptions options, PbrSceneAsset? materialScene = null,
-        PbrSceneStream? streaming = null, PbrSceneFiles.Prepared? references = null, LightingFiles.Prepared? lighting = null)
+    public SceneExampleApp(SceneOptions options, PbrSceneFiles.Prepared? references, LightingFiles.Prepared lighting)
     {
         _options = options;
         _pipeline = options.Pipeline;
-        _materialScene = materialScene;
         _referenceScene = references;
         _preparedLighting = lighting;
-        _materialStream = streaming;
-        _materialInstanceCount = (materialScene?.Instances.Length ?? 0) + (streaming?.Instances.Length ?? 0);
         _patchDebugMode = _pipeline == ScenePipeline.Bunny
             ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded;
         _patchDistance = _pipeline == ScenePipeline.Pbr ? .6f : 0;
@@ -80,8 +76,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         }
     }
 
-#endif
-
     private void Initialize()
     {
         Glfw.Initialize();
@@ -119,6 +113,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         UpdateScene(0f);
         RenderFrame();
     }
+#endif
 
     private WGPURequestAdapterOptions BuildAdapterOptions(
         WGPUFeatureLevel featureLevel = WGPUFeatureLevel.Core,

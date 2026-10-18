@@ -19,10 +19,6 @@ internal static class PbrSceneFiles
         IReadOnlyDictionary<AssetId, PbrMaterialRecord> Materials, IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures)
         : Prepared(Id, Scene, Meshes, Materials, Textures) where TProduct : class, IAssetRecord;
 
-    internal static bool IsReferenceScene(string path)
-        => (AssetInput.TryGetHttpUri(path, out var uri) ? uri!.AbsolutePath : path)
-            .EndsWith(".siascene", StringComparison.OrdinalIgnoreCase);
-
     internal static Task<Prepared<MeshVirtualRecord>> PrepareVirtualAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
         CancellationToken cancellationToken = default)
@@ -52,8 +48,10 @@ internal static class PbrSceneFiles
         ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes); ArgumentOutOfRangeException.ThrowIfNegative(maximumTotalBytes);
         cancellationToken.ThrowIfCancellationRequested();
         var http = AssetInput.TryGetHttpUri(path, out var uri);
-        var filename = Path.GetFileNameWithoutExtension(http ? uri!.AbsolutePath : path);
-        if (!IsReferenceScene(path) || !Guid.TryParseExact(filename, "N", out var guid) || guid == Guid.Empty)
+        var sourcePath = http ? uri!.AbsolutePath : path;
+        var filename = Path.GetFileNameWithoutExtension(sourcePath);
+        if (!sourcePath.EndsWith(".siascene", StringComparison.OrdinalIgnoreCase)
+            || !Guid.TryParseExact(filename, "N", out var guid) || guid == Guid.Empty)
             throw new ArgumentException("Reference scenes require a nonempty Guid in N format and .siascene suffix.", nameof(path));
         var root = http ? null : Path.GetDirectoryName(Path.GetFullPath(path))!;
         string Locate(AssetId id) => http ? new Uri(uri!, id.Value.ToString("N") + ".siaasset").AbsoluteUri

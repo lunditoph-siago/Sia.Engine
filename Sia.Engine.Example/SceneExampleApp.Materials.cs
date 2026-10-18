@@ -11,7 +11,6 @@ internal sealed partial class SceneExampleApp
 {
     private PbrSceneAsset? _materialScene;
     private PbrRasterScene? _rasterScene;
-    private readonly PbrSceneStream? _materialStream;
     private int _materialInstanceCount;
     private PbrSceneFiles.Prepared? _referenceScene;
     private Entity _assetRoot;
@@ -58,9 +57,6 @@ internal sealed partial class SceneExampleApp
                 }
             }
         }
-        if (_materialStream is { } stream) {
-            _materialBounds = new(math.min(_materialBounds.Min, stream.Bounds.Min), math.max(_materialBounds.Max, stream.Bounds.Max));
-        }
         var shadows = world.AcquireAddon<ShadowAtlasConfig>();
         shadows.TileResolution = _qualitySettings.ShadowResolution;
         shadows.CascadeCount = 3;
@@ -87,16 +83,12 @@ internal sealed partial class SceneExampleApp
             TargetPixelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.TargetPixelError == 0 ? .25f : preset.TargetPixelError,
             ShadowTexelError = _pipeline == ScenePipeline.Bunny ? BunnyPixelError : preset.ShadowTexelError == 0 ? .25f : preset.ShadowTexelError,
         };
-        _sceneRenderer = _materialStream is { } stream
-            ? new PbrRenderer(in frame, stream, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
-            : _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
+        _sceneRenderer = _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _patchDebugMode }
             : new PbrRenderer(in frame, _materialScene!, _surfaceFormat, settings) { DebugMode = _patchDebugMode };
         InitializeInspectionControls();
-        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}. Geometry {(_materialStream is null ? "resident" : "hierarchical stream")}.");
+        Console.WriteLine($"PBR workflow: {_options.Quality}; {settings.OpaquePath}; pixel error {settings.TargetPixelError}; shadow texel error {settings.ShadowTexelError}; shadow size {settings.ShadowResolution}; environment {(settings.BakedEnvironment is null ? "procedural" : "baked")}.");
         Console.WriteLine($"Scene diffuse GI: {(settings.DynamicSceneGi ? "dynamic probes" : settings.BakedProbes is not null ? "baked probes" : "environment only")}; updates {settings.ProbeUpdates}; samples {settings.ProbeSamples}. Card atlas, local-light transport, multiple bounces and temporal reconstruction are pending.");
         _materialScene = null;
         _rasterScene = null;
     }
-
-    public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
 }

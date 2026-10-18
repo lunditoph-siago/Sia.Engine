@@ -18,8 +18,7 @@ internal sealed partial class SceneExampleApp
 
     public async Task RunAsync()
     {
-        if (_materialScene is { } scene) SetSceneAttribution(scene.Attribution);
-        else if (_referenceScene is { } references) SetSceneAttribution(references.Scene.Data.Attribution);
+        if (_referenceScene is { } references) SetSceneAttribution(references.Scene.Data.Attribution);
         await Program.BrowserOwner.RunGraphicsAsync(async () => {
             CaptureBrowserState();
             await InitializeAsync();
