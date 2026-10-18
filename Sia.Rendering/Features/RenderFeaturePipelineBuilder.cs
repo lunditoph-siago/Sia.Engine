@@ -3,13 +3,15 @@ namespace Sia.Engine.Rendering;
 public sealed class RenderFeaturePipelineBuilder<TContext>
 {
     private sealed record Entry(
+        RenderFeatureKey Key,
         IRenderFeature Feature,
         HashSet<RenderFeatureKey> RunsAfter,
         HashSet<RenderFeatureKey> RunsBefore,
-        int InsertionIndex);
+        long InsertionIndex);
 
     private readonly List<Entry> _entries = [];
     private readonly Dictionary<RenderFeatureKey, Entry> _entriesByKey = [];
+    private long _nextInsertionIndex;
 
     public RenderFeaturePipelineBuilder<TContext> Add(
         IRenderFeature feature,
@@ -17,18 +19,23 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
         IEnumerable<RenderFeatureKey>? runsBefore = null)
     {
         ArgumentNullException.ThrowIfNull(feature);
-        if (_entriesByKey.ContainsKey(feature.Key)) {
+        var key = feature.Key;
+        ArgumentException.ThrowIfNullOrWhiteSpace(key.Value, nameof(feature));
+        if (_entriesByKey.ContainsKey(key)) {
             throw new InvalidOperationException(
-                $"Render feature '{feature.Key}' is already registered.");
+                $"Render feature '{key}' is already registered.");
         }
 
         var entry = new Entry(
+            key,
             feature,
             runsAfter?.ToHashSet() ?? [],
             runsBefore?.ToHashSet() ?? [],
-            _entries.Count);
+            _nextInsertionIndex);
+        var nextInsertionIndex = checked(_nextInsertionIndex + 1);
         _entries.Add(entry);
-        _entriesByKey.Add(feature.Key, entry);
+        _entriesByKey.Add(key, entry);
+        _nextInsertionIndex = nextInsertionIndex;
         return this;
     }
 
@@ -53,7 +60,7 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
             }
         }
 
-        var ready = new PriorityQueue<Entry, int>();
+        var ready = new PriorityQueue<Entry, long>();
         foreach (var entry in _entries) {
             if (incomingCounts[entry] == 0) {
                 ready.Enqueue(entry, entry.InsertionIndex);
@@ -75,7 +82,7 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
             var cyclicKeys = incomingCounts
                 .Where(static pair => pair.Value != 0)
                 .OrderBy(static pair => pair.Key.InsertionIndex)
-                .Select(static pair => pair.Key.Feature.Key);
+                .Select(static pair => pair.Key.Key);
             throw new InvalidOperationException(
                 $"Render feature ordering contains a cycle: {string.Join(", ", cyclicKeys)}.");
         }
@@ -97,7 +104,7 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
     {
         if (from == to) {
             throw new InvalidOperationException(
-                $"Render feature '{from.Feature.Key}' cannot be ordered relative to itself.");
+                $"Render feature '{from.Key}' cannot be ordered relative to itself.");
         }
         if (outgoing[from].Add(to)) {
             incomingCounts[to]++;

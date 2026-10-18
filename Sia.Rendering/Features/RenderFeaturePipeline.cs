@@ -4,11 +4,12 @@ public sealed class RenderFeaturePipeline<TContext>
 {
     private readonly IRenderFeature[] _features;
 
-    public IReadOnlyList<IRenderFeature> Features => _features;
+    public IReadOnlyList<IRenderFeature> Features { get; }
 
     internal RenderFeaturePipeline(IRenderFeature[] features)
     {
         _features = features;
+        Features = Array.AsReadOnly(features);
     }
 
     public void Extract(in RenderFeatureContext<TContext> context)
@@ -38,18 +39,21 @@ public sealed class RenderFeaturePipeline<TContext>
         }
     }
 
-    public void PrepareFrame(RenderWorld world, ReadOnlySpan<RenderFeatureContext<TContext>> contexts)
+    public void RunFrame(RenderWorld world, ReadOnlySpan<RenderFeatureContext<TContext>> contexts)
     {
         ArgumentNullException.ThrowIfNull(world);
+        ObjectDisposedException.ThrowIf(world.IsDisposed, world);
         var views = new HashSet<RenderView>();
         foreach (ref readonly var context in contexts) {
-            if (!ReferenceEquals(context.RenderWorld, world) || !world.Views.Contains(context.View))
+            if (!ReferenceEquals(context.RenderWorld, world) || !world.ContainsView(context.View))
                 throw new ArgumentException("All contexts must belong to the supplied render world.", nameof(contexts));
             if (!views.Add(context.View))
                 throw new ArgumentException("Each view may be prepared only once per batch.", nameof(contexts));
         }
+        foreach (ref readonly var context in contexts) Extract(in context);
         foreach (var feature in _features)
             if (feature is IPrepareRenderFeature<TContext> prepare) prepare.PrepareFrame(world, contexts);
+        foreach (ref readonly var context in contexts) Queue(in context);
     }
 
     public void BuildRenderGraph(
