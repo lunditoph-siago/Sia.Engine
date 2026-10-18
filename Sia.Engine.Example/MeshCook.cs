@@ -10,8 +10,9 @@ namespace Sia.Engine.Example;
 // Offline application composition; domain builders and asset infrastructure stay independent.
 internal static partial class MeshCook
 {
-    internal const int MaximumRecipeBytes = 64 * 1024;
     internal readonly record struct Result(AssetId Id, IReadOnlyList<string> Files);
+
+    internal const int MaximumRecipeBytes = 64 * 1024;
 
     internal sealed record Recipe
     {
@@ -129,7 +130,7 @@ internal static partial class MeshCook
             cancellationToken.ThrowIfCancellationRequested();
             RequireStagingDirectory();
             OfflineDirectory.Publish(stage, output, cancellationToken);
-            return new(new(recipe.Mesh), files.Select(path => Path.GetFileName(path)).ToArray());
+            return new(new(recipe.Mesh), files.Select(Path.GetFileName).ToArray()!);
         }
         catch (Exception error) {
             // Exact files only; preserve unexpected files instead of deleting a directory recursively.
@@ -146,15 +147,7 @@ internal static partial class MeshCook
     }
 
     internal static Recipe ReadRecipe(string path)
-    {
-        using var file = File.OpenRead(path);
-        if (file.Length > MaximumRecipeBytes) throw new InvalidDataException("Mesh recipe exceeds 64 KiB.");
-        var bytes = new byte[(int)file.Length];
-        file.ReadExactly(bytes);
-        if (file.ReadByte() != -1) throw new InvalidDataException("Mesh recipe changed while reading.");
-        return JsonSerializer.Deserialize(bytes, RecipeJsonContext.Default.Recipe)
-            ?? throw new InvalidDataException("Mesh recipe must be an object.");
-    }
+        => AssetInput.ReadJson(path, RecipeJsonContext.Default.Recipe, MaximumRecipeBytes);
 
     private static void Validate(Recipe recipe)
     {

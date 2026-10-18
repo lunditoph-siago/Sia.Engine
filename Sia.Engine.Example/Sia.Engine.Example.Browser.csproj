@@ -51,5 +51,5 @@
       <_WasmPInvokeModules Include="__Internal_glfw" />
     </ItemGroup>
   </Target>
-  <Import Project="Bistro.targets" />
+  <Import Project="ExampleContent.targets" />
 </Project>
