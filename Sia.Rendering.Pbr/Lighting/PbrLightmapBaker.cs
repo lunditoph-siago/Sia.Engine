@@ -39,7 +39,7 @@ public sealed partial record PbrLightmapBakeSettings
 /// Integrates sky visibility, emission and one shadowed directional diffuse bounce using mean material colors.
 /// Direct-light shading is excluded. Callers serialize BakePage and publish/discard outputs explicitly.
 /// </summary>
-public sealed class PbrLightmapBaker
+public sealed partial class PbrLightmapBaker
 {
     private readonly record struct Surface(float3 Albedo, float3 Emission, bool DoubleSided);
     private readonly PbrBvhTrace _trace;

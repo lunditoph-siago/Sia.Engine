@@ -9,6 +9,7 @@ public sealed partial class SceneTraceData
     public ReadOnlyMemory<uint4> Geometry { get; }
     public ReadOnlyMemory<uint4> Instances { get; }
     public bool IsInstanced => !Geometry.IsEmpty;
+    /// <summary>Logical buffer bytes, including possibly shared immutable geometry; count shared allocations once in combined budgets.</summary>
     public ulong PayloadBytes => ((ulong)Packed.Length + (ulong)Geometry.Length + (ulong)Instances.Length) * 16;
 
     /// <summary>
@@ -19,6 +20,11 @@ public sealed partial class SceneTraceData
     public SceneTraceData(ReadOnlySpan<uint4> geometry, ReadOnlySpan<uint4> instances,
         ReadOnlySpan<float4> surfaces, ulong maximumBytes = 128ul * 1024 * 1024,
         ReadOnlySpan<byte> sceneIdentity = default, CancellationToken cancellationToken = default)
+        : this(geometry, instances, surfaces, maximumBytes, sceneIdentity, cancellationToken, default) { }
+
+    private SceneTraceData(ReadOnlySpan<uint4> geometry, ReadOnlySpan<uint4> instances,
+        ReadOnlySpan<float4> surfaces, ulong maximumBytes, ReadOnlySpan<byte> sceneIdentity,
+        CancellationToken cancellationToken, ReadOnlyMemory<uint4> borrowedGeometry)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!sceneIdentity.IsEmpty && sceneIdentity.Length != 32) throw new ArgumentException("Scene identity must contain 32 bytes.", nameof(sceneIdentity));
@@ -63,7 +69,7 @@ public sealed partial class SceneTraceData
             if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
             Require(instances[(int)(instances[2].x + i / 4)][(int)(i % 4)] < top.z);
             var offset = (int)(top.w + i * 5); var meta = instances[offset];
-            Require(meta.x < tables.y && meta.y < top.z && meta.z == i);
+            Require(meta.x < tables.y && meta.y < top.z && meta.z == i && meta.w <= 1);
             for (var row = 2; row < 5; row++) {
                 var value = instances[offset + row];
                 Require(math.all(math.isfinite(Vector(value))) && float.IsFinite(BitConverter.UInt32BitsToSingle(value.w)));
@@ -83,7 +89,8 @@ public sealed partial class SceneTraceData
             Require(math.all(math.isfinite(surfaces[i])) && math.all(surfaces[i].xyz >= 0)
                 && (surfaces[i].w == 0 || surfaces[i].w == 1));
         }
-        Geometry = geometry.ToArray(); Instances = instances.ToArray(); Packed = surfaces.ToArray();
+        Geometry = borrowedGeometry.IsEmpty ? geometry.ToArray() : borrowedGeometry;
+        Instances = instances.ToArray(); Packed = surfaces.ToArray();
         Bounds = top.x == 0 ? new(float3.zero, float3.zero)
             : new(Vector(instances[(int)top.y]), Vector(instances[(int)top.y + 1]));
         TriangleCount = triangles;
@@ -95,6 +102,15 @@ public sealed partial class SceneTraceData
             hash.AppendData(MemoryMarshal.AsBytes(Packed.Span)); Identity = hash.GetHashAndReset();
         }
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>Validates a complete independent transport domain while sharing this immutable local geometry packet.</summary>
+    public SceneTraceData WithTransport(ReadOnlySpan<uint4> instances, ReadOnlySpan<float4> surfaces,
+        ReadOnlySpan<byte> sceneIdentity, ulong maximumBytes = 128ul * 1024 * 1024,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsInstanced) throw new InvalidOperationException("Transport domains require shared local geometry.");
+        return new(Geometry.Span, instances, surfaces, maximumBytes, sceneIdentity, cancellationToken, Geometry);
     }
 
     private static void ValidateNodes(ReadOnlySpan<uint4> rows, uint offset, uint count, uint items, CancellationToken token)

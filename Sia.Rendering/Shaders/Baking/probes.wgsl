@@ -22,11 +22,53 @@ struct ProbeConfig {
 #import rendering/Geometry/instance_trace
 @group(0) @binding(4) var<storage, read> instance_trace_geometry: array<vec4<u32>>;
 @group(0) @binding(5) var<storage, read> instance_trace_instances: array<vec4<u32>>;
-fn instance_trace_accept_material(material: u32) -> bool {
+#ifdef PAIRED_PROBE_TRACE
+@group(0) @binding(6) var<uniform> reference_config: ProbeConfig;
+@group(0) @binding(7) var<storage, read> reference_surfaces: array<vec4<f32>>;
+@group(0) @binding(8) var<storage, read> instance_trace_reference_instances: array<vec4<u32>>;
+#endif
+fn probe_surface(row: u32, reference: bool) -> vec4<f32> {
+#ifdef PAIRED_PROBE_TRACE
+    if (reference) { return reference_surfaces[row]; }
+#endif
+    return tracing[row];
+}
+fn instance_trace_accept_material(material: u32, reference: bool) -> bool {
+#ifdef PAIRED_PROBE_TRACE
+    if (reference) { return material < arrayLength(&reference_surfaces) / 2u && reference_surfaces[material * 2u + 1u].w < 0.5; }
+#endif
     return material < arrayLength(&tracing) / 2u && tracing[material * 2u + 1u].w < 0.5;
 }
 fn trace_scene(origin: vec3<f32>, direction: vec3<f32>, maximum: f32) -> InstanceTraceHit {
     return trace_instances(origin, direction, 0.001, maximum);
+}
+// One frozen bake-domain bounce. Return backface validity separately from signed energy.
+fn probe_incident(origin: vec3<f32>, direction: vec3<f32>, reference: bool) -> vec4<f32> {
+    var lighting = config;
+#ifdef PAIRED_PROBE_TRACE
+    if (reference) { lighting = reference_config; }
+#endif
+    let hit = trace_instances_domain(origin, direction, 0.0, lighting.light_direction.w, reference);
+    var radiance = sky_color(direction, lighting.sky);
+    var back = 0.0;
+    if (hit.instance != 0xffffffffu) {
+        let material = hit.material * 2u;
+        let diffuse = probe_surface(material, reference);
+        let double_sided = diffuse.w > 0.5;
+        radiance = vec3<f32>(0.0);
+        if (!hit.front && !double_sided) { back = 1.0; }
+        else {
+            let normal = select(-hit.normal, hit.normal, hit.front);
+            let point = origin + direction * hit.parameter + normal * lighting.light_radiance.w;
+            radiance = probe_surface(material + 1u, reference).xyz;
+            let cosine = max(dot(normal, lighting.light_direction.xyz), 0.0);
+            if (cosine > 0.0 && trace_instances_domain(point, lighting.light_direction.xyz, 0.0,
+                lighting.light_direction.w, reference).instance == 0xffffffffu) {
+                radiance += diffuse.xyz * lighting.light_radiance.xyz * cosine / IBL_PI;
+            }
+        }
+    }
+    return vec4<f32>(radiance, back);
 }
 #else
 struct TraceHit {
@@ -91,11 +133,20 @@ fn integrate_probes(
     let position = config.origin.xyz+vec3<f32>(coordinate)*config.step.xyz;
     let samples = u32(config.update.z);
     var sum: array<vec3<f32>,9>;
+#ifdef PAIRED_PROBE_TRACE
+    var live_sum: array<vec3<f32>,4>;
+#endif
     var backs = 0u;
     for (var i=lane; i<samples; i+=64u) {
         let y = 1.0-2.0*(f32(i)+0.5)/f32(samples);
         let r = sqrt(max(0.0,1.0-y*y)); let theta = 2.39996323*f32(i);
         let direction = vec3<f32>(cos(theta)*r,y,sin(theta)*r);
+#ifdef PAIRED_PROBE_TRACE
+        let live = probe_incident(position, direction, false);
+        let reference = probe_incident(position, direction, true);
+        let radiance = live.xyz - reference.xyz;
+        backs += u32(max(live.w, reference.w));
+#else
         let hit = trace_scene(position,direction,config.light_direction.w);
         var radiance = sky_color(direction,config.sky);
 #ifdef INSTANCE_PROBE_TRACE
@@ -133,11 +184,21 @@ fn integrate_probes(
             }
         }
 #endif
+#endif
         let basis = rendering_probe_basis(direction);
+#ifdef PAIRED_PROBE_TRACE
+        // Surface bakes use L1; higher bands must not introduce a second estimator.
+        for (var c=0u; c<4u; c++) { sum[c] += radiance*basis[c]; live_sum[c] += live.xyz*basis[c]; }
+#else
         for (var c=0u; c<9u; c++) { sum[c] += radiance*basis[c]; }
+#endif
     }
     for (var c=0u; c<9u; c++) {
-        probe_contributions[c*64u+lane] = vec4<f32>(sum[c],f32(backs));
+        var contribution = sum[c];
+#ifdef PAIRED_PROBE_TRACE
+        if (c>=4u && c<8u) { contribution = live_sum[c-4u]; }
+#endif
+        probe_contributions[c*64u+lane] = vec4<f32>(contribution,f32(backs));
     }
     workgroupBarrier();
     for (var stride=32u; stride>0u; stride/=2u) {
@@ -150,15 +211,41 @@ fn integrate_probes(
     }
     if (lane!=0u) { return; }
     var coefficients: array<vec3<f32>, 9>;
-    let valid = select(1.0,0.0,probe_contributions[0].w*2.0>f32(samples));
+#ifdef PAIRED_PROBE_TRACE
+    var live_coefficients: array<vec3<f32>, 9>;
+#endif
+    var valid = select(1.0,0.0,probe_contributions[0].w*2.0>f32(samples));
     for (var c=0u; c<9u; c++) {
         let integrated = probe_contributions[c*64u];
-        let coefficient = integrated.xyz*(4.0*IBL_PI/f32(samples));
-        probes[3u+index*9u+c] = vec4<f32>(coefficient,valid);
-        coefficients[c] = clamp(coefficient*valid,vec3<f32>(-65504),vec3<f32>(65504));
+        var coefficient = integrated.xyz*(4.0*IBL_PI/f32(samples));
+#ifdef PAIRED_PROBE_TRACE
+        if (c>=4u) { coefficient = vec3<f32>(0.0); }
+        else {
+            let absolute = probe_contributions[(c+4u)*64u].xyz*(4.0*IBL_PI/f32(samples));
+            live_coefficients[c] = absolute;
+            if (any(absolute != absolute) || any(abs(absolute) > vec3<f32>(65504.0))) { valid = 0.0; }
+        }
+#endif
+        coefficients[c] = coefficient;
+#ifdef PAIRED_PROBE_TRACE
+        if (any(coefficient != coefficient) || any(abs(coefficient) > vec3<f32>(65504.0))) { valid = 0.0; }
+#endif
+    }
+    for (var c=0u; c<9u; c++) {
+        probes[3u+index*9u+c] = vec4<f32>(select(vec3<f32>(0.0), coefficients[c], valid > 0.0), valid);
+        coefficients[c] = clamp(select(vec3<f32>(0.0), coefficients[c], valid > 0.0),vec3<f32>(-65504),vec3<f32>(65504));
+#ifdef PAIRED_PROBE_TRACE
+        live_coefficients[c] = select(vec3<f32>(0.0), live_coefficients[c], valid > 0.0);
+#endif
     }
     let packed = rendering_pack_probe(coefficients,valid);
     for (var band=0u; band<RENDERING_PROBE_TEXTURE_BANDS; band++) {
         textureStore(probe_texture,vec3<i32>(coordinate+vec3<u32>(0,0,band*dim.z)),packed[band]);
     }
+#ifdef PAIRED_PROBE_TRACE
+    let absolute_packed = rendering_pack_probe(live_coefficients,valid);
+    for (var band=0u; band<RENDERING_PROBE_TEXTURE_BANDS; band++) {
+        textureStore(probe_texture,vec3<i32>(coordinate+vec3<u32>(0,0,(band+RENDERING_PROBE_TEXTURE_BANDS)*dim.z)),absolute_packed[band]);
+    }
+#endif
 }

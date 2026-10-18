@@ -36,6 +36,7 @@ fn touch(n: Node) {
 }
 
 fn node_visible(n: Node, instance: Instance) -> bool {
+    if ((instance.material.x & 0x80000000u) != 0u) { return false; }
     let local_center = (n.lo.xyz + n.hi.xyz) * 0.5;
     let local_extent = (n.hi.xyz - n.lo.xyz) * 0.5;
     let center = (instance.transform * vec4<f32>(local_center, 1.0)).xyz;

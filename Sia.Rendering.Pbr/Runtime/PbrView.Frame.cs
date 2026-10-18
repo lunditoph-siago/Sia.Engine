@@ -108,13 +108,13 @@ internal sealed unsafe partial class PbrView
         else {
             var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
             foreach (var draw in _owner.Scene.Opaque) {
-                if (culler.Intersects(draw.Bounds))
+                if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
                     AddRange(_opaque, SelectGeometry(draw, camera.ViewProj, projection,
                         _width, _height, _owner.Settings.TargetPixelError), UseForward);
             }
         }
         foreach (var draw in _owner.Scene.Transparent)
-            if (culler.Intersects(draw.Bounds)) _transparent.Add(draw);
+            if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds)) _transparent.Add(draw);
 
         var opaqueTriangles = _selection?.VisibleTriangles ?? 0;
         if (_selection is null) foreach (var draw in _opaque) opaqueTriangles = checked(opaqueTriangles + draw.Count);
@@ -136,6 +136,7 @@ internal sealed unsafe partial class PbrView
             if (_selection is not null) {
                 var stream = _owner.Scene.Streaming!;
                 for (var i = 0; i < stream.Source.Instances.Length; i++) {
+                    if (!_owner.Scene.IsInstanceEnabled((uint)i)) continue;
                     var bounds = stream.InstanceBounds[i];
                     if (!culler.Intersects(bounds)) continue;
                     var material = stream.Source.Instances.Span[i].MaterialIndex;

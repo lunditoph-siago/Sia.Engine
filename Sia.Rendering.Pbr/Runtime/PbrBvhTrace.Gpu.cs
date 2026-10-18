@@ -93,7 +93,7 @@ public sealed partial class PbrBvhTrace
         for (var i = 0; i < _instances.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
             var instance = Scene.Instances[i]; var transform = _instances[i]; offset = instanceOffset + i * 5;
-            rows[offset] = new((uint)instance.Binding, rankByInstance[i], (uint)i, 0);
+            rows[offset] = new((uint)instance.Binding, rankByInstance[i], (uint)i, transform.Disabled ? 1u : 0u);
             instance.Id.TryWriteBytes(id, bigEndian: true, out _); rows[offset + 1] = Words(id);
             rows[offset + 2] = InverseRow(transform.Row0, transform.Translation.x);
             rows[offset + 3] = InverseRow(transform.Row1, transform.Translation.y);

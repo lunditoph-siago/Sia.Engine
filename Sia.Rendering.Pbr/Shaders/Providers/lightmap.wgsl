@@ -25,8 +25,8 @@ fn lightmap_coefficients(packed0: vec4<u32>, packed1: vec4<u32>, scales: array<v
 }
 
 fn lightmap_evaluate(coefficients: array<vec3<f32>, 4>, normal: vec3<f32>) -> vec3<f32> {
-    return max(coefficients[0] * 0.886226925
-        + (coefficients[1] * normal.y + coefficients[2] * normal.z + coefficients[3] * normal.x) * 1.02332671, vec3<f32>(0));
+    return coefficients[0] * 0.886226925
+        + (coefficients[1] * normal.y + coefficients[2] * normal.z + coefficients[3] * normal.x) * 1.02332671;
 }
 
 // w indicates valid lighting, including covered black. An absent receiver/chart

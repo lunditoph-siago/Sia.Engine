@@ -5,6 +5,7 @@ namespace Sia.Engine.Rendering.Pbr;
 // Owns runtime instance rows. Products, local section bounds and authored bake identity stay immutable.
 internal sealed class PbrInstanceMotion
 {
+    internal const uint DisabledBit = 0x80000000u;
     private readonly Dictionary<Guid, int[]> _rowsById;
     private readonly Aabb[] _localBounds;
     private readonly bool _stream;
@@ -98,6 +99,23 @@ internal sealed class PbrInstanceMotion
             }
         }
         return new(this, rows, bounds);
+    }
+
+    internal PbrInstanceMotion WithVisibility(ReadOnlySpan<PbrInstanceVisibility> updates)
+    {
+        if (updates.IsEmpty) return this;
+        if (updates.Length > _rowsById.Count) throw new ArgumentException("Too many visibility updates.", nameof(updates));
+        var seen = new HashSet<Guid>();
+        foreach (var update in updates)
+            if (!seen.Add(update.Id) || !_rowsById.ContainsKey(update.Id))
+                throw new ArgumentException("Visibility updates require unique existing authored IDs.", nameof(updates));
+        var rows = (PbrInstanceGpu[])Rows.Clone();
+        foreach (var update in updates) foreach (var row in _rowsById[update.Id]) {
+            var material = rows[row].Material;
+            material.x = (material.x & ~DisabledBit) | (update.Enabled ? 0 : DisabledBit);
+            rows[row] = rows[row] with { Material = material };
+        }
+        return new(this, rows, WorldBounds);
     }
 
     private static Aabb TransformBounds(Aabb local, float4x4 transform)

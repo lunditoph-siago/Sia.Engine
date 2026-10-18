@@ -22,6 +22,7 @@ public static partial class PbrSceneComposition
         var validatedMeshes = new HashSet<AssetId>();
         var materialIndices = new Dictionary<AssetId, int>(); var textureValues = new Dictionary<AssetId, PbrTextureData>();
         var geometry = new List<MeshBvhData>(); var shading = new List<PbrMaterialAsset>(); var bindings = new List<PbrBvhBinding>();
+        var materialIds = new List<AssetId>();
         var used = new bool[scene.Bindings.Length]; foreach (var instance in scene.Instances) used[instance.Binding] = true;
         var bindingIndices = new int[used.Length];
 
@@ -40,7 +41,7 @@ public static partial class PbrSceneComposition
                 RequireRoom(shading.Count, "material");
                 var data = materials(reference) ?? throw new AssetNotFoundException("Scene material is not acquired.");
                 var value = data.ResolveTextures(Texture);
-                index = shading.Count; shading.Add(value); materialIndices.Add(reference.Value, index);
+                index = shading.Count; shading.Add(value); materialIds.Add(reference.Value); materialIndices.Add(reference.Value, index);
             }
             return index;
         }
@@ -65,16 +66,17 @@ public static partial class PbrSceneComposition
                 cancellationToken.ThrowIfCancellationRequested();
                 var source = binding.Materials[slot]; slots[slot] = new(source.Slot, Material(source.Material));
             }
-            bindingIndices[i] = bindings.Count; bindings.Add(new(geometryIndex, slots));
+            var revision = PbrSceneTransport.ReferenceBindingIdentity(manifest.SourceHash, slots.Length,
+                at => (slots[at].Slot, shading[slots[at].Material]), cancellationToken);
+            bindingIndices[i] = bindings.Count; bindings.Add(new(geometryIndex, slots, manifest.SourceHash, revision));
         }
         var instances = new PbrMeshInstance[scene.Instances.Length];
         for (var i = 0; i < instances.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
             var instance = scene.Instances[i]; instances[i] = instance with { Binding = bindingIndices[instance.Binding] };
         }
-        var identity = PbrSceneTransport.ReferenceIdentity(scene, b => meshValues[b.Mesh.Value],
-            s => shading[materialIndices[s.Material.Value]], cancellationToken);
-        return new(geometry.ToArray(), shading.ToArray(), bindings.ToArray(), instances, scene.Attribution, identity, cancellationToken);
+        var identity = PbrSceneTransport.ReferenceIdentity(instances, at => bindings[at].TransportRevision, cancellationToken);
+        return new(geometry.ToArray(), shading.ToArray(), materialIds.ToArray(), bindings.ToArray(), instances, scene.Attribution, identity, cancellationToken);
     }
 
     private static void ValidateBvh(MeshManifest manifest, string key, MeshBvhData data, CancellationToken cancellationToken)

@@ -7,6 +7,10 @@ namespace Sia.Engine.Rendering.Pbr;
 public readonly record struct PbrLightmapCoefficients(float3 Constant, float3 Y, float3 Z, float3 X, bool Covered)
 {
     public float3 EvaluateIrradiance(float3 normal)
+        => math.max(float3.zero, EvaluateSignedIrradiance(normal));
+
+    /// <summary>Cosine-convolved signed radiance. Add corrections to the bake before clipping.</summary>
+    public float3 EvaluateSignedIrradiance(float3 normal)
     {
         var length = math.lengthsq(normal);
         if (!math.all(math.isfinite(normal)) || !float.IsFinite(length) || length <= 0)
@@ -14,8 +18,21 @@ public readonly record struct PbrLightmapCoefficients(float3 Constant, float3 Y,
         if (!Covered) return default;
         normal /= MathF.Sqrt(length);
         // Cosine convolution: pi for l=0, 2*pi/3 for l=1. Direct lights remain live.
-        return math.max(float3.zero, Constant * .886226925f
-            + (Y * normal.y + Z * normal.z + X * normal.x) * 1.02332671f);
+        return Constant * .886226925f
+            + (Y * normal.y + Z * normal.z + X * normal.x) * 1.02332671f;
+    }
+
+    /// <summary>Missing members yield no correction; a valid black pair remains covered.</summary>
+    public static PbrLightmapCoefficients Difference(PbrLightmapCoefficients live, PbrLightmapCoefficients reference)
+    {
+        if (!live.Covered || !reference.Covered) return default;
+        var difference = new PbrLightmapCoefficients(live.Constant - reference.Constant, live.Y - reference.Y,
+            live.Z - reference.Z, live.X - reference.X, true);
+        for (var component = 0; component < 4; component++)
+            if (!math.all(math.isfinite(live.Component(component))) || !math.all(math.isfinite(reference.Component(component)))
+                || !math.all(math.isfinite(difference.Component(component))))
+                throw new ArgumentException("A complete transport pair requires finite signed coefficients.");
+        return difference;
     }
 
     internal float3 Component(int index) => index switch {

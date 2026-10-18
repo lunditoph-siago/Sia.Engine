@@ -12,8 +12,8 @@ internal sealed partial class PbrStreamResidency
             throw new ArgumentException("Motion requires matching local GPU instance storage.");
         var changed = false;
         for (var i = 0; i < rows.Length; i++) {
-            if (_instances[i].Transform.Equals(rows[i].Transform)) continue;
-            changed = true; _instances[i] = _instances[i] with { Transform = rows[i].Transform };
+            if (_instances[i].Transform.Equals(rows[i].Transform) && _instances[i].MaterialIndex == (int)rows[i].Material.x) continue;
+            changed = true; _instances[i] = _instances[i] with { Transform = rows[i].Transform, MaterialIndex = (int)rows[i].Material.x };
             _instanceBounds[i] = bounds[i];
             _norms[i] = BitConverter.UInt32BitsToSingle(rows[i].Material.y);
         }
