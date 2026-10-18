@@ -8,7 +8,10 @@ using Sia.WebGPU;
 namespace Sia.Engine.Rendering.Pbr;
 
 [StructLayout(LayoutKind.Sequential)]
-internal readonly record struct PbrInstanceGpu(float4x4 Transform, float4x4 NormalTransform, uint4 Material);
+internal readonly record struct PbrInstanceGpu(float4x4 Transform, float4x4 NormalTransform, uint4 Material)
+{
+    public uint4 Geometry { get; init; }
+}
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal readonly record struct PbrWorkGpu(uint Triangle, uint Instance);
@@ -28,6 +31,8 @@ internal sealed partial class PbrGpuScene : IDisposable
         public uint SourceInstance { get; init; } = Instance;
         public ReadOnlyMemory<MeshRasterLod> Lods { get; init; }
         public float ErrorScale { get; init; } = 1;
+        public uint InstanceCount { get; init; } = 1;
+        public uint TriangleOffset { get; init; }
     }
 
     private readonly GpuResources _gpu;

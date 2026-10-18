@@ -28,7 +28,7 @@ internal sealed unsafe partial class PbrView
         _shadowMatrices[layer] = matrix;
         if (_selection is not null) {
             _selection.Configure(layer, matrix, _owner.Settings.ShadowResolution, _owner.Settings.ShadowResolution,
-                _owner.Settings.ShadowTexelError, (uint)_owner.Settings.Streaming.MaximumSelectionNodesPerView);
+                _owner.Settings.ShadowTexelError, (uint)_owner.Scene.Streaming!.SelectionNodeLimit);
             return;
         }
         // Cached depth still needs view demand and residency protection every frame.

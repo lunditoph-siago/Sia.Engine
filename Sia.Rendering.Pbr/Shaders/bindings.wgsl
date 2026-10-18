@@ -132,6 +132,9 @@ fn shadow_matrix(layer: u32) -> mat4x4<f32> {
 fn vertex_index(triangle: u32, corner: u32) -> u32 {
 #if SHADING_WORK
     return topology[stream_triangle(triangle).x * 3u + corner];
+#elif RESIDENT_INSTANCES
+    let instance = instances[resident_instance(triangle)];
+    return topology[(instance.geometry.x + triangle - instance.material.z) * 3u + corner];
 #else
     return topology[triangle * 3u + corner];
 #endif

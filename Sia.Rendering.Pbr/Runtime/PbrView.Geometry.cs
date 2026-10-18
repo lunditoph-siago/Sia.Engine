@@ -21,7 +21,11 @@ internal sealed unsafe partial class PbrView
             var level = levels[lod];
             var error = ProjectedGeometryError.ProjectLodError(draw.Bounds, level.Error * draw.ErrorScale,
                 projection, matrix, width, height);
-            if (error <= target) return draw with { Count = (uint)(level.IndexCount / 3), FirstIndex = (uint)level.FirstIndex };
+            if (error <= target) {
+                var offset = ((uint)level.FirstIndex - draw.FirstIndex) / 3;
+                return draw with { Count = (uint)(level.IndexCount / 3), FirstIndex = (uint)level.FirstIndex,
+                    First = checked(draw.First + offset), TriangleOffset = offset };
+            }
         }
         return draw;
     }
@@ -74,6 +78,7 @@ internal sealed unsafe partial class PbrView
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
         if (shadow) Wgpu.SetVertexBuffer(pass, 0, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>());
         if (shadow) Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
+        BindDrawInstances(pass, shadow ? 1u : 0u);
         bool? doubleSided = null;
         foreach (var draw in shadow ? _shadowDraws[layer] : _opaque) {
             if (doubleSided != draw.DoubleSided) {
@@ -83,8 +88,10 @@ internal sealed unsafe partial class PbrView
                 doubleSided = draw.DoubleSided;
             }
             if (shadow)
-                Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.FirstIndex, firstInstance: (draw.Instance << 3) | layer);
-            else Wgpu.Draw(pass, draw.Count * 3, 1, draw.First * 3);
+                Wgpu.DrawIndexed(pass, draw.Count * 3, draw.InstanceCount, draw.FirstIndex,
+                    firstInstance: _instanceIds == default ? (draw.Instance << 3) | layer : draw.Instance);
+            else Wgpu.Draw(pass, draw.Count * 3, draw.InstanceCount, _instanceIds == default ? draw.First * 3 : 0,
+                firstInstance: draw.Instance);
         }
     }
 

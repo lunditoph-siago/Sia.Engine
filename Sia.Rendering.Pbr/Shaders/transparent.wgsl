@@ -19,6 +19,7 @@ fn transparent_vertex(
 #if RESIDENT_INSTANCES
     @location(1) n: vec4<u32>,
     @location(2) words: vec2<u32>,
+    @location(3) draw_instance: vec2<u32>,
 #else
     @location(1) n: vec4<f32>,
     @location(2) t: vec4<f32>,
@@ -28,7 +29,7 @@ fn transparent_vertex(
 ) -> GlassVertex {
     let world = vec4<f32>(p.xyz, 1.0);
 #if RESIDENT_INSTANCES
-    let instance = instances[instance_id];
+    let instance = instances[draw_instance.x];
     let t = resident_tangent(words);
     let b = bitcast<vec2<f32>>(n.zw);
     let position = instance.transform * world;

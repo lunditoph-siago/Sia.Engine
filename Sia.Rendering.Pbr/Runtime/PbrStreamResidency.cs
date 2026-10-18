@@ -13,7 +13,7 @@ public sealed record PbrStreamingSettings
     public uint UploadBytesPerFrame { get; init; } = 256 * 1024;
     public int MaximumRequests { get; init; } = 2;
     public long DecodedBytes { get; init; } = 4 * MeshVirtualPageData.MaximumEncodedBytes;
-    public int MaximumSelectionNodesPerView { get; init; } = 4096;
+    public int MaximumSelectionNodesPerView { get; init; }
 }
 
 public readonly record struct PbrStreamingStatistics(
@@ -110,14 +110,20 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _resident.Count, _installs, _evictions, Revision, _requests.Statistics, _deferredGroups);
 
     internal bool IsStopped => _stopped;
+    internal int SelectionNodeLimit { get; }
 
     public PbrStreamResidency(PbrSceneStream source, StreamPageArena arena, PbrStreamingSettings settings, int[] materialBatches)
     {
         if (settings.UploadBytesPerFrame < 16 || settings.UploadBytesPerFrame % 16 != 0)
             throw new ArgumentOutOfRangeException(nameof(settings), "Streaming upload budget must be positive and 16-byte aligned.");
-        if (settings.MaximumSelectionNodesPerView < 1024)
+        if (settings.MaximumSelectionNodesPerView != 0 && settings.MaximumSelectionNodesPerView < 1024)
             throw new ArgumentOutOfRangeException(nameof(settings), "Selection must allow at least one complete packed root group.");
         (_source, _arena, _settings) = (source, arena, settings);
+        long selectionNodes = 0;
+        foreach (var instance in source.Instances.Span)
+            selectionNodes = checked(selectionNodes + source.Hierarchies[instance.AssetIndex].Nodes.Length);
+        SelectionNodeLimit = settings.MaximumSelectionNodesPerView == 0
+            ? checked((int)System.Math.Max(1024, selectionNodes)) : settings.MaximumSelectionNodesPerView;
         _instances = source.Instances.ToArray();
         _pages = [.. source.PageTable.Values];
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
@@ -273,7 +279,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     output.AddRange(cut.Draws);
                     continue;
                 }
-                if (visited + group.Roots.Length > _settings.MaximumSelectionNodesPerView) {
+                if (visited + group.Roots.Length > SelectionNodeLimit) {
                     foreach (var key in group.RootPages) Touch(key);
                     output.AddRange(group.Fallback);
                     _deferredGroups++;
@@ -321,7 +327,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             var bounds = _bounds[instanceIndex][index];
             if (!culler.Intersects(bounds)) return;
             foreach (var part in node.Pages) Touch(PageKey(instanceIndex, part.Id));
-            if (++visited > _settings.MaximumSelectionNodesPerView) {
+            if (++visited > SelectionNodeLimit) {
                 deferred = true;
                 groupIncomplete = true;
                 foreach (var part in node.Pages) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Id)].Allocation, bounds));
@@ -346,7 +352,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         else complete = false;
                     }
                 }
-                if (complete && visibleChildren <= _settings.MaximumSelectionNodesPerView - visited) {
+                if (complete && visibleChildren <= SelectionNodeLimit - visited) {
                     for (var c = node.Children; c < node.Children + node.ChildCount; c++) Visit(instanceIndex, tree, c);
                     return;
                 }

@@ -84,7 +84,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
         _liveReflections = liveReflections;
         try {
             var limits = _gpu.Limits;
-            var vertexPlanes=residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes;
+            var vertexPlanes=residentInstances?PbrRasterVertex.Planes+1:StreamGeometryPage.VertexPlanes;
             if (limits.MaxVertexBuffers < vertexPlanes || limits.MaxVertexAttributes < vertexPlanes)
                 throw new NotSupportedException("PBR vertex input requires four attribute planes.");
             if (gpuStream && limits.MaxStorageBuffersPerShaderStage < 8)
@@ -357,9 +357,16 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 Length = (nuint)vs.Length
             };
             var attributeCount = vertex is "forward_vertex" or "transparent_vertex" ? (_residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes) : vertex is "prepass_vertex" or "shadow_vertex" ? 1 : 0;
+            var instanceInput = _residentInstances && (vertex is "forward_vertex" or "transparent_vertex" or "prepass_vertex" or "shadow_vertex" or "raster_vertex");
+            if (instanceInput) attributeCount++;
             var attributes = stackalloc WGPUVertexAttribute[StreamGeometryPage.VertexPlanes];
             var buffers = stackalloc WGPUVertexBufferLayout[StreamGeometryPage.VertexPlanes];
             for (var index = 0; index < attributeCount; index++) {
+                if (instanceInput && index == attributeCount - 1) {
+                    attributes[index] = new() { Format = WGPUVertexFormat.Uint32x2, ShaderLocation = 3 };
+                    buffers[index] = new() { ArrayStride = 8, StepMode = WGPUVertexStepMode.Instance, AttributeCount = 1, Attributes = &attributes[index] };
+                    continue;
+                }
                 attributes[index] = new() { Format = _residentInstances && index>0 ? (index==1?WGPUVertexFormat.Uint32x4:WGPUVertexFormat.Uint32x2) : WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
                 buffers[index] = new() { ArrayStride = _residentInstances && index==2?8ul:16ul, StepMode = WGPUVertexStepMode.Vertex, AttributeCount = 1, Attributes = &attributes[index] };
             }

@@ -92,6 +92,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     {
         _owner = owner;
         _sortTransparent = CompareTransparent;
+        _sortInstanceBatches = CompareInstanceBatches;
         _materialPixels = new float[owner.Materials.MaterialBatches.Length];
         View = view;
         _gpuFrame = frame;
@@ -149,6 +150,12 @@ internal sealed unsafe partial class PbrView : IDisposable
         _collectPoint = CollectPoint;
         _collectSpot = CollectSpot;
         try {
+            if (owner.Scene.Streaming is null) {
+                var references = checked((ulong)(owner.Scene.Opaque.Length + owner.Scene.Transparent.Length) * (k_ShadowLayers + 1));
+                _instanceIds = _gpu.Buffer(System.Math.Max(1, references) * (ulong)System.Runtime.CompilerServices.Unsafe.SizeOf<PbrDrawInstance>(),
+                    WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
+                Buffer(_instanceIds, RenderGraphBufferUsage.Vertex);
+            }
             _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);

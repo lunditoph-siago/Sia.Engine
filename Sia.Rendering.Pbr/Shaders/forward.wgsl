@@ -16,11 +16,15 @@ struct ForwardVertex {
 @vertex
 fn prepass_vertex(
     @location(0) p: vec4<f32>,
+#if RESIDENT_INSTANCES
+    @location(3) draw_instance: vec2<u32>,
+#else
     @builtin(instance_index) instance_id: u32,
+#endif
 ) -> @builtin(position) @invariant vec4<f32> {
     let world = vec4<f32>(p.xyz, 1.0);
 #if RESIDENT_INSTANCES
-    let position = instances[instance_id].transform * world;
+    let position = instances[draw_instance.x].transform * world;
     return frame.vp * position;
 #else
     return frame.vp * world;
@@ -33,6 +37,7 @@ fn forward_vertex(
 #if RESIDENT_INSTANCES
     @location(1) n: vec4<u32>,
     @location(2) words: vec2<u32>,
+    @location(3) draw_instance: vec2<u32>,
 #else
     @location(1) n: vec4<f32>,
     @location(2) t: vec4<f32>,
@@ -42,7 +47,7 @@ fn forward_vertex(
 ) -> ForwardVertex {
     let world = vec4<f32>(p.xyz, 1.0);
 #if RESIDENT_INSTANCES
-    let instance = instances[instance_id];
+    let instance = instances[draw_instance.x];
     let t = resident_tangent(words);
     let b = bitcast<vec2<f32>>(n.zw);
     let position = instance.transform * world;

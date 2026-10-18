@@ -105,7 +105,7 @@ internal sealed unsafe partial class PbrView
         if (_owner.Scene.Streaming is { } streaming) {
             if (_selection is not null)
                 _selection.Configure(7, camera.ViewProj, _width, _height, _owner.Settings.TargetPixelError,
-                    (uint)_owner.Settings.Streaming.MaximumSelectionNodesPerView);
+                    (uint)streaming.SelectionNodeLimit);
             else {
                 streaming.Select(camera.ViewProj, _width, _height, _owner.Settings.TargetPixelError, culler, _opaque);
                 CompactStreamDraws(_opaque, UseForward);
@@ -168,6 +168,7 @@ internal sealed unsafe partial class PbrView
             foreach (var draw in _owner.Scene.Transparent) Demand(transparentBase + draw.SourceInstance, draw.Bounds);
         }
         _transparent.Sort(_sortTransparent);
+        PrepareInstanceBatches();
     }
 
     private int CompareTransparent(PbrGpuScene.Draw a, PbrGpuScene.Draw b)
