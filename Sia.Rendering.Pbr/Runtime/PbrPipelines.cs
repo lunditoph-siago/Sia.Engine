@@ -217,7 +217,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             ResolveDirect = Compute(shade, shading, "resolve_direct");
             if (opaquePath == PbrOpaquePath.ForwardPlus)
                 ForwardBackground = Compute(Module("forward_background.wgsl"), GpuBinding.PipelineLayout(_gpu, BackgroundLayout), "forward_background");
-            var transparent = Module("transparent.wgsl");
+            var transparent = Module("transparent.wgsl", streamInstances: gpuStream);
             var glassLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, GlassLayout);
             if (opaquePath == PbrOpaquePath.ForwardPlus) {
                 var coverageLayout = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout, MaterialLayout);

@@ -35,6 +35,13 @@ fn transparent_vertex(
         (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
         vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, t.w), n.zw,
         instance.material.x, b, vec2<u32>(select(0u, 1u, (words.y & 2u) != 0u), instance.material.y));
+#elif STREAM_INSTANCES
+    let instance = instances[instance_id];
+    let position = instance.transform * world;
+    return GlassVertex(frame.vp * position, position.xyz,
+        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
+        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, sign(t.w)), n.zw,
+        instance.material.x, b.xy, vec2<u32>(u32(b.z), instance_id));
 #else
     return GlassVertex(frame.vp * world, world.xyz, vec3<f32>(p.w, n.xy), t, n.zw, u32(abs(t.w)) - 1u,
         b.xy, vec2<u32>(u32(b.z), u32(b.w)));

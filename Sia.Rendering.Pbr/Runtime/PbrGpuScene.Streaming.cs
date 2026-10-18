@@ -16,29 +16,33 @@ internal sealed partial class PbrGpuScene
     {
         _gpu = new(frame, budget);
         try {
+            var shape = RootShape(source, streaming.GpuTraversal);
+            var required = checked(shape.Vertices * StreamGeometryPage.VertexBytes + shape.Triangles * 12 + shape.Instances);
+            if (required > budget) throw new ArgumentException($"Stream roots/bootstrap/instances require {required} bytes, exceeding budget {budget}.");
+            if (shape.Instances > _gpu.Limits.MaxStorageBufferBindingSize)
+                throw new NotSupportedException("Stream instance table exceeds storage binding limits.");
             if (streaming.GpuTraversal) {
-                var instances = new PbrInstanceGpu[System.Math.Max(1, source.Instances.Length)];
+                var instances = new PbrInstanceGpu[checked(source.Instances.Length + source.TransparentInstances.Length)];
                 for (var i = 0; i < source.Instances.Length; i++) {
                     var instance = source.Instances.Span[i];
                     var norm = TransformNorm(instance.Transform);
+                    if (!float.IsFinite(norm)) throw new ArgumentException("Instance LOD norm exceeds GPU float precision.", nameof(source));
                     instances[i] = new(instance.Transform, math.transpose(math.inverse(instance.Transform)),
-                        new((uint)instance.MaterialIndex, BitConverter.SingleToUInt32Bits(float.IsFinite(norm) ? norm : 1.0e30f), 0, 0));
+                        new((uint)instance.MaterialIndex, BitConverter.SingleToUInt32Bits(norm), 0, 0));
                 }
-                Instances = _gpu.Upload<PbrInstanceGpu>(instances);
+                for (var i = 0; i < source.TransparentInstances.Length; i++) {
+                    var instance = source.TransparentInstances[i];
+                    var norm = TransformNorm(instance.Transform);
+                    if (!float.IsFinite(norm)) throw new ArgumentException("Instance LOD norm exceeds GPU float precision.", nameof(source));
+                    instances[source.Instances.Length + i] = new(instance.Transform, math.transpose(math.inverse(instance.Transform)),
+                        new((uint)instance.Material, BitConverter.SingleToUInt32Bits(norm), 0, 0));
+                }
+                _instanceMotion = new(source, instances);
+                Instances = _gpu.Upload<PbrInstanceGpu>(instances.Length == 0 ? [default] : instances);
             }
             var arenaBudget = budget - _gpu.Bytes;
             using var bootstrap = new PbrGpuScene(frame, source, layout, arenaBudget, materialBatches, Instances);
-            ulong rootsV = bootstrap.VertexCount, rootsT = bootstrap.TriangleCount;
-            var sharedRoots = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var instance in source.Instances.Span) {
-                var tree = source.Hierarchies[instance.AssetIndex];
-                var ids = tree.Nodes.Take(tree.Roots).SelectMany(n => n.Pages).Select(p => p.Id).Distinct(StringComparer.Ordinal);
-                foreach (var id in ids) {
-                    if (streaming.GpuTraversal && !sharedRoots.Add(id)) continue;
-                    rootsV += (uint)source.PageTable[id].Vertices;
-                    rootsT += (uint)source.PageTable[id].Triangles;
-                }
-            }
+            var rootsV = shape.Vertices; var rootsT = shape.Triangles;
             var rootBytes = checked((rootsV * StreamGeometryPage.VertexBytes) + (rootsT * 12));
             if (rootBytes > arenaBudget)
                 throw new ArgumentException($"Stream roots/bootstrap require {rootBytes} bytes, exceeding remaining geometry budget {arenaBudget}.");

@@ -107,16 +107,15 @@ public sealed class StreamPageArena : IDisposable
         if (!math.all(math.isfinite(normal.c0)) || !math.all(math.isfinite(normal.c1))
             || !math.all(math.isfinite(normal.c2)) || !math.all(math.isfinite(normal.c3)))
             throw new ArgumentException("Geometry upload requires a finite invertible transform.", nameof(transform));
-        var source = page.Data.Vertices;
         for (var i = 0; i < page.VertexCount; i++) {
-            var vertex = source[i]; var t = vertex.Tangent;
+            var vertex = page.GetVertex(i); var t = vertex.Tangent;
             var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
             var direction = math.mul(normal, new float4(vertex.Normal, 0)).xyz;
             packed[i] = new(position, direction.x);
             packed[page.VertexCount + i] = new(direction.y, direction.z, vertex.UV.x, vertex.UV.y);
             packed[(page.VertexCount * 2) + i] = new(math.mul(transform, new float4(t.xyz, 0)).xyz, (t.w < 0 ? -1 : 1) * tangentMagnitude);
-            var bake = page.Data.HasBakeUvs ? page.Data.BakeUvs[i] : default;
-            packed[page.VertexCount * 3 + i] = new(bake.x, bake.y, page.Data.HasBakeUvs ? 1 : 0, sourceInstance);
+            var bake = page.GetBakeUv(i);
+            packed[page.VertexCount * 3 + i] = new(bake.x, bake.y, page.HasBakeUvs ? 1 : 0, sourceInstance);
         }
     }
 

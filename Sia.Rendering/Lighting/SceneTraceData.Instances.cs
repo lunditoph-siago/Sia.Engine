@@ -25,7 +25,7 @@ public sealed partial class SceneTraceData
         if (((ulong)geometry.Length + (ulong)instances.Length + (ulong)surfaces.Length) * 16 > maximumBytes)
             throw new ArgumentException("Instance transport exceeds its owned-buffer budget.", nameof(maximumBytes));
         Require(geometry.Length >= 3 && instances.Length >= 5 && surfaces.Length % 2 == 0);
-        Require(geometry[0].w == 0x31475453 && instances[2].z == 0x31495453);
+        Require(geometry[0].w == 0x32475453 && instances[2].z == 0x31495453);
         Require(geometry[0].z == geometry.Length && instances[2].y == instances.Length);
         Require(geometry[1].Equals(instances[3]) && geometry[2].Equals(instances[4]));
         var meshes = geometry[0]; var top = instances[0]; var tables = instances[1];
@@ -39,13 +39,20 @@ public sealed partial class SceneTraceData
         for (uint mesh = 0; mesh < meshes.x; mesh++) {
             cancellationToken.ThrowIfCancellationRequested();
             var part = geometry[(int)(meshes.y + mesh * 2)]; var vertices = geometry[(int)(meshes.y + mesh * 2 + 1)];
-            Range(part.z, (ulong)part.w * 2, geometry.Length); Range(vertices.x, vertices.y, geometry.Length);
-            ValidateNodes(geometry, part.x, part.y, part.w, cancellationToken);
+            Require((ulong)part.z + (ulong)part.w * 5 <= (ulong)geometry.Length * 4); Range(vertices.x, vertices.y, geometry.Length);
+            Range(part.x, (ulong)part.y * 2, geometry.Length);
+            for (uint n = 0; n < part.y; n++) {
+                if ((n & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                var lo = geometry[(int)(part.x + n * 2)]; var hi = geometry[(int)(part.x + n * 2 + 1)];
+                Require(math.all(math.isfinite(Vector(lo))) && math.all(math.isfinite(Vector(hi)))
+                    && math.all(Vector(lo) <= Vector(hi)) && lo.w > n && lo.w <= part.y
+                    && (ulong)(hi.w >> 7) + (hi.w & 127) <= part.w);
+            }
             Require(part.w == 0 || part.y != 0); Require((ulong)triangles + part.w <= int.MaxValue); triangles += (int)part.w;
             for (uint t = 0; t < part.w; t++) {
                 if ((t & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                var indices = geometry[(int)(part.z + t * 2)];
-                Require(indices.x < vertices.y && indices.y < vertices.y && indices.z < vertices.y);
+                var at = part.z + t * 5;
+                Require(GeometryWord(geometry, at) < vertices.y && GeometryWord(geometry, at + 1) < vertices.y && GeometryWord(geometry, at + 2) < vertices.y);
             }
             for (uint v = 0; v < vertices.y; v++) {
                 if ((v & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
@@ -102,6 +109,7 @@ public sealed partial class SceneTraceData
         }
     }
     private static float3 Vector(uint4 row) => new(BitConverter.UInt32BitsToSingle(row.x), BitConverter.UInt32BitsToSingle(row.y), BitConverter.UInt32BitsToSingle(row.z));
+    private static uint GeometryWord(ReadOnlySpan<uint4> rows, uint word) => rows[(int)(word / 4)][(int)(word % 4)];
     private static void Range(uint offset, ulong count, int length) => Require((ulong)offset + count <= (ulong)length);
     private static void Require(bool valid) { if (!valid) throw new ArgumentException("Invalid instance trace buffer layout or value."); }
 }

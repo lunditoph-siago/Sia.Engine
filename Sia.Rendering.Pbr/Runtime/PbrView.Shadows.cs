@@ -22,8 +22,8 @@ internal sealed unsafe partial class PbrView
         _sceneData[at + 2] = matrix.c2;
         _sceneData[at + 3] = matrix.c3;
         _shadowActive[layer] = true;
-        var revision = _owner.Scene.Streaming?.Revision ?? 0;
-        _shadowDirty[layer] = !_shadowValid[layer] || !_shadowMatrices[layer].Equals(matrix) || _shadowGeometryRevision[layer] != revision;
+        var revision = _owner.Scene.GeometryRevision;
+        _shadowDirty[layer] = NeedsShadowUpdate(_shadowValid[layer], _shadowMatrices[layer], matrix, _shadowGeometryRevision[layer], revision);
         _shadowGeometryRevision[layer] = revision;
         _shadowMatrices[layer] = matrix;
         if (_selection is not null) {
@@ -55,9 +55,9 @@ internal sealed unsafe partial class PbrView
     {
         for (uint layer = 0; layer < k_ShadowLayers; layer++) {
             if (!_shadowActive[layer]) continue;
-            if (_selection is not null && _shadowGeometryRevision[layer] != _owner.Scene.Streaming!.Revision) {
+            if (_shadowGeometryRevision[layer] != _owner.Scene.GeometryRevision) {
                 _shadowDirty[layer] = true;
-                _shadowGeometryRevision[layer] = _owner.Scene.Streaming.Revision;
+                _shadowGeometryRevision[layer] = _owner.Scene.GeometryRevision;
             }
             _selection?.Select(context.CommandEncoder, (int)layer);
             if (!_shadowDirty[layer]) continue;
@@ -76,4 +76,7 @@ internal sealed unsafe partial class PbrView
             finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }
         }
     }
+
+    private static bool NeedsShadowUpdate(bool valid, float4x4 previous, float4x4 current, ulong previousRevision, ulong revision)
+        => !valid || !previous.Equals(current) || previousRevision != revision;
 }

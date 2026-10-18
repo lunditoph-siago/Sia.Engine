@@ -35,10 +35,20 @@ fn touch(n: Node) {
     }
 }
 
-fn children_ready(n: Node, priority: f32) -> bool {
+fn node_visible(n: Node, instance: Instance) -> bool {
+    let local_center = (n.lo.xyz + n.hi.xyz) * 0.5;
+    let local_extent = (n.hi.xyz - n.lo.xyz) * 0.5;
+    let center = (instance.transform * vec4<f32>(local_center, 1.0)).xyz;
+    let extent = abs(instance.transform[0].xyz) * local_extent.x
+        + abs(instance.transform[1].xyz) * local_extent.y + abs(instance.transform[2].xyz) * local_extent.z;
+    return bounds_visible(center - extent, center + extent, selection.vp);
+}
+
+fn children_ready(n: Node, instance: Instance, priority: f32) -> bool {
     var ready = true;
     for (var c = 0u; c < n.links.y; c++) {
         let child = nodes[n.links.x + c];
+        if (!node_visible(child, instance)) { continue; }
         for (var p = 0u; p < child.links.w; p++) {
             let part = parts[child.links.z + p];
             let page = residency[part.x];
@@ -141,7 +151,7 @@ fn visit(index: u32, odd: bool) {
     if (error >= 0.0) {
         touch(n);
         if (n.links.y > 0u && (selection.screen.z == 0.0 || error > selection.screen.z)) {
-            if (children_ready(n, error)) {
+            if (children_ready(n, instance, error)) {
                 let visited = atomicAdd(&args[8], n.links.y);
                 if (visited <= selection.table.w && n.links.y <= selection.table.w - visited) {
                     let first = atomicAdd(&args[select(14u, 13u, odd)], n.links.y);

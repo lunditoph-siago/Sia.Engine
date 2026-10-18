@@ -16,6 +16,7 @@ public sealed class DiffuseProbeGpu : IDisposable
     private readonly Entity _pipeline;
     private uint _cursor;
     private uint _updates;
+    private SceneTraceData? _tracing;
 
     public Entity Buffer { get; }
     public Entity Texture { get; }
@@ -96,6 +97,7 @@ public sealed class DiffuseProbeGpu : IDisposable
             if (tracing.IsInstanced) {
                 TracingGeometry = _gpu.Upload<uint4>(tracing.Geometry.Span, WGPUBufferUsage.Storage);
                 TracingInstances = _gpu.Upload<uint4>(tracing.Instances.Span, WGPUBufferUsage.Storage);
+                _tracing = tracing;
             }
             _config = _gpu.Buffer(176, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             var layoutEntries = new List<WGPUBindGroupLayoutEntry> {
@@ -144,6 +146,25 @@ public sealed class DiffuseProbeGpu : IDisposable
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _config.GetWgpu<WGPUBuffer>(), 0, values);
         _cursor = (_cursor + updates) % (uint)Count;
         _updates = updates;
+    }
+
+    /// <summary>Uploads only changed instance/refit rows before the next integration dispatch. Geometry buffers remain shared.</summary>
+    public void UpdateInstances(SceneTraceData tracing)
+    {
+        ArgumentNullException.ThrowIfNull(tracing);
+        if (_tracing is not { } current || !tracing.IsInstanced || !tracing.Geometry.Equals(current.Geometry)
+            || !tracing.Packed.Equals(current.Packed) || !tracing.Identity.Equals(current.Identity)
+            || tracing.Instances.Length != current.Instances.Length)
+            throw new ArgumentException("Probe motion must share the same validated geometry, surfaces and authored identity.", nameof(tracing));
+        var rows = tracing.Instances.Span; var old = current.Instances.Span;
+        for (var first = 0; first < rows.Length;) {
+            if (rows[first].Equals(old[first])) { first++; continue; }
+            var end = first + 1;
+            while (end < rows.Length && !rows[end].Equals(old[end])) end++;
+            Wgpu.WriteBuffer<uint4>(_gpu.Queue, TracingInstances.GetWgpu<WGPUBuffer>(), (ulong)first * 16, rows.Slice(first, end - first));
+            first = end;
+        }
+        _tracing = tracing;
     }
 
     internal static Half[] TextureData(DiffuseProbeAsset asset)
@@ -228,5 +249,5 @@ public sealed class DiffuseProbeGpu : IDisposable
         }
     }
 
-    public void Dispose() => _gpu.Dispose();
+    public void Dispose() { _tracing = null; _gpu.Dispose(); }
 }

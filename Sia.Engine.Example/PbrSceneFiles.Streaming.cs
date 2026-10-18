@@ -97,14 +97,17 @@ internal static partial class PbrSceneFiles
             foreach (var page in prepared.Pages) world.AcquireAsset(page.Key, () => page.Value, acquired.Root);
             var stream = PbrSceneStream.Create(acquired.Scene,
                 r => r.Find(world)?.Get<MeshVirtualPageAsset>().Data ?? throw new AssetNotFoundException(), prepared.Source.ReadAsync,
-                (reference, record) => {
-                    // Only the graphics owner's context invokes this callback. This short use does not pin all detail pages.
-                    var use = RenderAssetUse.Create(world);
-                    try { return world.AcquireAsset(reference.Value, () => record, use).Get<MeshVirtualPageAsset>().Data; }
-                    finally { use.Destroy(); }
-                }, maximumRequiredBytes: prepared.MaximumRequiredBytes);
+                (reference, record) => AcquirePage(world, reference, record), maximumRequiredBytes: prepared.MaximumRequiredBytes);
             return (acquired.Root, stream);
         }
         catch { acquired.Root.Destroy(); throw; }
+    }
+
+    // Only the graphics owner's context invokes this short original Asset use.
+    private static MeshVirtualPageData AcquirePage(World world, PageReference reference, MeshVirtualPageRecord record)
+    {
+        var use = RenderAssetUse.Create(world);
+        try { return world.AcquireAsset(reference.Value, () => record, use).Get<MeshVirtualPageAsset>().Data; }
+        finally { use.Destroy(); }
     }
 }

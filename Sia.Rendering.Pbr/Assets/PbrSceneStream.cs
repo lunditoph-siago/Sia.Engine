@@ -12,7 +12,7 @@ public sealed partial class PbrSceneStream
     internal sealed record PagePart(string Id, int First, int Count);
     internal sealed record NodeInfo(int Parent, int Children, int ChildCount, float Error, float[] Bounds, PagePart[] Pages, int Triangles);
     internal sealed record HierarchyInfo(int Roots, NodeInfo[] Nodes);
-    internal readonly record struct PageGeometry(MeshVirtualPageData Page, int FirstTriangle, int TriangleCount);
+    internal readonly record struct PageGeometry(StreamGeometryPage Page, int FirstTriangle, int TriangleCount);
     private readonly Dictionary<string, (MeshVirtualPagesData Index, int Page)> _pageUses = new(StringComparer.Ordinal);
     private readonly Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> _prepare;
     private readonly Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> _acquire;
@@ -28,6 +28,7 @@ public sealed partial class PbrSceneStream
     internal Dictionary<string, PageInfo> PageTable { get; } = new(StringComparer.Ordinal);
     internal PageGeometry[] TransparentGeometry { get; }
     internal PbrSceneInstance[] TransparentInstances { get; }
+    internal bool RequiresInstancing { get; }
 
     /// <summary>Enumerates only roots and transparent finest pages required before graphics creation.</summary>
     public static MeshVirtualPageDescriptor[] RequiredPages(PbrVirtualScene scene, long maximumBytes = 256L * 1024 * 1024)
@@ -116,7 +117,7 @@ public sealed partial class PbrSceneStream
                         var range = index.Ranges[r]; var key = (instance.Geometry, r);
                         if (!transparentIndices.TryGetValue(key, out var g)) {
                             g = transparentGeometry.Count; transparentIndices.Add(key, g);
-                            transparentGeometry.Add(new(Required(index, range.Page), range.FirstTriangle, range.TriangleCount));
+                            transparentGeometry.Add(new(StreamGeometryPage.Create(Required(index, range.Page)), range.FirstTriangle, range.TriangleCount));
                         }
                         if (transparentInstances.Count == PbrSceneData.MaximumInstances)
                             throw new InvalidOperationException("Transparent page expansion exceeds its instance limit.");

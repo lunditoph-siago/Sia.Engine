@@ -214,6 +214,7 @@ internal sealed unsafe partial class SceneExampleApp
         _preparedLightmaps = null;
         _lightmapInput = null;
         _materialStream = null;
+        _traceScene = null;
         _rasterScene = null;
         _renderWorld?.Dispose();
         _renderWorld = null;

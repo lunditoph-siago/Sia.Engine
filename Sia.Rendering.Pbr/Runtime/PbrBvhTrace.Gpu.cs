@@ -7,7 +7,7 @@ namespace Sia.Engine.Rendering.Pbr;
 public sealed partial class PbrBvhTrace
 {
     // Runtime uint4 layouts, not serialized asset formats. See rendering/Geometry/instance_trace.
-    private const uint GeometryMagic = 0x31475453; // STG1
+    private const uint GeometryMagic = 0x32475453; // STG2
     private const uint InstanceMagic = 0x31495453; // STI1
 
     /// <summary>Owned GPU rows; one local BVH per scene geometry entry, independent of transforms/material overrides.</summary>
@@ -15,31 +15,48 @@ public sealed partial class PbrBvhTrace
     {
         cancellationToken.ThrowIfCancellationRequested();
         ulong rowCount = 3 + (ulong)Scene.Geometry.Length * 2;
-        foreach (var mesh in Scene.Geometry) rowCount += (ulong)mesh.Nodes.Length * 3 + (ulong)mesh.Triangles.Length * 2 + (ulong)mesh.Positions.Length;
+        var positionCounts = new int[Scene.Geometry.Length];
+        for (var i = 0; i < Scene.Geometry.Length; i++) {
+            var unique = new HashSet<uint3>(); var mesh = Scene.Geometry[i]; var at = 0;
+            foreach (var position in mesh.Positions) {
+                if ((at++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                unique.Add(PositionKey(position));
+            }
+            positionCounts[i] = unique.Count;
+            rowCount += (ulong)mesh.Nodes.Length * 2 + ((ulong)mesh.Triangles.Length * 5 + 3) / 4 + (ulong)unique.Count;
+        }
         var rows = AllocateRows(rowCount, maximumBytes);
         rows[0] = new((uint)Scene.Geometry.Length, 3, (uint)rows.Length, GeometryMagic);
         WriteGeometryDigest(rows.AsSpan(1, 2)); var offset = 3 + Scene.Geometry.Length * 2; var copied = 0;
         for (var i = 0; i < Scene.Geometry.Length; i++) {
             cancellationToken.ThrowIfCancellationRequested();
-            var mesh = Scene.Geometry[i]; var nodes = offset; var triangles = nodes + mesh.Nodes.Length * 3;
-            var vertices = triangles + mesh.Triangles.Length * 2;
-            rows[3 + i * 2] = new((uint)nodes, (uint)mesh.Nodes.Length, (uint)triangles, (uint)mesh.Triangles.Length);
-            rows[4 + i * 2] = new((uint)vertices, (uint)mesh.Positions.Length, 0, 0);
+            var mesh = Scene.Geometry[i]; var nodes = offset; var triangles = nodes + mesh.Nodes.Length * 2;
+            var vertices = checked(triangles + (int)(((long)mesh.Triangles.Length * 5 + 3) / 4));
+            rows[3 + i * 2] = new((uint)nodes, (uint)mesh.Nodes.Length, checked((uint)triangles * 4), (uint)mesh.Triangles.Length);
+            rows[4 + i * 2] = new((uint)vertices, (uint)positionCounts[i], 0, 0);
             foreach (var node in mesh.Nodes) {
                 if ((copied++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if ((uint)node.FirstTriangle > 0x1ffffff || (uint)node.TriangleCount > 127)
+                    throw new ArgumentException("Local BVH node exceeds compact GPU addressing.");
                 rows[offset++] = Bits(node.Bounds.Min, (uint)node.EscapeIndex);
-                rows[offset++] = Bits(node.Bounds.Max, (uint)node.FirstTriangle);
-                rows[offset++] = new((uint)node.TriangleCount, 0, 0, 0);
+                rows[offset++] = Bits(node.Bounds.Max, ((uint)node.FirstTriangle << 7) | (uint)node.TriangleCount);
             }
+            var positions = new Dictionary<uint3, uint>(); var remap = new uint[mesh.Positions.Length];
+            for (var vertex = 0; vertex < remap.Length; vertex++) {
+                if ((copied++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                var position = mesh.Positions[vertex]; var key = PositionKey(position);
+                if (!positions.TryGetValue(key, out var index)) {
+                    index = (uint)positions.Count; positions.Add(key, index); rows[vertices + (int)index] = Bits(position, 0);
+                }
+                remap[vertex] = index;
+            }
+            var word = checked(triangles * 4);
             foreach (var triangle in mesh.Triangles) {
                 if ((copied++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                rows[offset++] = new(triangle.A, triangle.B, triangle.C, (uint)triangle.SourceTriangle);
-                rows[offset++] = new((uint)triangle.MaterialSlot, 0, 0, 0);
+                WriteWord(rows, word++, remap[triangle.A]); WriteWord(rows, word++, remap[triangle.B]); WriteWord(rows, word++, remap[triangle.C]);
+                WriteWord(rows, word++, (uint)triangle.SourceTriangle); WriteWord(rows, word++, (uint)triangle.MaterialSlot);
             }
-            foreach (var position in mesh.Positions) {
-                if ((copied++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                rows[offset++] = Bits(position, 0);
-            }
+            offset = vertices + positionCounts[i];
         }
         cancellationToken.ThrowIfCancellationRequested(); return rows;
     }
@@ -100,7 +117,7 @@ public sealed partial class PbrBvhTrace
     private void WriteGeometryDigest(Span<uint4> output)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIABVHGPUTABLE1"u8);
+        hash.AppendData("SIABVHGPUTABLE2"u8);
         foreach (var mesh in Scene.Geometry) hash.AppendData(Convert.FromHexString(mesh.BuildKey));
         Span<byte> digest = stackalloc byte[32]; hash.GetHashAndReset(digest);
         output[0] = Words(digest[..16]); output[1] = Words(digest[16..]);
@@ -108,6 +125,8 @@ public sealed partial class PbrBvhTrace
     private static uint4 Words(ReadOnlySpan<byte> bytes) => new(BinaryPrimitives.ReadUInt32LittleEndian(bytes),
         BinaryPrimitives.ReadUInt32LittleEndian(bytes[4..]), BinaryPrimitives.ReadUInt32LittleEndian(bytes[8..]), BinaryPrimitives.ReadUInt32LittleEndian(bytes[12..]));
     private static uint4 Bits(float3 value, uint w) => new(BitConverter.SingleToUInt32Bits(value.x), BitConverter.SingleToUInt32Bits(value.y), BitConverter.SingleToUInt32Bits(value.z), w);
+    private static uint3 PositionKey(float3 value) => new(BitConverter.SingleToUInt32Bits(value.x), BitConverter.SingleToUInt32Bits(value.y), BitConverter.SingleToUInt32Bits(value.z));
+    private static void WriteWord(uint4[] rows, int word, uint value) => rows[word / 4][word % 4] = value;
     private static uint4 InverseRow(double3 row, double translation)
     {
         var value = new float4((float)row.x, (float)row.y, (float)row.z, (float)translation);

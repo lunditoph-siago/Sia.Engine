@@ -49,7 +49,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly EntityHandler _collectCaster, _collectDirectional, _collectPoint, _collectSpot;
     private readonly string _prefix;
     private readonly RenderGraphBufferKey _frameKey, _lightsKey, _clustersKey, _tilesKey;
-    private readonly RenderGraphBufferKey _probesKey, _traceKey, _probeConfigKey;
+    private readonly RenderGraphBufferKey _probesKey, _traceKey, _traceGeometryKey, _traceInstancesKey, _probeConfigKey;
     private readonly RenderGraphBufferKey _probeHeaderKey;
     private readonly RenderGraphTextureKey _probeTextureKey;
     private readonly RenderGraphTextureKey _idKey, _hdrKey, _shadowKey, _snapshotKey;
@@ -108,6 +108,8 @@ internal sealed unsafe partial class PbrView : IDisposable
         _baseMetallicKey = new(_prefix + "base-metallic");
         _probesKey = new(_prefix + "probes");
         _traceKey = new(_prefix + "tracing");
+        _traceGeometryKey = new(_prefix + "trace-geometry");
+        _traceInstancesKey = new(_prefix + "trace-instances");
         _probeConfigKey = new(_prefix + "probe-config");
         _probeHeaderKey = new(_prefix + "probe-header");
         _probeTextureKey = new(_prefix + "probe-texture");
