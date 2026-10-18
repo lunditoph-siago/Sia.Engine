@@ -6,8 +6,6 @@ using Sia.Engine.Mesh;
 
 namespace Sia.Engine.Example;
 
-// Offline use-site composition. Mesh builders and the original asset entry own
-// neither this file layout nor multi-resource authoring/publication policy.
 internal static partial class ContentCook
 {
     internal const int MaximumRecipeBytes = 1024 * 1024;
@@ -105,8 +103,6 @@ internal static partial class ContentCook
         finally {
             try {
                 RequireStage();
-                // Only known direct Mesh outputs and scene.json belong to this
-                // invocation. Preserve links/foreign children and report cleanup.
                 var allowedDirectories = meshInputs.ToDictionary(input => Path.Combine(stage, input.Id.Value.ToString("N")),
                     input => input.Files, StringComparer.OrdinalIgnoreCase);
                 foreach (var directory in Directory.GetDirectories(stage)) {
@@ -136,13 +132,6 @@ internal static partial class ContentCook
     }
 
     private static Recipe ReadRecipe(string path)
-    {
-        using var file = File.OpenRead(path);
-        if (file.Length > MaximumRecipeBytes) throw new InvalidDataException("Content recipe exceeds 1 MiB.");
-        var bytes = new byte[(int)file.Length]; file.ReadExactly(bytes);
-        if (file.ReadByte() != -1) throw new InvalidDataException("Content recipe changed while reading.");
-        return JsonSerializer.Deserialize(bytes, ContentRecipeJsonContext.Default.ContentRecipe)
-            ?? throw new InvalidDataException("Content recipe must be an object.");
-    }
+        => AssetInput.ReadJson(path, ContentRecipeJsonContext.Default.ContentRecipe, MaximumRecipeBytes);
 }
 #endif

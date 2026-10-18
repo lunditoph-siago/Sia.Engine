@@ -1,5 +1,3 @@
-using Sia.Engine.Rendering.Pbr;
-
 namespace Sia.Engine.Example;
 
 public static partial class Program
@@ -8,74 +6,34 @@ public static partial class Program
     {
         try {
 #if !BROWSER
-            if (args.Length is 4 or 6 && args[0] == "--package-example-content" && args[2] == "--output") {
-                await ExampleContent.PackAsync(args[1], args[3], maximumBundleBytes: OfflineTotalBytes(args));
-                Console.WriteLine($"Packaged example content: {Path.GetFullPath(args[3])}");
-                return 0;
-            }
-            if (args.Length is 4 or 6 && args[0] == "--cook-content" && args[2] == "--output") {
-                var sceneId = await ContentCook.CookAsync(args[1], args[3], maximumTotalBytes: OfflineTotalBytes(args));
-                Console.WriteLine($"Cooked content {sceneId.Value:N}: {Path.GetFullPath(args[3])}");
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--pack-scene" && args[2] == "--output") {
-                var sceneId = await ScenePack.PackAsync(args[1], args[3]);
-                Console.WriteLine($"Packed scene {sceneId.Value:N}: {Path.GetFullPath(args[3])}");
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--cook-mesh" && args[2] == "--output") {
-                var mesh = MeshCook.Cook(args[1], args[3]);
-                Console.WriteLine($"Cooked Mesh {mesh.Id.Value:N}: {Path.GetFullPath(args[3])}");
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--bake-environment" && args[2] == "--output") {
-                BakeEnvironment(args[1], args[3]);
-                return 0;
-            }
-            if (args.Length == 4 && args[0] == "--bake-probes" && args[2] == "--output") {
-                BakeProbes(args[1], args[3]);
-                return 0;
-            }
+            if (await RunOfflineAsync(args)) return 0;
 #endif
+            var options = SceneOptions.Parse(args);
+            var pipeline = options.Pipeline;
+            var scenePath = options.ScenePath;
 #if BROWSER
             BrowserOwner = await BrowserThread.StartAsync();
 #endif
-            var (pipeline, debugMode, distance, scenePath, finest, camera) = ParseOptions(args);
             using var streamHttp = new HttpClient();
+            ExampleContent.Entry? content = null;
             if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && scenePath is null) {
 #if BROWSER
                 throw new ArgumentException("The browser entry point must supply its default reference-scene URL.");
 #else
-                var content = ExampleContent.Default(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"));
+                content = ExampleContent.Default(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"), options.Quality);
                 scenePath = content.Scene;
-                LightmapsPath ??= content.Lightmaps;
 #endif
             }
-            var referencePath = pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny
-                && scenePath is not null && PbrSceneFiles.IsReferenceScene(scenePath);
-            if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && !referencePath)
-                throw new ArgumentException("Mesh scenes require a cooked reference .siascene with independent products.");
-            PbrSceneFiles.Prepared? references = null;
-            var dynamicGi = DynamicSceneGi ?? PbrRendererSettings.ForQuality(Quality).DynamicSceneGi;
-            await using var mixedUse = referencePath && Quality != Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareMixedAsync(scenePath!, streamHttp, Quality, tracing: dynamicGi,
-                    rasterInstances: MovingInstance is { } moving ? new HashSet<Guid> { moving } : null) : null;
-            if (referencePath) references = Quality == Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareRasterAsync(scenePath!, streamHttp)
-                : mixedUse;
-            var lighting = await LightingFiles.PrepareAsync(EnvironmentPath, ProbesPath, streamHttp);
-            await using var lightmaps = LightmapsPath is null ? null
-                : await LightmapFiles.PrepareAsync(LightmapsPath, streamHttp, references!);
-            if (MovingInstance is { } movingId) {
-                var found = false;
-                foreach (var instance in references!.Scene.Data.Instances) found |= instance.Id == movingId;
-                if (!found) throw new ArgumentException("Moving instance is absent from the selected scene.");
-                if (lightmaps is not null)
-                    foreach (var receiver in lightmaps.Set.Data.Receivers)
-                        if (receiver.Receiver.InstanceId == movingId)
-                            throw new ArgumentException("A static lightmap receiver cannot be the moving instance.");
-            }
-            var app = new SceneExampleApp(pipeline, debugMode, distance, finest, camera, references, lighting, lightmaps);
+            var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
+            await using var mixedUse = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi) : null;
+            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)mixedUse
+                ?? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp);
+            var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath ?? content?.Environment, options.ProbesPath, streamHttp);
+            var lightmapsPath = content?.Lightmaps;
+            await using var lightmaps = lightmapsPath is null ? null
+                : await LightmapFiles.PrepareAsync(lightmapsPath, streamHttp, references!);
+            var app = new SceneExampleApp(options, references, lighting, lightmaps);
             references = null;
             lighting = null;
 #if BROWSER
@@ -93,9 +51,7 @@ public static partial class Program
             }
 #else
             using (app) {
-                try {
-                    app.Run();
-                }
+                try { app.Run(); }
                 finally { await app.StopSceneStreamingAsync(); }
             }
 #endif
@@ -110,14 +66,4 @@ public static partial class Program
         }
     }
 
-#if !BROWSER
-    private static long OfflineTotalBytes(string[] args)
-    {
-        if (args.Length == 4) return 512L * 1024 * 1024;
-        if (args[4] != "--maximum-total-bytes" || !long.TryParse(args[5],
-            System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var bytes) || bytes <= 0)
-            throw new ArgumentException("Expected --maximum-total-bytes <positive integer>.");
-        return bytes;
-    }
-#endif
 }
