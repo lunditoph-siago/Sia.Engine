@@ -5,7 +5,7 @@ namespace Sia.Engine.Rendering;
 public sealed class RenderWorld : IDisposable
 {
     private readonly Dictionary<RenderViewKey, RenderView> _views = [];
-    private bool _disposed;
+    internal bool IsDisposed { get; private set; }
 
     public World Entities { get; } = new();
     public RenderResourceCollection Resources { get; } = new();
@@ -14,14 +14,12 @@ public sealed class RenderWorld : IDisposable
 
     public ulong FrameIndex { get; private set; }
 
-    internal void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
-
     internal bool ContainsView(RenderView? view)
         => view is not null && _views.TryGetValue(view.Key, out var current) && ReferenceEquals(current, view);
 
     public RenderView GetOrCreateView(RenderViewKey key)
     {
-        ThrowIfDisposed();
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         if (_views.TryGetValue(key, out var view)) return view;
 
         view = new RenderView(key);
@@ -38,7 +36,7 @@ public sealed class RenderWorld : IDisposable
 
     public void BeginFrame()
     {
-        ThrowIfDisposed();
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
         FrameIndex++;
         foreach (var view in _views.Values) {
             view.BeginFrame();
@@ -47,9 +45,9 @@ public sealed class RenderWorld : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (IsDisposed) return;
 
-        _disposed = true;
+        IsDisposed = true;
         foreach (var view in _views.Values)
             view.PersistentResources.DisposeOwned();
         _views.Clear();
