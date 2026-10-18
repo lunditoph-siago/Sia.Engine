@@ -31,5 +31,5 @@
     <PackageReference Include="Sia.GLFW" Version="0.0.8" />
     <PackageReference Include="Sia.GLFW.Native" Version="0.0.8" />
   </ItemGroup>
-  <Import Project="Bistro.targets" />
+  <Import Project="ExampleContent.targets" />
 </Project>

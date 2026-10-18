@@ -27,28 +27,18 @@
     nav a:hover, nav a[aria-current="page"] { background: #ffffff14; color: white; }
     #settings-toggle { min-height: 48px; padding: 0 18px; }
     #inspection { position: fixed; top: calc(max(16px, env(safe-area-inset-top)) + 62px); right: max(16px, env(safe-area-inset-right)); width: min(340px, calc(100vw - 32px)); max-height: calc(100dvh - 156px); overflow-y: auto; margin: 0; padding: 20px; }
-    .panel-title { margin: 0 0 16px; font-size: 17px; font-weight: 600; }
+    .panel-title { margin: 0; font-size: 17px; font-weight: 600; }
+    .panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .quality-badge { padding: 4px 10px; border: 1px solid #9dc8e53a; border-radius: 6px; background: #9dc8e50d; color: #bcd8eb; font-size: 12px; }
     #inspection-status { margin: 0 0 16px; color: #aab9c7; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
     .controls { display: grid; gap: 8px; }
-    #quality-controls { display: grid; gap: 8px; margin-bottom: 16px; }
-    #quality-select, #quality-apply { min-height: 44px; padding: 10px; color: inherit; font: inherit; background: #202a35; border: 1px solid #ffffff24; border-radius: 8px; }
-    .setting-note { margin: 0; font-size: 12px; line-height: 1.6; color: #aab9c7; }
     .controls button, #retry { min-height: 44px; padding: 10px 14px; background: #ffffff0a; border: 1px solid #ffffff24; border-radius: 8px; text-align: left; }
     .controls button:hover, #retry:hover { background: #ffffff18; }
     .distance { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: #b5c1cc; }
-    #inspection-distance, #camera-speed { flex: 1; min-width: 0; height: 44px; accent-color: #9dc8e5; }
+    #inspection-distance { flex: 1; min-width: 0; height: 44px; accent-color: #9dc8e5; }
     .help { margin-top: 20px; padding-top: 16px; border-top: 1px solid #ffffff18; }
     summary { cursor: pointer; min-height: 32px; }
     #inspection-help { line-height: 1.8; color: #b5c1cc; font-size: 12px; }
-    #touch-controller { position: fixed; inset: 0; z-index: 2; pointer-events: none; user-select: none; }
-    .stick { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); width: clamp(96px, 22vw, 128px); aspect-ratio: 1; border: 1px solid #ffffff38; border-radius: 50%; background: radial-gradient(circle, #18253090 42%, #10141980 43%); touch-action: none; pointer-events: auto; }
-    #move-pad { left: max(20px, env(safe-area-inset-left)); }
-    #look-zone { position: absolute; inset: 0 0 0 50%; pointer-events: auto; touch-action: none; }
-    .stick-thumb { position: absolute; width: 36%; height: 36%; left: 32%; top: 32%; border: 1px solid #d1e8f099; border-radius: 50%; background: #b6d7e540; transform: translate(var(--stick-x, 0px), var(--stick-y, 0px)); pointer-events: none; }
-    .stick-label { position: absolute; bottom: 10%; width: 100%; text-align: center; font-size: 9px; letter-spacing: .16em; color: #d6e2e9bb; pointer-events: none; }
-    .elevation { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); right: max(20px, env(safe-area-inset-right)); display: flex; flex-direction: column; gap: 8px; }
-    .elevation button { width: 44px; height: 44px; border: 1px solid #ffffff38; border-radius: 50%; color: #e6f0f5; background: #101419a6; font-size: 20px; pointer-events: auto; touch-action: none; }
-    .elevation button.held { background: #8eb8ca88; }
     #credits { position: fixed; z-index: 3; right: max(20px, env(safe-area-inset-right)); top: max(78px, calc(env(safe-area-inset-top) + 70px)); max-width: min(360px, calc(100vw - 40px)); color: #bdc9d3; font-size: 11px; background: #101419d9; border-radius: 8px; padding: 8px 12px; }
     #credits summary { min-height: auto; text-align: right; }
     .asset-credit { display: block; margin-top: 10px; color: inherit; line-height: 1.65; overflow-wrap: anywhere; }
@@ -75,22 +65,17 @@
     <nav class="glass" aria-label="Examples">
       <span class="brand">SIA</span>
       <a href="?pipeline=bunny">Bunny</a>
-      <a href="?pipeline=pbr">Bistro</a>
       <a href="?pipeline=unlit">Unlit</a>
     </nav>
     <button id="settings-toggle" class="glass" type="button" aria-expanded="false" aria-controls="inspection" disabled>Settings</button>
   </div>
   <fieldset id="inspection" class="glass" hidden disabled aria-label="Scene settings">
-    <div class="panel-title">Scene settings</div>
-    <p id="inspection-status"></p>
-    <div id="quality-controls" hidden>
-      <label for="quality-select">Rendering quality</label>
-      <select id="quality-select"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
-      <button id="quality-apply" type="button" disabled>Apply and restart</button>
-      <p class="setting-note">Changing quality restarts the scene. High enables dynamic scene probes.</p>
+    <div class="panel-heading">
+      <div id="scene-title" class="panel-title">Scene settings</div>
+      <output id="quality-value" class="quality-badge" aria-label="Rendering quality" hidden></output>
     </div>
+    <p id="inspection-status"></p>
     <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>
-    <label id="camera-speed-row" class="distance" hidden>Slow <input id="camera-speed" type="range" min="1" max="16" value="4" aria-label="Move speed" /> Fast</label>
     <div class="controls">
       <button id="inspection-tour" type="button">Pause tour</button>
       <button id="inspection-reset" type="button">Return near</button>
@@ -102,20 +87,15 @@
       <p id="inspection-help">Drag the distance slider to move closer or farther. Use the controls above to pause the tour, reset the view or change shading.</p>
     </details>
   </fieldset>
-  <div id="touch-controller" hidden aria-label="Camera touch controls">
-    <div id="move-pad" class="stick" role="group" aria-label="Move joystick"><span class="stick-thumb"></span><span class="stick-label">MOVE</span></div>
-    <div id="look-zone" role="group" aria-label="Drag to look"></div>
-    <div class="elevation"><button id="move-up" type="button" aria-label="Move up">↑</button><button id="move-down" type="button" aria-label="Move down">↓</button></div>
-  </div>
   <details id="credits" hidden>
     <summary>Credits</summary>
     <a id="bunny-credit" class="asset-credit" hidden href="https://graphics.stanford.edu/data/3Dscanrep/">Stanford Bunny · Stanford University Computer Graphics Laboratory</a>
-    <div id="pbr-credit" class="asset-credit" hidden></div>
+    <div id="scene-credit" class="asset-credit" hidden></div>
   </details>
   <section id="loading" role="status" aria-live="polite" aria-busy="true">
     <div class="loading-card">
       <div class="eyebrow">Sia Engine / Interactive scene</div>
-      <h1 id="loading-title">Bistro</h1>
+      <h1 id="loading-title">Stanford Bunny</h1>
       <div class="loading-line"><span id="loading-stage">Starting engine</span><span id="loading-percent"></span></div>
       <progress id="loading-progress" max="1" aria-label="Scene loading progress"></progress>
       <p id="loading-note">The first visit downloads and prepares the scene. This may take a minute.</p>
