@@ -39,11 +39,10 @@ public sealed class RenderFeaturePipeline<TContext>
         }
     }
 
-    /// <summary>Validates the complete view batch before extraction, feature preparation and queueing. BeginFrame remains caller-owned.</summary>
     public void RunFrame(RenderWorld world, ReadOnlySpan<RenderFeatureContext<TContext>> contexts)
     {
         ArgumentNullException.ThrowIfNull(world);
-        world.ThrowIfDisposed();
+        ObjectDisposedException.ThrowIf(world.IsDisposed, world);
         var views = new HashSet<RenderView>();
         foreach (ref readonly var context in contexts) {
             if (!ReferenceEquals(context.RenderWorld, world) || !world.ContainsView(context.View))
