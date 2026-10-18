@@ -3,46 +3,30 @@
 #import pbr/bindings
 #import pbr/pbr_lighting
 #import pbr/Common/surface
+#if REFLECTION_CAPTURES
+#import pbr/Providers/reflection_capture
+#endif
 #if STATIC_LIGHTMAP
 #import pbr/Providers/lightmap
 #endif
 #if SCENE_GI
-#import rendering/Lighting/probe_basis
+#import rendering/Lighting/probe_volume
 #endif
 
 #if SCENE_GI
 fn scene_probe_irradiance(position: vec3<f32>, normal: vec3<f32>, correction: bool) -> vec3<f32> {
-    let paired = probe_header[2].z > 0.5;
-    let dim = vec3<f32>(probe_header[0].w, probe_header[1].w, probe_header[2].x);
-    let coordinate = (position + normal * 0.03 - probe_header[0].xyz) / probe_header[1].xyz;
-    if (any(coordinate < vec3<f32>(0)) || any(coordinate > dim - 1.0)) {
-        if (correction) { return vec3<f32>(0.0); }
-        return evaluate_sh_irradiance(sh, normal);
-    }
-    var packed: array<vec4<f32>, 7>;
-    let texture_bands = RENDERING_PROBE_TEXTURE_BANDS * select(1u, 2u, paired);
-    let first_band = select(0u, RENDERING_PROBE_TEXTURE_BANDS, paired && !correction);
-    for (var band = 0u; band < RENDERING_PROBE_TEXTURE_BANDS; band++) {
-        let uv = (coordinate + vec3<f32>(0.5, 0.5, 0.5 + f32(band + first_band) * dim.z))
-            / (dim * vec3<f32>(1, 1, f32(texture_bands)));
-        packed[band] = textureSampleLevel(probe_volume, environment_sampler, uv, 0.0);
-    }
-    let validity = packed[6].w;
-    if (validity < 1e-5) {
-        if (correction) { return vec3<f32>(0.0); }
-        return evaluate_sh_irradiance(sh, normal);
-    }
-    let coefficients = rendering_unpack_probe(packed);
-    let basis = rendering_probe_basis(normal);
-    var irradiance = vec3<f32>(0);
-    for (var c = 0u; c < 9u; c++) {
-        irradiance += coefficients[c] * basis[c] * rendering_probe_convolution(c);
-    }
-    // Unknown pairs carry zero weight; do not amplify a sparse valid corner into full correction.
-    if (correction) { return irradiance; }
-    return max(irradiance / validity, vec3<f32>(0));
+    return rendering_scene_probe_irradiance(probe_volume, environment_sampler, probe_header, sh, position, normal, correction);
 }
 #endif
+
+fn get_environment_specular(position: vec3<f32>, direction: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let sky = sample_prefiltered_specular(environment, environment_sampler, direction, roughness, f32(textureNumLevels(environment)));
+#if REFLECTION_CAPTURES
+    return capture_specular(position, direction, roughness, sky);
+#else
+    return sky;
+#endif
+}
 
 fn get_indirect_lighting(surface: Surface, view: vec3<f32>) -> vec3<f32> {
     let position = surface.position; let normal = surface.normal;
@@ -70,5 +54,5 @@ fn get_indirect_lighting(surface: Surface, view: vec3<f32>) -> vec3<f32> {
 #endif
     }
     return indirect_lighting(normal, view, base, metal, rough, max(irradiance, vec3<f32>(0.0)),
-        environment, environment_sampler, f32(textureNumLevels(environment)), brdf_lut, brdf_sampler);
+        get_environment_specular(position, reflect(-view, normal), rough), brdf_lut, brdf_sampler);
 }

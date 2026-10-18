@@ -13,7 +13,7 @@ internal sealed partial class PbrGpuScene
         foreach (var instance in source.TransparentInstances) {
             if (instanced && !resident.Add(instance.Geometry)) continue;
             using var geometry = new PbrResidentGeometry(source.TransparentGeometry[instance.Geometry]);
-            vertices += (uint)geometry.VertexCount; triangles += geometry.Fine;
+            vertices += (uint)geometry.VertexCount; triangles += geometry.TriangleCount;
         }
         var roots = new HashSet<string>(StringComparer.Ordinal);
         foreach (var instance in source.Instances.Span) {

@@ -11,13 +11,16 @@ public readonly record struct PbrBvhHit(Guid InstanceId, int Instance, int Sourc
     public float3 GeometricNormal { get; init; }
 }
 
+/// <summary>Only complete queries may publish a hit. Steps count top/local nodes, instance candidates and triangles.</summary>
+public readonly record struct PbrBvhQuery(PbrBvhHit Hit, bool HasHit, bool Complete, uint Steps);
+
 /// <summary>
 /// Immutable CPU instance acceleration over acquired local BVHs. Build never copies/rebuilds mesh geometry.
 /// Callers retain the scene's assets; GPU upload/traversal and opacity/shading policy are separate.
 /// </summary>
 public sealed partial class PbrBvhTrace
 {
-    private readonly record struct InstanceData(double3 Row0, double3 Row1, double3 Row2, double3 Translation, Aabb Bounds, bool Disabled)
+    private readonly record struct InstanceData(double3 Row0, double3 Row1, double3 Row2, double3 Translation, Aabb Bounds, bool Disabled, float4x4 Transform)
     {
         public double3 LocalVector(double3 vector) => new(math.dot(Row0, vector), math.dot(Row1, vector), math.dot(Row2, vector));
     }
@@ -97,7 +100,7 @@ public sealed partial class PbrBvhTrace
         if (!math.all(math.isfinite(bounds.Min)) || !math.all(math.isfinite(bounds.Max)))
             throw new ArgumentException("Conservative transformed instance bounds must remain finite.", nameof(transform));
         return new(math.cross(b, c) / determinant, math.cross(c, a) / determinant,
-            math.cross(a, b) / determinant, (double3)transform.c3.xyz, bounds, false);
+            math.cross(a, b) / determinant, (double3)transform.c3.xyz, bounds, false, transform);
     }
 
     private static Aabb TransformBounds(Aabb bounds, float4x4 transform)

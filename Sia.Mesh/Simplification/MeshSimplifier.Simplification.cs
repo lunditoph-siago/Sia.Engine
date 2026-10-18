@@ -2,18 +2,18 @@ using Sia.Math;
 
 namespace Sia.Engine.Mesh;
 
-public static partial class MeshPatchBuilder
+internal static partial class MeshSimplifier
 {
-    private static (MeshData Geometry, float Error) Simplify(MeshData mesh, int target,
-        MeshPatchBuildSettings settings, CancellationToken cancellationToken)
+    internal static (MeshData Geometry, float Error) Reduce(MeshData mesh, int target,
+        float normalWeight, float uvWeight, CancellationToken cancellationToken, bool strictManifold = true)
     {
-        var (triangles, incident, locked) = Topology(mesh, cancellationToken);
+        var (triangles, incident, locked) = Topology(mesh, cancellationToken, strictManifold);
         var deleted = new bool[triangles.Length];
         var revisions = new int[mesh.Vertices.Length];
         var positions = mesh.Vertices.Select(Position).ToArray();
         var coordinateCount = mesh.HasBakeUvs ? 14 : 12;
         var quadricSize = coordinateCount * (coordinateCount + 1) / 2;
-        var quadrics = BuildQuadrics(mesh, triangles, locked, settings, cancellationToken,
+        var quadrics = BuildQuadrics(mesh, triangles, locked, normalWeight, uvWeight, cancellationToken,
             coordinateCount, out var coordinates, out var positionScale);
         var maximumCost = 0d;
         var candidates = new PriorityQueue<Collapse, (double Cost, double Length, int From, int To)>();
@@ -64,9 +64,8 @@ public static partial class MeshPatchBuilder
             indices[offset++] = (uint)triangles[t].B;
             indices[offset++] = (uint)triangles[t].C;
         }
-        // Coordinates are normalized by positionScale; restore mesh-space units.
         var error = RoundUp(System.Math.Sqrt(maximumCost) * positionScale);
-        return (Compact(mesh.Vertices, indices, mesh.BakeUvs, cancellationToken: cancellationToken), error);
+        return (MeshPatchBuilder.Compact(mesh.Vertices, indices, mesh.BakeUvs, cancellationToken: cancellationToken), error);
 
         void Enqueue(int from, int to)
         {

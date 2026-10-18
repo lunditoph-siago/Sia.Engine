@@ -8,6 +8,8 @@ public sealed class PbrRasterGeometry
 {
     public MeshRasterData Product { get; }
     public int Section { get; }
+    public ReadOnlySpan<MeshRasterLod> Lods => Product.GetLods(Section);
+    public ReadOnlySpan<uint> GetIndices(int lod) => Product.GetIndices(Section, lod);
     public ReadOnlySpan<uint> Indices => Product.Indices.Slice(Product.Sections[Section].FirstIndex, Product.Sections[Section].IndexCount);
     public Aabb Bounds { get; }
 
@@ -64,6 +66,6 @@ public sealed class PbrRasterScene
         ReadOnlySpan<PbrSceneInstance> instances, string attribution)
     {
         foreach (var item in geometry) ArgumentNullException.ThrowIfNull(item);
-        PbrSceneAsset.ValidateTables(geometry.Length, materials, instances, attribution);
+        PbrSceneComposition.ValidateTables(geometry.Length, materials, instances, attribution);
     }
 }

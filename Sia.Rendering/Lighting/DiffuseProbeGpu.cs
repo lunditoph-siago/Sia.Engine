@@ -45,7 +45,7 @@ public sealed class DiffuseProbeGpu : IDisposable
 
     public int Count => _shape.Count;
 
-    internal static string ShaderSourceAcquired(World world)
+    internal static string ShaderSource(World world)
         => CompileProbe(world, false);
 
     internal static string ShaderSourceInstanced(World world)
@@ -165,7 +165,7 @@ public sealed class DiffuseProbeGpu : IDisposable
             _group = GpuBinding.Group(_gpu, layout, [.. groupEntries]);
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, layout);
             var source = SignedCorrection ? ShaderSourcePaired(frame.ResourceWorld)
-                : tracing.IsInstanced ? ShaderSourceInstanced(frame.ResourceWorld) : ShaderSourceAcquired(frame.ResourceWorld);
+                : tracing.IsInstanced ? ShaderSourceInstanced(frame.ResourceWorld) : ShaderSource(frame.ResourceWorld);
             var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, source, "scene-probe-transport"));
             _pipeline = CreatePipeline(_gpu, pipelineLayout, shader);
         }

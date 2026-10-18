@@ -13,14 +13,22 @@ public sealed partial class MeshVirtualPagesData
         ArgumentNullException.ThrowIfNull(source);
         if (!productId.IsValid) throw new ArgumentException("Virtual product requires a logical ID.", nameof(productId));
         cancellationToken.ThrowIfCancellationRequested();
-        var derived = MeshVirtualData.Build(source, settings, maximumBytes, cancellationToken);
+        var options = settings ?? MeshPatchBuildSettings.Default;
+        if (!options.IsValid) throw new ArgumentOutOfRangeException(nameof(settings));
+        if (source.Sections.Length > MaximumParts) throw new ArgumentException("Virtual Mesh exceeds its material-section bound.", nameof(source));
         var parts = new List<MeshVirtualPagePart>(); var nodes = new List<MeshVirtualPageNode>();
         var ranges = new List<MeshVirtualPageRange>(); var descriptors = new List<MeshVirtualPageDescriptor>();
         var pages = new Dictionary<AssetId, MeshVirtualPageData>();
         ulong ownedPages = 0;
-        foreach (var part in derived.Parts) {
+        foreach (var section in source.Sections) {
             cancellationToken.ThrowIfCancellationRequested();
-            var tree = part.Patches.Build.Tree; var firstNode = nodes.Count;
+            if (ownedPages >= maximumBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+            var compact = MeshPatchBuilder.Compact(source.Vertices,
+                source.Indices.Slice(section.FirstIndex, section.IndexCount), source.BakeUvs, maximumBytes - ownedPages, cancellationToken);
+            var build = MeshPatchBuilder.Build(compact, options, cancellationToken);
+            var tree = build.Tree; var firstNode = nodes.Count;
+            if (tree.PayloadBytes > maximumBytes - ownedPages)
+                throw new ArgumentOutOfRangeException(nameof(maximumBytes), "Virtual hierarchy exceeds its owned-array budget.");
             var nodeRanges = new List<MeshVirtualPageRange>[tree.Nodes.Length];
             var depths = new int[tree.Nodes.Length];
             for (var i = 0; i < tree.Nodes.Length; i++) {
@@ -49,7 +57,7 @@ public sealed partial class MeshVirtualPagesData
                     ranges.Count, nodeRanges[i].Count, node.TriangleCount));
                 ranges.AddRange(nodeRanges[i]);
             }
-            parts.Add(new(part.MaterialSlot, part.FirstSourceTriangle, part.Patches.Build.SourceTriangleCount,
+            parts.Add(new(section.MaterialSlot, section.FirstIndex / 3, build.SourceTriangleCount,
                 firstNode, tree.Nodes.Length, tree.RootCount, tree.FinestTriangleCount));
             if (nodes.Count > MaximumNodes || ranges.Count > MaximumRanges)
                 throw new ArgumentOutOfRangeException(nameof(source), "Virtual index exceeds its hierarchy limits.");
@@ -69,7 +77,7 @@ public sealed partial class MeshVirtualPagesData
                 indices.Clear(); spans.Clear();
             }
         }
-        var result = new MeshVirtualPagesData(productId, source.ContentHash, derived.Settings, source.Vertices.Length,
+        var result = new MeshVirtualPagesData(productId, source.ContentHash, options, source.Vertices.Length,
             source.Indices.Length / 3, source.HasBakeUvs, source.Bounds, [.. parts], [.. nodes], [.. ranges], [.. descriptors], cancellationToken);
         if (result.PayloadBytes > maximumBytes - ownedPages || result.EncodedBytes > maximumBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumBytes), "Virtual index/pages exceed their owned-array budget.");

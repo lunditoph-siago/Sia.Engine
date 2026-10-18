@@ -41,7 +41,7 @@ public sealed partial class PbrSceneStream
             rasterMaterials[i] = index;
         }
         TextureSources.Clear(); _fullTextures.Clear();
-        Bootstrap = PbrSceneAsset.AdoptResolved([], InitializeTextures(materials.ToArray()), [], raster.Attribution, Identity.ToArray());
+        Materials = InitializeTextures(materials.ToArray());
         var hierarchies = Hierarchies.ToList(); var opaque = Instances.ToArray().ToList();
         var nodeCount = hierarchies.Sum(h => (long)h.Nodes.Length);
         var transparentGeometry = TransparentGeometry.ToList(); var transparent = TransparentInstances.ToList();

@@ -10,6 +10,20 @@ internal sealed partial class SceneExampleApp
     private DiffuseProbeAsset? _bakedProbes;
     private LightmapFiles.Prepared? _preparedLightmaps;
     private PbrLightmapInput? _lightmapInput;
+    private ReflectionCaptureFiles.Prepared[]? _preparedCaptures;
+    private PbrReflectionCaptureInput[]? _captureInputs;
+    private readonly List<Sia.Entity> _captureRoots = [];
+
+    private void AcquireCaptureAssets()
+    {
+        if (_preparedCaptures is not { Length: > 0 } prepared) { _preparedCaptures = null; return; }
+        var inputs = new PbrReflectionCaptureInput[prepared.Length];
+        for (var at = 0; at < prepared.Length; at++) {
+            var acquired = ReflectionCaptureFiles.Acquire(_renderWorld!.Entities, prepared[at]);
+            _captureRoots.Add(acquired.Root); inputs[at] = acquired.Input;
+        }
+        _captureInputs = inputs; _preparedCaptures = null;
+    }
 
     private void AcquireLightmapAssets(PbrSceneData scene)
     {

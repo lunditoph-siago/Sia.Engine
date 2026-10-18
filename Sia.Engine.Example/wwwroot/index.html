@@ -12,7 +12,7 @@
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
     #canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
-    button, a, summary, input { -webkit-tap-highlight-color: transparent; }
+    button, a, summary, input, select { -webkit-tap-highlight-color: transparent; }
     button, a, summary { touch-action: manipulation; }
     button { color: inherit; font: inherit; cursor: pointer; }
     button:disabled { cursor: wait; opacity: .5; }
@@ -72,7 +72,11 @@
   <fieldset id="inspection" class="glass" hidden disabled aria-label="Scene settings">
     <div class="panel-heading">
       <div id="scene-title" class="panel-title">Scene settings</div>
-      <output id="quality-value" class="quality-badge" aria-label="Rendering quality" hidden></output>
+      <select id="quality-select" class="quality-badge" aria-label="Rendering quality" hidden>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low · Raster LOD</option>
+      </select>
     </div>
     <p id="inspection-status"></p>
     <label id="inspection-distance-row" class="distance">Near <input id="inspection-distance" type="range" min="0" max="1000" value="0" aria-label="Camera distance" /> Far</label>

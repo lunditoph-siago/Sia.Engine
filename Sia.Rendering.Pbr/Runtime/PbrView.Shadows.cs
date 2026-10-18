@@ -28,12 +28,14 @@ internal sealed unsafe partial class PbrView
         _shadowMatrices[layer] = matrix;
         if (_selection is not null) {
             _selection.Configure(layer, matrix, _owner.Settings.ShadowResolution, _owner.Settings.ShadowResolution,
-                _owner.Settings.ShadowTexelError, (uint)_owner.Settings.Streaming.MaximumSelectionNodesPerView);
+                _owner.Settings.ShadowTexelError, (uint)_owner.Scene.Streaming!.SelectionNodeLimit);
             return;
         }
         // Cached depth still needs view demand and residency protection every frame.
         if (!_shadowDirty[layer] && _owner.Scene.Streaming is null) return;
         var culler = new FrustumCuller(Frustum.CreateFromViewProjection(matrix));
+        var resolution = _owner.Settings.ShadowResolution;
+        var projection = ProjectedGeometryError.PrepareLodProjection(matrix, resolution, resolution);
         var list = _shadowDraws[layer];
         list.Clear();
         if (_owner.Scene.Streaming is { } streaming) {
@@ -42,12 +44,9 @@ internal sealed unsafe partial class PbrView
             CompactStreamDraws(list);
         }
         else {
-            var resolution = _owner.Settings.ShadowResolution;
-            var projection = ProjectedGeometryError.PrepareLodProjection(matrix, resolution, resolution);
             foreach (var draw in _owner.Scene.Opaque)
                 if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
-                    AddRange(list, SelectGeometry(draw, matrix, projection, resolution, resolution,
-                        _owner.Settings.ShadowTexelError));
+                    AddRange(list, SelectRasterLod(draw, matrix, projection, resolution, resolution, _owner.Settings.ShadowTexelError));
         }
     }
 

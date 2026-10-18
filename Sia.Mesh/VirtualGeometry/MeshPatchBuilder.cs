@@ -34,7 +34,7 @@ public static partial class MeshPatchBuilder
             foreach (var group in Groups(frontier, options.MaxChildren, cancellationToken)) {
                 var joined = Join(group);
                 var target = System.Math.Max(1, (int)System.Math.Ceiling(joined.Indices.Length / 3d * options.ParentTriangleRatio));
-                var (simplified, error) = Simplify(joined, target, options, cancellationToken);
+                var (simplified, error) = MeshSimplifier.Reduce(joined, target, options.NormalWeight, options.UVWeight, cancellationToken);
                 if (simplified.Indices.Length / 3 > target) { targetMisses++; }
                 if (simplified.Indices.Length == joined.Indices.Length) {
                     unreduced++;

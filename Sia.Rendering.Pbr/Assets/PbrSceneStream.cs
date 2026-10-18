@@ -19,7 +19,7 @@ public sealed partial class PbrSceneStream
     public ReadOnlyMemory<VisibilityInstance> Instances { get; }
     /// <summary>Authored section instances before opaque/transparent page partitioning.</summary>
     public int SourceInstanceCount { get; }
-    public PbrSceneAsset Bootstrap { get; }
+    public ReadOnlyMemory<PbrMaterialAsset> Materials { get; }
     public Aabb Bounds { get; }
     public Aabb GeometryBounds { get; }
     public ReadOnlyMemory<byte> Identity { get; }
@@ -92,7 +92,7 @@ public sealed partial class PbrSceneStream
         }
         GeometryBounds = math.all(math.isfinite(minimum)) ? new(minimum, maximum) : new(float3.zero, float3.zero);
         var materials = InitializeTextures(scene.Materials.Span);
-        Bootstrap = PbrSceneAsset.AdoptResolved([], materials, [], scene.Attribution, scene.TransportIdentity.ToArray());
+        Materials = materials;
         var hierarchies = new List<HierarchyInfo>(); var opaque = new List<VisibilityInstance>();
         var geometryIndices = new Dictionary<int, int>();
         var transparentGeometry = new List<PageGeometry>(); var transparentInstances = new List<PbrSceneInstance>();

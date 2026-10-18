@@ -8,15 +8,8 @@ public static class UiShaderSource
     private const string k_ResourceName = "Sia.UI.Render.Shaders.ui_node.wgsl";
     private const string k_VertexBufferResourceName =
         "Sia.UI.Render.Shaders.ui_node_vertex_buffer.wgsl";
-    // Authored raw source identities, shared by preprocessing variants.
     private static readonly AssetId s_SourceId = new(new Guid("087a7db4-5fa7-4cc3-b568-dccb8f5c9eb2"));
     private static readonly AssetId s_VertexBufferSourceId = new(new Guid("d0533362-44f3-4c00-bf41-c68d30c4503f"));
-
-    public static string Load(UiVertexDataMode vertexDataMode = UiVertexDataMode.StorageBuffers) =>
-        LoadResource(k_ResourceName, vertexDataMode);
-
-    public static string LoadVertexBuffer() =>
-        LoadResource(k_VertexBufferResourceName, UiVertexDataMode.VertexBuffer);
 
     public static Entity Acquire(World world) => AcquireResource(world, s_SourceId, k_ResourceName);
 
@@ -35,10 +28,6 @@ public static class UiShaderSource
         AssetLibrary.RegisterAsset<UiShaderSourceResource, UiShaderSourceRecord>();
         return world.AcquireAsset(id, () => EmbeddedLoader.Load<UiShaderSourceRecord>(resourceName, typeof(UiShaderSource).Assembly));
     }
-
-    private static string LoadResource(string resourceName, UiVertexDataMode vertexDataMode)
-        => Compile(EmbeddedLoader.Load<UiShaderSourceRecord>(resourceName, typeof(UiShaderSource).Assembly).Source,
-            resourceName, vertexDataMode);
 
     private static string Compile(string source, string resourceName, UiVertexDataMode vertexDataMode)
     {

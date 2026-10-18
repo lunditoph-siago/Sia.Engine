@@ -14,6 +14,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private readonly bool _sceneGi;
     private readonly bool _staticLightmap;
     private readonly bool _residentInstances;
+    private readonly bool _reflectionCaptures;
+    private readonly bool _liveReflections;
 
     public bool SeparateDirectResolvePass { get; }
 
@@ -28,6 +30,16 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public Entity OutputLayout { get; }
     public Entity BackgroundLayout { get; }
     public Entity StreamWorkLayout { get; }
+    public Entity ReflectionTraceLayout { get; }
+    public Entity ReflectionComposeLayout { get; }
+    public Entity ReflectionTrace { get; }
+    public Entity ReflectionCompose { get; }
+    public Entity ReflectionHistoryLayout { get; }
+    public Entity ReflectionCommitLayout { get; }
+    public Entity ReflectionCommitHitLayout { get; }
+    public Entity ReflectionHistory { get; }
+    public Entity ReflectionCommit { get; }
+    public Entity ReflectionCommitHit { get; }
 
     public Entity Forward { get; }
     public Entity ForwardDouble { get; }
@@ -61,28 +73,32 @@ internal sealed unsafe class PbrPipelines : IDisposable
 
     public Entity Output { get; }
 
-    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false)
+    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool reflectionHistory = false)
     {
         _sourceWorld = frame.ResourceWorld;
         _gpu = new(frame, 0);
         _sceneGi = sceneGi;
         _staticLightmap = staticLightmap;
         _residentInstances = residentInstances;
+        _reflectionCaptures = reflectionCaptures;
+        _liveReflections = liveReflections;
         try {
             var limits = _gpu.Limits;
-            var vertexPlanes=residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes;
+            var vertexPlanes=residentInstances?PbrRasterVertex.Planes+1:StreamGeometryPage.VertexPlanes;
             if (limits.MaxVertexBuffers < vertexPlanes || limits.MaxVertexAttributes < vertexPlanes)
                 throw new NotSupportedException("PBR vertex input requires four attribute planes.");
             if (gpuStream && limits.MaxStorageBuffersPerShaderStage < 8)
                 throw new NotSupportedException("Instanced GPU visibility requires eight storage buffers per shader stage.");
             if (residentInstances && limits.MaxStorageBuffersPerShaderStage < 7)
                 throw new NotSupportedException("Shared Raster visibility requires seven storage buffers per shader stage.");
-            if (limits.MaxSampledTexturesPerShaderStage < 10 + (sceneGi ? 1 : 0) + (staticLightmap ? 3 : 0))
+            if (limits.MaxSampledTexturesPerShaderStage < 10 + (sceneGi ? 1 : 0) + (staticLightmap ? 3 : 0) + (reflectionCaptures ? 1 : 0))
                 throw new NotSupportedException("PBR frame lighting exceeds the device sampled-texture limit.");
             if (limits.MaxStorageBuffersPerShaderStage < 6 || limits.MaxBindGroups < 4 || limits.MaxSampledTexturesPerShaderStage < 10 || limits.MaxSamplersPerShaderStage < 8 || limits.MaxComputeInvocationsPerWorkgroup < 64)
                 throw new NotSupportedException("Fused PBR requires 4 bind groups, 6 storage buffers, 10 sampled textures, 8 samplers and 64 compute lanes.");
             if (surfaceData && limits.MaxStorageTexturesPerShaderStage < 3)
                 throw new NotSupportedException("Visibility surface export requires three compute storage textures.");
+            if (liveReflections && (!surfaceData || !sceneGi || opaquePath != PbrOpaquePath.Visibility || limits.MaxStorageTexturesPerShaderStage < 4))
+                throw new NotSupportedException("Live reflections require shared transport, Visibility surfaces and four compute storage textures.");
             var frameEntries = new List<WGPUBindGroupLayoutEntry> {
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, k_All, 512),
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, k_All),
@@ -108,6 +124,10 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 frameEntries.Add(GpuBinding.Texture(13, WGPUTextureSampleType.Uint, k_Shade));
                 frameEntries.Add(GpuBinding.Texture(14, WGPUTextureSampleType.Uint, k_Shade, WGPUTextureViewDimension._2DArray));
             }
+            if (reflectionCaptures) {
+                frameEntries.Add(GpuBinding.Texture(15, WGPUTextureSampleType.Float, k_Shade, WGPUTextureViewDimension._2DArray));
+                frameEntries.Add(GpuBinding.Buffer(16, WGPUBufferBindingType.Uniform, k_Shade, PbrReflectionCaptureGpu.UniformBytes));
+            }
             FrameLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(frameEntries));
             RasterFrameLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex, 512),
@@ -132,13 +152,14 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 GpuBinding.Texture(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute),
                 GpuBinding.Texture(1, WGPUTextureSampleType.Depth, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
-                GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float)
+                GpuBinding.StorageTexture(3, liveReflections ? WGPUTextureFormat.RGBA32Float : WGPUTextureFormat.RGBA16Float)
             };
             if (surfaceData) {
                 resolveEntries.Add(GpuBinding.StorageTexture(4, WGPUTextureFormat.RGBA16Float));
                 resolveEntries.Add(GpuBinding.StorageTexture(5, WGPUTextureFormat.RGBA8Unorm));
             }
             if (gpuStream) resolveEntries.Add(GpuBinding.Buffer(6, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
+            if (liveReflections) resolveEntries.Add(GpuBinding.StorageTexture(7, WGPUTextureFormat.RGBA32Float, WGPUTextureViewDimension._2DArray));
             ResolveLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(resolveEntries));
             var tileEntries = new List<WGPUBindGroupLayoutEntry> {
                 GpuBinding.Texture(0, WGPUTextureSampleType.Uint, WGPUShaderStage.Compute),
@@ -209,12 +230,75 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-                PbrShaderSource.CompileAcquired(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
-                    streamInstances: gpuStream, shadingWork: gpuStream, staticLightmap: staticLightmap, residentInstances: residentInstances), "pbr-resolve"));
+                PbrShaderSource.Compile(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
+                    streamInstances: gpuStream, shadingWork: gpuStream, staticLightmap: staticLightmap, residentInstances: residentInstances, reflectionCaptures: reflectionCaptures, liveReflections: liveReflections), "pbr-resolve"));
             var shading = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
             Background = Compute(shade, shading, "background");
             Resolve = Compute(shade, shading, "resolve");
             ResolveDirect = Compute(shade, shading, "resolve_direct");
+            if (liveReflections) {
+                ReflectionTraceLayout = GpuBinding.Layout(_gpu, [
+                    GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 512),
+                    GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(2, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(3, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(4, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(5, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 32),
+                    GpuBinding.Texture(6, WGPUTextureSampleType.Depth, WGPUShaderStage.Compute),
+                    GpuBinding.Texture(7, WGPUTextureSampleType.Float, WGPUShaderStage.Compute),
+                    GpuBinding.Texture(8, WGPUTextureSampleType.UnfilterableFloat, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
+                    GpuBinding.StorageTexture(9, WGPUTextureFormat.RGBA32Float),
+                    GpuBinding.Texture(10, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension._3D),
+                    GpuBinding.Sampler(11, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(12, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 48),
+                    GpuBinding.Buffer(13, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 144),
+                    GpuBinding.StorageTexture(14, WGPUTextureFormat.RGBA32Uint, WGPUTextureViewDimension._2DArray),
+                    GpuBinding.Buffer(15, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(16, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
+                ]);
+                ReflectionComposeLayout = GpuBinding.Layout(_gpu, [
+                    GpuBinding.Texture(0, WGPUTextureSampleType.UnfilterableFloat, WGPUShaderStage.Compute),
+                    GpuBinding.Texture(1, WGPUTextureSampleType.UnfilterableFloat, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
+                    GpuBinding.Texture(2, WGPUTextureSampleType.UnfilterableFloat, WGPUShaderStage.Compute),
+                    GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float)
+                ]);
+                ReflectionTrace = Compute(Module("reflection_trace.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionTraceLayout), "trace_reflections");
+                ReflectionCompose = Compute(Module("reflection_compose.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionComposeLayout), "compose_reflections");
+                if (reflectionHistory) {
+                    var history = new List<WGPUBindGroupLayoutEntry> {
+                        GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 512),
+                        GpuBinding.Buffer(1, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 112),
+                        GpuBinding.Buffer(2, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                        GpuBinding.Buffer(3, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
+                    };
+                    for (uint binding = 4; binding <= 13; binding++) history.Add(GpuBinding.Texture(binding,
+                        binding is 5 or 12 ? WGPUTextureSampleType.Uint : binding == 8 ? WGPUTextureSampleType.Depth
+                        : binding is 7 or 11 ? WGPUTextureSampleType.Float : WGPUTextureSampleType.UnfilterableFloat,
+                        WGPUShaderStage.Compute, binding is 5 or 6 or 12 ? WGPUTextureViewDimension._2DArray : WGPUTextureViewDimension._2D));
+                    history.Add(GpuBinding.StorageTexture(14, WGPUTextureFormat.RGBA32Float));
+                    ReflectionHistoryLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(history));
+                    var commit = new List<WGPUBindGroupLayoutEntry> {
+                        GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 512),
+                        GpuBinding.Buffer(1, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 112)
+                    };
+                    for (uint binding = 2; binding <= 6; binding++) commit.Add(GpuBinding.Texture(binding,
+                        binding == 3 ? WGPUTextureSampleType.Uint : binding == 5 ? WGPUTextureSampleType.Float
+                        : binding == 6 ? WGPUTextureSampleType.Depth : WGPUTextureSampleType.UnfilterableFloat,
+                        WGPUShaderStage.Compute, binding is 3 or 4 ? WGPUTextureViewDimension._2DArray : WGPUTextureViewDimension._2D));
+                    var hit = new List<WGPUBindGroupLayoutEntry>(commit) { GpuBinding.StorageTexture(7, WGPUTextureFormat.RGBA32Float) };
+                    ReflectionCommitHitLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(hit));
+                    commit.Add(GpuBinding.StorageTexture(7, WGPUTextureFormat.RGBA32Float));
+                    commit.Add(GpuBinding.StorageTexture(8, WGPUTextureFormat.RGBA32Float));
+                    commit.Add(GpuBinding.StorageTexture(9, WGPUTextureFormat.RGBA16Float));
+                    commit.Add(GpuBinding.StorageTexture(10, WGPUTextureFormat.RGBA32Uint, WGPUTextureViewDimension._2DArray));
+                    ReflectionCommitLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(commit));
+                    ReflectionHistory = Compute(Module("reflection_history.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionHistoryLayout), "filter_reflections");
+                    ReflectionCommit = Compute(Module("reflection_history_commit.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionCommitLayout), "commit_reflections");
+                    var hitSource = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(_sourceWorld,
+                        "reflection_history_commit.wgsl", historyCommitHits: true), "reflection-history-hit-commit"));
+                    ReflectionCommitHit = Compute(hitSource, GpuBinding.PipelineLayout(_gpu, ReflectionCommitHitLayout), "commit_reflections");
+                }
+            }
             if (opaquePath == PbrOpaquePath.ForwardPlus)
                 ForwardBackground = Compute(Module("forward_background.wgsl"), GpuBinding.PipelineLayout(_gpu, BackgroundLayout), "forward_background");
             var transparent = Module("transparent.wgsl", streamInstances: gpuStream);
@@ -228,7 +312,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TransparentDouble = Render(transparent, glassLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
             Transmission = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
             TransmissionDouble = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
-            var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.CompileAcquired(_sourceWorld, "output.wgsl"), "pbr-output"));
+            var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(_sourceWorld, "output.wgsl"), "pbr-output"));
             Output = Render(output, GpuBinding.PipelineLayout(_gpu, OutputLayout), "output_vertex", "output_fragment", format, false, WGPUCullMode.None);
         }
         catch {
@@ -240,9 +324,9 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false,
         bool compatibilityUniformPadding = false)
         => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
-            PbrShaderSource.CompileAcquired(_sourceWorld, file, writableClusters, sceneGi: _sceneGi,
+            PbrShaderSource.Compile(_sourceWorld, file, writableClusters, sceneGi: _sceneGi,
                 streamInstances: streamInstances, shadingWork: shadingWork,
-                compatibilityUniformPadding: compatibilityUniformPadding, staticLightmap: _staticLightmap, residentInstances: _residentInstances), file));
+                compatibilityUniformPadding: compatibilityUniformPadding, staticLightmap: _staticLightmap, residentInstances: _residentInstances, reflectionCaptures: _reflectionCaptures, liveReflections: _liveReflections), file));
 
     private Entity Compute(Entity shader, Entity layout, string entry)
     {
@@ -273,11 +357,18 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 Length = (nuint)vs.Length
             };
             var attributeCount = vertex is "forward_vertex" or "transparent_vertex" ? (_residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes) : vertex is "prepass_vertex" or "shadow_vertex" ? 1 : 0;
+            var instanceInput = _residentInstances && (vertex is "forward_vertex" or "transparent_vertex" or "prepass_vertex" or "shadow_vertex" or "raster_vertex");
+            if (instanceInput) attributeCount++;
             var attributes = stackalloc WGPUVertexAttribute[StreamGeometryPage.VertexPlanes];
             var buffers = stackalloc WGPUVertexBufferLayout[StreamGeometryPage.VertexPlanes];
             for (var index = 0; index < attributeCount; index++) {
-                attributes[index] = new() { Format = _residentInstances && index==2?WGPUVertexFormat.Uint32x4:WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
-                buffers[index] = new() { ArrayStride = 16, StepMode = WGPUVertexStepMode.Vertex, AttributeCount = 1, Attributes = &attributes[index] };
+                if (instanceInput && index == attributeCount - 1) {
+                    attributes[index] = new() { Format = WGPUVertexFormat.Uint32x2, ShaderLocation = 3 };
+                    buffers[index] = new() { ArrayStride = 8, StepMode = WGPUVertexStepMode.Instance, AttributeCount = 1, Attributes = &attributes[index] };
+                    continue;
+                }
+                attributes[index] = new() { Format = _residentInstances && index>0 ? (index==1?WGPUVertexFormat.Uint32x4:WGPUVertexFormat.Uint32x2) : WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
+                buffers[index] = new() { ArrayStride = _residentInstances && index==2?8ul:16ul, StepMode = WGPUVertexStepMode.Vertex, AttributeCount = 1, Attributes = &attributes[index] };
             }
             descriptor.Vertex.BufferCount = (nuint)attributeCount;
             descriptor.Vertex.Buffers = attributeCount == 0 ? null : buffers;

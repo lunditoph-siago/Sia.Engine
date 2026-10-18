@@ -34,8 +34,9 @@ public static class IrradianceSh
         return result;
     }
 
-    public static float3 Evaluate(float4[] coefficients, float3 normal)
+    public static float3 Evaluate(ReadOnlySpan<float4> coefficients, float3 normal)
     {
+        if (coefficients.Length != CoefficientCount) throw new ArgumentException("SH evaluation requires exactly nine coefficients.", nameof(coefficients));
         const float a0 = 3.14159265359f;
         const float a1 = 2.09439510239f;
         const float a2 = 0.78539816339f;

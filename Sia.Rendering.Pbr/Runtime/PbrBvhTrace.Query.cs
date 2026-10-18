@@ -14,6 +14,19 @@ public sealed partial class PbrBvhTrace
         double maximum = double.PositiveInfinity, CancellationToken cancellationToken = default,
         ReadOnlySpan<bool> includedMaterials = default)
     {
+        var query = QueryCore(origin, direction, 0, false, minimum, maximum, cancellationToken, includedMaterials);
+        hit = query.Hit; return query.HasHit;
+    }
+
+    /// <summary>Bounded closest-hit query. Exhaustion returns no hit, even when a preliminary candidate was found.</summary>
+    public PbrBvhQuery Query(float3 origin, float3 direction, uint maximumSteps, double minimum = 0,
+        double maximum = double.PositiveInfinity, CancellationToken cancellationToken = default,
+        ReadOnlySpan<bool> includedMaterials = default)
+        => QueryCore(origin, direction, maximumSteps, true, minimum, maximum, cancellationToken, includedMaterials);
+
+    private PbrBvhQuery QueryCore(float3 origin, float3 direction, uint maximumSteps, bool bounded, double minimum,
+        double maximum, CancellationToken cancellationToken, ReadOnlySpan<bool> includedMaterials)
+    {
         if (!math.all(math.isfinite(origin)) || !math.all(math.isfinite(direction)) || math.all(direction == 0))
             throw new ArgumentException("Ray origin/direction must be finite and direction nonzero.");
         if (!double.IsFinite(minimum) || minimum < 0 || double.IsNaN(maximum) || maximum < minimum)
@@ -21,34 +34,46 @@ public sealed partial class PbrBvhTrace
         if (!includedMaterials.IsEmpty && includedMaterials.Length != Scene.Materials.Length)
             throw new ArgumentException("Material inclusion must cover every resolved scene material.", nameof(includedMaterials));
         cancellationToken.ThrowIfCancellationRequested();
-        hit = default; var found = false; var best = maximum;
+        PbrBvhHit hit = default; var found = false; var best = maximum; var remaining = maximumSteps;
         var o = (double3)origin; var d = (double3)direction;
         for (var nodeIndex = 0; nodeIndex < _nodes.Length;) {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!Step(ref remaining, bounded)) return new(default, false, false, maximumSteps);
             var node = _nodes[nodeIndex];
             if (!Intersects(node.Bounds, o, d, minimum, best)) { nodeIndex = node.Escape; continue; }
-            for (var at = node.First; at < node.First + node.Count; at++)
-                TraceInstance(_order[at], o, d, minimum, ref best, ref found, ref hit, cancellationToken, includedMaterials);
+            for (var at = node.First; at < node.First + node.Count; at++) {
+                if (!Step(ref remaining, bounded) || !TraceInstance(_order[at], o, d, minimum, ref best, ref found, ref hit,
+                    ref remaining, bounded, cancellationToken, includedMaterials)) return new(default, false, false, maximumSteps);
+            }
             nodeIndex++;
         }
-        return found;
+        return new(hit, found, true, maximumSteps - remaining);
     }
 
-    private void TraceInstance(int index, double3 origin, double3 direction, double minimum,
-        ref double best, ref bool found, ref PbrBvhHit hit, CancellationToken cancellationToken, ReadOnlySpan<bool> includedMaterials)
+    private static bool Step(ref uint remaining, bool bounded)
+    {
+        if (!bounded) return true;
+        if (remaining == 0) return false; remaining--; return true;
+    }
+
+    private bool TraceInstance(int index, double3 origin, double3 direction, double minimum,
+        ref double best, ref bool found, ref PbrBvhHit hit, ref uint remaining, bool bounded,
+        CancellationToken cancellationToken, ReadOnlySpan<bool> includedMaterials)
     {
         var transform = _instances[index];
-        if (transform.Disabled) return;
-        if (!Intersects(transform.Bounds, origin, direction, minimum, best)) return;
+        if (transform.Disabled) return true;
+        if (!Intersects(transform.Bounds, origin, direction, minimum, best)) return true;
         var localOrigin = transform.LocalVector(origin - transform.Translation);
         var localDirection = transform.LocalVector(direction); // Keep world ray parameter under nonuniform scale/shear.
         var instance = Scene.Instances[index]; var binding = Scene.Bindings[instance.Binding];
         var mesh = Scene.Geometry[binding.Geometry];
         for (var nodeIndex = 0; nodeIndex < mesh.Nodes.Length;) {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!Step(ref remaining, bounded)) return false;
             var node = mesh.Nodes[nodeIndex];
             if (!Intersects(node.Bounds, localOrigin, localDirection, minimum, best)) { nodeIndex = node.EscapeIndex; continue; }
             for (var at = node.FirstTriangle; at < node.FirstTriangle + node.TriangleCount; at++) {
+                if (!Step(ref remaining, bounded)) return false;
                 var triangle = mesh.Triangles[at];
                 var material = includedMaterials.IsEmpty ? -1 : binding.GetMaterial(triangle.MaterialSlot);
                 if (material >= 0 && !includedMaterials[material]) continue;
@@ -66,6 +91,7 @@ public sealed partial class PbrBvhTrace
             }
             nodeIndex++;
         }
+        return true;
     }
 
     private static float3 GeometricNormal(MeshBvhData mesh, MeshBvhTriangle triangle, InstanceData transform)

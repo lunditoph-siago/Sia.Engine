@@ -12,8 +12,16 @@ struct RasterVertex {
 }
 
 @vertex
-fn raster_vertex(@builtin(vertex_index) index: u32) -> RasterVertex {
+fn raster_vertex(@builtin(vertex_index) index: u32,
+#if RESIDENT_INSTANCES
+    @location(3) draw_instance: vec2<u32>,
+#endif
+) -> RasterVertex {
+#if RESIDENT_INSTANCES
+    let ordinal = instances[draw_instance.x].material.z + draw_instance.y + index / 3u;
+#else
     let ordinal = index / 3u;
+#endif
     return RasterVertex(frame.vp * world_corner(ordinal, index % 3u), ordinal);
 }
 
@@ -89,12 +97,16 @@ fn stream_shadow_vertex(
 @vertex
 fn shadow_vertex(
     @location(0) p: vec4<f32>,
+#if RESIDENT_INSTANCES
+    @location(3) draw_instance: vec2<u32>,
+#else
     @builtin(instance_index) packed: u32
+#endif
 ) -> @builtin(position) vec4<f32> {
     let position = vec4<f32>(p.xyz, 1.0);
 #if RESIDENT_INSTANCES
-    let world = instances[packed >> 3u].transform * position;
-    return shadow_matrix(packed & 7u) * world;
+    let world = instances[draw_instance.x >> 3u].transform * position;
+    return shadow_matrix(draw_instance.x & 7u) * world;
 #else
     return shadow_matrix(packed & 7u) * position;
 #endif

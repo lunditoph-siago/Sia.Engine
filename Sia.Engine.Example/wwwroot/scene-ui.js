@@ -30,9 +30,9 @@ export function createSceneUI(actions) {
     scene = selected;
     element('loading-title').textContent = scene.title;
     element('scene-title').textContent = scene.title;
-    const quality = element('quality-value');
+    const quality = element('quality-select');
     quality.hidden = !scene.quality;
-    quality.textContent = scene.quality ? scene.quality[0].toUpperCase() + scene.quality.slice(1) : '';
+    quality.value = scene.quality ?? 'high';
     settings.hidden = !scene.quality;
     element('bunny-credit').hidden = scene.pipeline !== 'bunny';
     element('inspection-distance-row').hidden = scene.pipeline !== 'bunny';
@@ -114,6 +114,7 @@ export function createSceneUI(actions) {
   canvas.addEventListener('pointerdown', focusCamera);
   element('retry').addEventListener('click', () => location.reload());
   distance.addEventListener('input', () => actions.distance(distance.valueAsNumber / 1000));
+  element('quality-select').addEventListener('change', event => actions.quality(event.target.value));
   tour.addEventListener('click', () => actions.command(1));
   material.addEventListener('click', () => actions.command(2));
   element('inspection-reset').addEventListener('click', () => actions.command(4));

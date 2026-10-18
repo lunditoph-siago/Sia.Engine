@@ -21,7 +21,7 @@ internal sealed unsafe partial class PbrView
             throw new ArgumentException("Point light range must be positive and finite.");
         _sceneData[at] = new(e.Get<GlobalTransform>().Affine.Translation, light.Range);
         _sceneData[at + 1] = default;
-        _sceneData[at + 2] = new(color.Color * color.Intensity, 0);
+        _sceneData[at + 2] = new(LightRadiance(color), 0);
         _sceneData[at + 3] = new(0, 0, -1, 0);
     }
 
@@ -41,7 +41,7 @@ internal sealed unsafe partial class PbrView
         }
         _sceneData[at] = new(transform.Translation, light.Range);
         _sceneData[at + 1] = new(-math.normalize(transform.RotationScale.c2), 1);
-        _sceneData[at + 2] = new(color.Color * color.Intensity, 0);
+        _sceneData[at + 2] = new(LightRadiance(color), 0);
         _sceneData[at + 3] = new(MathF.Cos(light.InnerAngle), MathF.Cos(light.OuterAngle), layer, 0);
     }
 
@@ -50,6 +50,14 @@ internal sealed unsafe partial class PbrView
         if (_data.Counts.x >= k_MaximumLights)
             throw new ArgumentException("Resident PBR light capacity exceeded (256); lights are never silently dropped.");
         return (int)_data.Counts.x++ * 4;
+    }
+
+    private float3 LightRadiance(LightColor color)
+    {
+        var value = color.Color * color.Intensity;
+        if (HasReflections && (!math.all(math.isfinite(value)) || math.any(value < 0) || math.any(value > 1e18f)))
+            throw new ArgumentException("Live reflection lights require finite nonnegative radiance within transport admission.");
+        return value;
     }
 
     private void Cull(WgpuReactiveRenderGraphPassContext context)

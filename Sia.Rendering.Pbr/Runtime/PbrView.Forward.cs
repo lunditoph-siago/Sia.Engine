@@ -22,10 +22,11 @@ internal sealed unsafe partial class PbrView
         Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
         for (uint plane = 0; plane < _owner.Scene.VertexPlanes; plane++)
             Wgpu.SetVertexBuffer(pass, plane, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * _owner.Scene.VertexCount * 16);
+        BindDrawInstances(pass, _owner.Scene.VertexPlanes);
         foreach (var draw in _transparent) {
             Wgpu.SetRenderPipeline(pass, (draw.DoubleSided ? _owner.Pipelines.CoverageDouble : _owner.Pipelines.Coverage).GetWgpu<WGPURenderPipeline>());
             Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[_owner.Materials.MaterialBatches[draw.Material]].GetWgpu<WGPUBindGroup>());
-            Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.First * 3, firstInstance: draw.Instance);
+            Wgpu.DrawIndexed(pass, draw.Count * 3, draw.InstanceCount, draw.FirstIndex, firstInstance: draw.Instance);
         }
     }
 
@@ -43,6 +44,7 @@ internal sealed unsafe partial class PbrView
         Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
         for (uint plane = 0; plane < (depthOnly ? 1u : _owner.Scene.VertexPlanes); plane++)
             Wgpu.SetVertexBuffer(pass, plane, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * _owner.Scene.VertexCount * 16);
+        BindDrawInstances(pass, depthOnly ? 1u : _owner.Scene.VertexPlanes);
         bool? sided = null;
         var batch = -1;
         foreach (var draw in _opaque) {
@@ -57,7 +59,7 @@ internal sealed unsafe partial class PbrView
                 Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[nextBatch].GetWgpu<WGPUBindGroup>());
                 batch = nextBatch;
             }
-            Wgpu.DrawIndexed(pass, draw.Count * 3, 1, draw.FirstIndex, firstInstance: draw.Instance);
+            Wgpu.DrawIndexed(pass, draw.Count * 3, draw.InstanceCount, draw.FirstIndex, firstInstance: draw.Instance);
         }
     }
 

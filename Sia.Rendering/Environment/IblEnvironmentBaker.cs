@@ -4,11 +4,9 @@ using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering;
 
-public static class IblEnvironmentBaker
+public static partial class IblEnvironmentBaker
 {
-    internal static string ShaderSource() => CompileSource(RenderingShaderSource.ReadModule);
-
-    internal static string ShaderSourceAcquired(World world)
+    internal static string ShaderSource(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
         return CompileSource(module => RenderingShaderSource.AcquireModule(world, module) is { } entity
@@ -44,7 +42,7 @@ public static class IblEnvironmentBaker
         ]);
         var group = GpuBinding.Group(gpu, layout, [GpuBinding.Buffer(0, uniform), GpuBinding.Buffer(1, output)]);
         var pipelineLayout = GpuBinding.PipelineLayout(gpu, layout);
-        var shader = gpu.Own(Wgpu.CreateWgslShaderModule(gpu.Device, ShaderSourceAcquired(frame.ResourceWorld), "rendering-offline-environment"));
+        var shader = gpu.Own(Wgpu.CreateWgslShaderModule(gpu.Device, ShaderSource(frame.ResourceWorld), "rendering-offline-environment"));
         var bake = Compute(gpu, pipelineLayout.GetWgpu<WGPUPipelineLayout>(), shader.GetWgpu<WGPUShaderModule>(), "bake_environment");
         var sh = Compute(gpu, pipelineLayout.GetWgpu<WGPUPipelineLayout>(), shader.GetWgpu<WGPUShaderModule>(), "bake_sh");
         var encoder = gpu.Own(Wgpu.CreateCommandEncoder(gpu.Device));

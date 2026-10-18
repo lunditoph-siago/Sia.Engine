@@ -13,6 +13,11 @@ public static partial class Program
     private static async Task<bool> RunOfflineAsync(string[] args)
     {
         switch (args) {
+            case ["--bake-reflection-capture", var recipe, "--output", var output]: {
+                var capture = await ReflectionCaptureCook.CookAsync(recipe, output);
+                Console.WriteLine($"Baked reflection capture {capture.Id.Value:N}: {capture.Files.Count} files, {capture.EncodedBytes} bytes, {Path.GetFullPath(output)}");
+                return true;
+            }
             case ["--package-example-content", var recipe, "--output", var output, ..] when args.Length is 4 or 6 or 8: {
                 var (browser, maximumBytes) = ContentPackageOptions(args);
                 await ExampleContent.PackAsync(recipe, output, maximumBundleBytes: maximumBytes, browser: browser);

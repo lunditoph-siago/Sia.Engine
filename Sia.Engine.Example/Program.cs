@@ -25,15 +25,23 @@ public static partial class Program
 #endif
             }
             var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
-            await using var mixedUse = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
+            await using var mixed = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi) : null;
-            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)mixedUse
+            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)mixed
                 ?? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp);
             var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath ?? content?.Environment, options.ProbesPath, streamHttp);
+            var capturePaths = content?.ReflectionCaptures ?? [];
+            var captures = new ReflectionCaptureFiles.Prepared[capturePaths.Length];
+            for (var at = 0; at < captures.Length; at++) {
+                captures[at] = await ReflectionCaptureFiles.PrepareAsync(capturePaths[at], streamHttp, references!);
+                if (lighting.Environment is null) lighting = lighting with { Environment = captures[at].Source };
+                if (ReflectionCaptureFiles.EnvironmentHash(lighting.Environment.Data) != captures[at].Capture.Data.SourceEnvironment.ContentHash)
+                    throw new ArgumentException("Selected reflection captures require the same source environment as scene lighting.");
+            }
             var lightmapsPath = content?.Lightmaps;
             await using var lightmaps = lightmapsPath is null ? null
                 : await LightmapFiles.PrepareAsync(lightmapsPath, streamHttp, references!);
-            var app = new SceneExampleApp(options, references, lighting, lightmaps);
+            var app = new SceneExampleApp(options, references, lighting, lightmaps, captures);
             references = null;
             lighting = null;
 #if BROWSER

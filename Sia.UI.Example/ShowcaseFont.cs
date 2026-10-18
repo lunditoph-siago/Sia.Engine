@@ -3,7 +3,6 @@ using Sia.Graphics.Text;
 
 namespace Sia.UI.Example;
 
-// Example resource selection and original acquisition; layout/atlas derivation stay in UI.
 internal static class ShowcaseFont
 {
     internal const string ResourceName = "Sia.UI.Example.NotoSans-UiSubset.ttf";
