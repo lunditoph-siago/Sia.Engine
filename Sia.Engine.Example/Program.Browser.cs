@@ -1,6 +1,4 @@
 using System.Runtime.InteropServices.JavaScript;
-using System.Collections.Concurrent;
-using Sia.Math;
 
 namespace Sia.Engine.Example;
 
@@ -8,17 +6,27 @@ namespace Sia.Engine.Example;
 public static partial class Program
 {
     internal static BrowserThread BrowserOwner { get; private set; } = null!;
-    internal static readonly ConcurrentQueue<(int Width, int Height, int Commands, double Distance, float3 Move, float2 Look, float2 Turn, float Speed)> BrowserInputs = new();
+    internal readonly record struct BrowserInput(int Width, int Height, int Commands, double Distance);
+    private static readonly object s_BrowserInputLock = new();
+    private static BrowserInput? s_BrowserInput;
 
     [JSExport]
-    public static Task UpdateBrowserInput(int width, int height, int commands, double distance,
-        double moveRight, double moveForward, double moveUp, double lookRight, double lookUp,
-        double turnRight, double turnUp, double speed)
+    public static Task UpdateBrowserInput(int width, int height, int commands, double distance)
     {
-        BrowserInputs.Enqueue((width, height, commands, distance,
-            new((float)moveRight, (float)moveUp, (float)moveForward), new((float)lookRight, (float)lookUp),
-            new((float)turnRight, (float)turnUp), (float)speed));
+        lock (s_BrowserInputLock) {
+            s_BrowserInput = new(width, height, commands | (s_BrowserInput?.Commands ?? 0),
+                (commands & 256) != 0 ? distance : s_BrowserInput?.Distance ?? double.NaN);
+        }
         return Task.CompletedTask;
+    }
+
+    internal static BrowserInput? TakeBrowserInput()
+    {
+        lock (s_BrowserInputLock) {
+            var input = s_BrowserInput;
+            s_BrowserInput = null;
+            return input;
+        }
     }
 
     [JSImport("setLoadingState", "main.js")]

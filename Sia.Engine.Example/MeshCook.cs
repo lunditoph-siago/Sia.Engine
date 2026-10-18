@@ -138,16 +138,8 @@ internal static partial class MeshCook
         }
     }
 
-    private static Recipe ReadRecipe(string path)
-    {
-        using var file = File.OpenRead(path);
-        if (file.Length > MaximumRecipeBytes) throw new InvalidDataException("Mesh recipe exceeds 64 KiB.");
-        var bytes = new byte[(int)file.Length];
-        file.ReadExactly(bytes);
-        if (file.ReadByte() != -1) throw new InvalidDataException("Mesh recipe changed while reading.");
-        return JsonSerializer.Deserialize(bytes, RecipeJsonContext.Default.Recipe)
-            ?? throw new InvalidDataException("Mesh recipe must be an object.");
-    }
+    internal static Recipe ReadRecipe(string path)
+        => AssetInput.ReadJson(path, RecipeJsonContext.Default.Recipe, MaximumRecipeBytes);
 
     private static void Validate(Recipe recipe)
     {

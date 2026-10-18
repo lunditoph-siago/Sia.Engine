@@ -1,0 +1,37 @@
+<Project>
+  <PropertyGroup>
+    <_ExamplePathPrefix Condition="'$(OS)' == 'Windows_NT'">\\?\</_ExamplePathPrefix>
+    <_ExampleContentRoot Condition="'$(ExampleContentDirectory)' != ''">$(_ExamplePathPrefix)$([System.IO.Path]::GetFullPath('$(ExampleContentDirectory)', '$(MSBuildProjectDirectory)'))</_ExampleContentRoot>
+    <_ExampleContentCatalog Condition="'$(ExampleContentDirectory)' != ''">$([System.IO.Path]::Combine('$(_ExampleContentRoot)', 'default-scenes.json'))</_ExampleContentCatalog>
+    <_ExampleContentPayloads Condition="'$(ExampleContentDirectory)' != ''">$([System.IO.Path]::Combine('$(_ExampleContentRoot)', 'Content'))</_ExampleContentPayloads>
+  </PropertyGroup>
+  <Target Name="CollectExampleContent" Condition="'$(ExampleContentDirectory)' != ''">
+    <Error Condition="!Exists('$(_ExampleContentCatalog)')" Text="Example content catalog is missing. Package content with --package-example-content before building with ExampleContentDirectory." />
+    <ItemGroup>
+      <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.siaasset', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
+      <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.siascene', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
+      <_ExampleContent>
+        <RelativeContent>$([System.IO.Path]::GetRelativePath('$(_ExampleContentPayloads)', '%(_ExampleContent.Identity)'))</RelativeContent>
+      </_ExampleContent>
+      <_ExampleNotices Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentRoot)', '*LICENSE.txt'))" />
+    </ItemGroup>
+  </Target>
+  <Target Name="CopyExampleContentToOutput" AfterTargets="Build" DependsOnTargets="CollectExampleContent" Condition="'$(ExampleContentDirectory)' != ''">
+    <PropertyGroup>
+      <_ExampleOutputContentRoot>$(_ExamplePathPrefix)$([System.IO.Path]::GetFullPath('$(OutDir)Assets/Content/', '$(MSBuildProjectDirectory)'))</_ExampleOutputContentRoot>
+    </PropertyGroup>
+    <Copy SourceFiles="@(_ExampleContent)" DestinationFiles="@(_ExampleContent->'$(_ExampleOutputContentRoot)%(RelativeContent)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(_ExampleContentCatalog)" DestinationFolder="$(OutDir)Assets" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_ExampleNotices)" DestinationFolder="$(OutDir)Assets" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishExampleContent" AfterTargets="Publish" DependsOnTargets="CollectExampleContent" Condition="'$(ExampleContentDirectory)' != ''">
+    <PropertyGroup>
+      <_ExampleAssetsDestination>$(PublishDir)/Assets</_ExampleAssetsDestination>
+      <_ExampleAssetsDestination Condition="'$(RuntimeIdentifier)' == 'browser-wasm'">$(PublishDir)/wwwroot/Assets</_ExampleAssetsDestination>
+      <_ExamplePublishedContentRoot>$(_ExamplePathPrefix)$([System.IO.Path]::GetFullPath('$(_ExampleAssetsDestination)/Content/', '$(MSBuildProjectDirectory)'))</_ExamplePublishedContentRoot>
+    </PropertyGroup>
+    <Copy SourceFiles="@(_ExampleContent)" DestinationFiles="@(_ExampleContent->'$(_ExamplePublishedContentRoot)%(RelativeContent)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(_ExampleContentCatalog)" DestinationFolder="$(_ExampleAssetsDestination)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_ExampleNotices)" DestinationFolder="$(_ExampleAssetsDestination)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

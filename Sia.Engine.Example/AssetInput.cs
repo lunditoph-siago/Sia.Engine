@@ -4,10 +4,24 @@ namespace Sia.Engine.Example;
 
 internal static class AssetInput
 {
+#if !BROWSER
+    internal static T ReadJson<T>(string path, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type,
+        int maximumBytes) where T : class
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
+        using var input = File.OpenRead(path);
+        if (input.Length > maximumBytes) throw new InvalidDataException($"JSON input exceeds {maximumBytes} bytes.");
+        var bytes = new byte[(int)input.Length];
+        input.ReadExactly(bytes);
+        if (input.ReadByte() != -1) throw new InvalidDataException("JSON input changed while reading.");
+        return System.Text.Json.JsonSerializer.Deserialize(bytes, type)
+            ?? throw new InvalidDataException("JSON input must be an object.");
+    }
+#endif
+
     internal static bool TryGetHttpUri(string path, out Uri? uri)
         => Uri.TryCreate(path, UriKind.Absolute, out uri) && uri.Scheme is "http" or "https";
 
-    // The caller owns the returned stream; the shared client remains alive for scene chunks.
     internal static async Task<Stream> OpenAsync(string path, HttpClient client,
         CancellationToken cancellationToken = default)
         => TryGetHttpUri(path, out var uri)
