@@ -6,6 +6,8 @@ public readonly record struct VisibilityInstance(float4x4 Transform, PbrMaterial
 {
     public int AssetIndex { get; init; }
     public int MaterialIndex { get; init; }
+    public Guid AuthoredId { get; init; }
+    public int MaterialSlot { get; init; } = -1;
 
     public VisibilityInstance(float4x4 transform, int materialIndex)
         : this(transform, new PbrMaterial(float3.one, 1, 1, float3.one, 1))

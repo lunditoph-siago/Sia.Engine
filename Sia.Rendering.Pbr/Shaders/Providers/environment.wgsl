@@ -2,6 +2,10 @@
 
 #import pbr/bindings
 #import pbr/pbr_lighting
+#import pbr/Common/surface
+#if STATIC_LIGHTMAP
+#import pbr/Providers/lightmap
+#endif
 #if SCENE_GI
 #import rendering/Lighting/probe_basis
 #endif
@@ -31,21 +35,24 @@ fn scene_probe_irradiance(position: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
 }
 #endif
 
-fn get_indirect_lighting(
-    position: vec3<f32>,
-    normal: vec3<f32>,
-    view: vec3<f32>,
-    base: vec3<f32>,
-    metal: f32,
-    rough: f32,
-) -> vec3<f32> {
+fn get_indirect_lighting(surface: Surface, view: vec3<f32>) -> vec3<f32> {
+    let position = surface.position; let normal = surface.normal;
+    let base = surface.base; let metal = surface.metal; let rough = surface.rough;
     var irradiance = vec3<f32>(0);
     // Pure reflection and fully metallic surfaces have no diffuse contribution.
     if (metal < 1.0 && any(base != vec3<f32>(0))) {
+#if STATIC_LIGHTMAP
+        let baked = lightmap_irradiance(surface);
+        if (baked.w > 0.0) { irradiance = baked.xyz; }
+        else {
+#endif
 #if SCENE_GI
         irradiance = scene_probe_irradiance(position, normal);
 #else
         irradiance = evaluate_sh_irradiance(sh, normal);
+#endif
+#if STATIC_LIGHTMAP
+        }
 #endif
     }
     return indirect_lighting(normal, view, base, metal, rough, irradiance,

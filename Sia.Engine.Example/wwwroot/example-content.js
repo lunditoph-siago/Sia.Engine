@@ -4,11 +4,14 @@ export async function defaultScene(pageUrl, fetchContent = fetch) {
   const path = /^Content\/[a-f0-9]{64}\/[a-f0-9]{32}\.siascene$/;
   if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)
       || Object.keys(catalog).length !== 1
-      || typeof catalog.bunny !== 'string' || !path.test(catalog.bunny)
-      || catalog.bunny.endsWith('/' + '0'.repeat(32) + '.siascene')) {
+      || !catalog.bunny || typeof catalog.bunny !== 'object' || Array.isArray(catalog.bunny)
+      || Object.keys(catalog.bunny).some(name => !['scene', 'reflectionCaptures'].includes(name))
+      || 'reflectionCaptures' in catalog.bunny && (!Array.isArray(catalog.bunny.reflectionCaptures) || catalog.bunny.reflectionCaptures.length !== 0)
+      || typeof catalog.bunny.scene !== 'string' || !path.test(catalog.bunny.scene)
+      || catalog.bunny.scene.endsWith('/' + '0'.repeat(32) + '.siascene')) {
     throw new Error('Expected a browser content package containing only Bunny.');
   }
-  return new URL(catalog.bunny, descriptor).href;
+  return new URL(catalog.bunny.scene, descriptor).href;
 }
 
 async function readCatalog(descriptor, fetchContent) {

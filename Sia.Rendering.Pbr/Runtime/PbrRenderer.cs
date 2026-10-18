@@ -36,6 +36,8 @@ public sealed record PbrRendererSettings
     public ulong ViewBytes { get; init; } = 256ul * 1024 * 1024;
     public PbrStreamingSettings Streaming { get; init; } = new();
     public PbrTextureStreamingSettings TextureStreaming { get; init; } = new();
+    public PbrLightmapInput? Lightmaps { get; init; }
+    public PbrLightmapStreamingSettings LightmapStreaming { get; init; } = new();
 
     public IblEnvironmentAsset? BakedEnvironment { get; init; }
     public DiffuseProbeAsset? BakedProbes { get; init; }
@@ -136,6 +138,7 @@ public sealed class PbrRenderer :
     internal PbrMaterials Materials { get; }
     internal IblEnvironmentGpu Environment { get; }
     internal DiffuseProbeGpu? Probes { get; }
+    internal PbrLightmapGpu? Lightmaps { get; }
     internal PbrRendererSettings Settings { get; }
     internal WGPUTextureFormat OutputFormat { get; }
 
@@ -175,17 +178,29 @@ public sealed class PbrRenderer :
         if (Settings.ShadowResolution is < 64 or > 4096) throw new ArgumentOutOfRangeException(nameof(settings));
         if (outputFormat is not (WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.RGBA8UnormSrgb or WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.BGRA8UnormSrgb))
             throw new ArgumentException("PBR output currently requires an SDR RGBA/BGRA surface.", nameof(outputFormat));
+        int[]? lightmapRows = null;
+        if (Settings.Lightmaps is { } input) {
+            ArgumentNullException.ThrowIfNull(input.Set); ArgumentNullException.ThrowIfNull(input.PrepareProduct); ArgumentNullException.ThrowIfNull(input.AcquireProduct);
+            ArgumentNullException.ThrowIfNull(input.PreparePage); ArgumentNullException.ThrowIfNull(input.AcquirePage);
+            ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
+            lightmapRows = stream is not null ? input.Set.BindReceivers(stream)
+                : input.Set.BindReceivers((raster?.Instances ?? scene!.Instances).Span);
+        }
         try {
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
             if (stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
-                stream is not null && Settings.Streaming.GpuTraversal);
+                stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null);
             Materials = new(frame, (raster?.Materials ?? scene!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
                 : stream is null ? new(frame, scene!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
                 : new(frame, stream, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             Environment = new(frame, Settings.BakedEnvironment);
+            if (Settings.Lightmaps is { } lighting) {
+                var admission = Settings.LightmapStreaming;
+                Lightmaps = new(frame, lighting, lightmapRows!, admission);
+            }
             if (sceneGi) {
                 var dimensions = Settings.BakedProbes?.Dimensions ?? Settings.ProbeDimensions;
                 var probeBytes = DiffuseProbeGpu.FieldBytes(dimensions, Settings.DynamicSceneGi);
@@ -211,6 +226,7 @@ public sealed class PbrRenderer :
             }
         }
         catch {
+            Lightmaps?.StopAsync().GetAwaiter().GetResult();
             Materials?.StopAsync().GetAwaiter().GetResult();
             if (Scene?.Streaming is { } streaming) streaming.DisposeAsync().AsTask().GetAwaiter().GetResult();
             Dispose();
@@ -250,7 +266,7 @@ public sealed class PbrRenderer :
                 throw new ArgumentException("A PBR batch must share scene world, resource world, device and queue.", nameof(contexts));
         }
         _preparedViews.Clear();
-        if (Scene.Streaming is not null) {
+        if (Scene.Streaming is not null || Lightmaps is not null) {
             if (_streamWorld is not null && !ReferenceEquals(_streamWorld, world))
                 throw new InvalidOperationException("A streaming renderer belongs to one render world.");
             if (_streamWorld is not null && _streamFrame == world.FrameIndex)
@@ -262,12 +278,13 @@ public sealed class PbrRenderer :
                 throw new NotSupportedException("Atmosphere migration is not part of the resident PBR core.");
             Environment.Update(environment.Sky);
         }
-        if (Scene.Streaming is not null) {
+        if (Scene.Streaming is not null || Lightmaps is not null) {
             _streamWorld = world;
             _streamFrame = world.FrameIndex;
         }
         Scene.Streaming?.BeginFrame();
         Materials.BeginFrame();
+        Lightmaps?.BeginFrame();
         uint triangles = 0;
         ulong viewBytes = 0;
         foreach (ref readonly var context in contexts) {
@@ -279,8 +296,9 @@ public sealed class PbrRenderer :
         Scene.Streaming?.EndFrame();
         Scene.Streaming?.RefreshGpuResidency();
         Materials.EndFrame();
+        Lightmaps?.EndFrame();
         FrameStatistics = new(triangles, Materials.Groups.Length,
-            Scene.Bytes + Materials.Bytes + Environment.Bytes + (Probes?.Bytes ?? 0), viewBytes);
+            Scene.Bytes + Materials.Bytes + Environment.Bytes + (Probes?.Bytes ?? 0) + (Lightmaps?.Bytes ?? 0), viewBytes);
     }
 
     public void BuildRenderGraph(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context)
@@ -304,13 +322,18 @@ public sealed class PbrRenderer :
 
     public async ValueTask StopStreamingAsync()
     {
+        // Capture lightmap queue completion on the owner context before any await.
+        var lightmaps = Lightmaps?.StopAsync();
         await Materials.StopAsync().ConfigureAwait(false);
         if (Scene.Streaming is { } streaming) await streaming.DisposeAsync().ConfigureAwait(false);
+        if (lightmaps is not null) await lightmaps.ConfigureAwait(false);
     }
 
     public void Dispose()
     {
         if (_disposed) return;
+        if (Lightmaps is not null && !Lightmaps.IsStopped)
+            throw new InvalidOperationException("Await StopStreamingAsync before disposing streamed lightmaps.");
         if (Scene?.Streaming is not null && !Scene.Streaming.IsStopped)
             throw new InvalidOperationException("Await StopStreamingAsync before disposing a streaming renderer.");
         if (Materials is not null && !Materials.IsStopped)
@@ -320,6 +343,7 @@ public sealed class PbrRenderer :
             _views[^1].Dispose();
         Environment?.Dispose();
         Probes?.Dispose();
+        Lightmaps?.Dispose();
         Scene?.Dispose();
         Materials?.Dispose();
         Pipelines?.Dispose();

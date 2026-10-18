@@ -17,27 +17,27 @@ public static partial class PbrSceneComposition
     /// </summary>
     public static PbrVirtualScene ResolveVirtual(PbrSceneData scene, Func<MeshReference, MeshManifest> meshes,
         Func<VirtualReference, MeshVirtualPagesData> virtuals, Func<MaterialReference, PbrMaterialData> materials,
-        Func<TextureReference, PbrTextureData> textures, out Guid[] sourceInstances,
+        Func<TextureReference, PbrTextureData> textures,
         int maximumExpandedInstances = PbrSceneData.MaximumInstances, CancellationToken cancellationToken = default)
         => Resolve<MeshVirtualRecord, MeshVirtualPagesData, PbrVirtualGeometry, PbrVirtualScene>(scene, meshes, virtuals, materials, textures,
-            out sourceInstances, static m => m.Virtual, Validate,
+            static m => m.Virtual, Validate,
             static d => d.Parts.Length, static (d, p) => new(d, p), static (d, p) => d.Parts[p].MaterialSlot,
             static (g, m, i, a, identity) => new(g, m, i, a, identity), maximumExpandedInstances, cancellationToken);
 
     /// <summary>Selects Raster explicitly. No Source/Virtual/BVH or geometry cooker is involved.</summary>
     public static PbrRasterScene ResolveRaster(PbrSceneData scene, Func<MeshReference, MeshManifest> meshes,
         Func<RasterReference, MeshRasterData> rasters, Func<MaterialReference, PbrMaterialData> materials,
-        Func<TextureReference, PbrTextureData> textures, out Guid[] sourceInstances,
+        Func<TextureReference, PbrTextureData> textures,
         int maximumExpandedInstances = PbrSceneData.MaximumInstances, CancellationToken cancellationToken = default)
         => Resolve<MeshRasterRecord, MeshRasterData, PbrRasterGeometry, PbrRasterScene>(scene, meshes, rasters, materials, textures,
-            out sourceInstances, static m => m.Raster, ValidateRaster,
+            static m => m.Raster, ValidateRaster,
             static d => d.Sections.Length, static (d, p) => new(d, p), static (d, p) => d.Sections[p].MaterialSlot,
             PbrRasterScene.AdoptResolved, maximumExpandedInstances, cancellationToken);
 
     private static TScene Resolve<TRecord, TProduct, TGeometry, TScene>(PbrSceneData scene,
         Func<MeshReference, MeshManifest> meshes, Func<AssetRefer<TRecord>.Id, TProduct> products,
         Func<MaterialReference, PbrMaterialData> materials, Func<TextureReference, PbrTextureData> textures,
-        out Guid[] sourceInstances, Func<MeshManifest, MeshProductReference<TRecord>?> select,
+        Func<MeshManifest, MeshProductReference<TRecord>?> select,
         Action<MeshManifest, PbrMeshBinding, AssetId, string, TProduct> validate,
         Func<TProduct, int> partCount, Func<TProduct, int, TGeometry> geometryAt, Func<TProduct, int, int> materialSlot,
         Func<TGeometry[], PbrMaterialAsset[], PbrSceneInstance[], string, byte[], TScene> createScene,
@@ -53,7 +53,7 @@ public static partial class PbrSceneComposition
         var geometryIndices = new Dictionary<(AssetId Product, int Part), int>();
         var geometry = new List<TGeometry>(); var shading = new List<PbrMaterialAsset>();
         var uses = new int[scene.Bindings.Length]; foreach (var instance in scene.Instances) uses[instance.Binding]++;
-        var resolved = new (int Geometry, int Material)[scene.Bindings.Length][];
+        var resolved = new (int Geometry, int Material, int Slot)[scene.Bindings.Length][];
         long expanded = 0;
 
         PbrTextureData Texture(TextureReference reference)
@@ -92,7 +92,7 @@ public static partial class PbrSceneComposition
             var count = partCount(data);
             expanded += (long)uses[i] * count;
             if (expanded > maximumExpandedInstances) throw new InvalidOperationException("Expanded scene instance limit exceeded.");
-            var parts = new (int Geometry, int Material)[count];
+            var parts = new (int Geometry, int Material, int Slot)[count];
             for (var part = 0; part < parts.Length; part++) {
                 cancellationToken.ThrowIfCancellationRequested();
                 var key = (product.Id, part);
@@ -100,22 +100,22 @@ public static partial class PbrSceneComposition
                     RequireRoom(geometry.Count, "geometry");
                     index = geometry.Count; geometry.Add(geometryAt(data, part)); geometryIndices.Add(key, index);
                 }
-                parts[part] = (index, Material(binding.GetMaterial(materialSlot(data, part))));
+                var slot = materialSlot(data, part);
+                parts[part] = (index, Material(binding.GetMaterial(slot)), slot);
             }
             resolved[i] = parts;
         }
 
-        var instances = new PbrSceneInstance[(int)expanded]; var ids = new Guid[(int)expanded]; var at = 0;
+        var instances = new PbrSceneInstance[(int)expanded]; var at = 0;
         foreach (var instance in scene.Instances) {
             cancellationToken.ThrowIfCancellationRequested();
             foreach (var part in resolved[instance.Binding]) {
-                instances[at] = new(part.Geometry, part.Material, instance.Transform); ids[at++] = instance.Id;
+                instances[at++] = new(part.Geometry, part.Material, instance.Transform) { AuthoredId = instance.Id, MaterialSlot = part.Slot };
             }
         }
         var identity = PbrSceneTransport.ReferenceIdentity(scene, b => meshValues[b.Mesh.Value],
             s => shading[materialIndices[s.Material.Value]], cancellationToken);
-        var result = createScene(geometry.ToArray(), shading.ToArray(), instances, scene.Attribution, identity);
-        sourceInstances = ids; return result;
+        return createScene(geometry.ToArray(), shading.ToArray(), instances, scene.Attribution, identity);
     }
 
     private static void RequireRoom(int count, string kind)

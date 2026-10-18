@@ -14,7 +14,7 @@ internal static partial class PbrSceneFiles
             static (MeshBvhRecord _) => 1, MeshBvhRecord.Load,
             maximumFileBytes, maximumTotalBytes, cancellationToken);
 
-    internal static (Entity Root, PbrBvhScene Scene, Guid[] SourceInstances) AcquireBvh(World world, Prepared<MeshBvhRecord> prepared)
+    internal static (Entity Root, PbrBvhScene Scene) AcquireBvh(World world, Prepared<MeshBvhRecord> prepared)
     {
         AssetLibrary.RegisterAsset<MeshBvhAsset, MeshBvhRecord>();
         return Acquire<MeshBvhRecord, PbrBvhScene>(world, prepared, static (w, s) => {
@@ -23,9 +23,7 @@ internal static partial class PbrSceneFiles
                 r => r.Find(w)?.Get<MeshBvhAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrMaterialResource>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<PbrTextureAsset>().Data ?? throw new AssetNotFoundException());
-            var ids = new Guid[scene.Instances.Length];
-            for (var i = 0; i < ids.Length; i++) ids[i] = scene.Instances[i].Id;
-            return (scene, ids);
+            return scene;
         });
     }
 }

@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sia.Asset;
+using Sia.Engine.Mesh;
 
 namespace Sia.Engine.Example;
 
@@ -13,6 +14,7 @@ internal static partial class ContentCook
     {
         public required ScenePack.Recipe Scene { get; init; }
         public required string[] Meshes { get; init; }
+        public LightmapCook.Recipe? Lightmap { get; init; }
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -36,6 +38,9 @@ internal static partial class ContentCook
             throw new InvalidDataException("Content recipe requires 1..4096 Mesh recipes and no prebuilt scene Mesh entries.");
         if (!recipe.Scene.Raster && !recipe.Scene.Virtual && !recipe.Scene.Bvh)
             throw new InvalidDataException("Select at least one scene representation.");
+        if (recipe.Lightmap is { } lightmap) {
+            _ = lightmap.Settings();
+        }
         var sceneId = new AssetId(recipe.Scene.Scene);
         var sourceDirectory = Path.GetDirectoryName(recipePath)!;
         string Locate(string path) {
@@ -73,12 +78,14 @@ internal static partial class ContentCook
         Exception? failure = null;
         try {
             var meshes = new List<ScenePack.Entry>();
+            var layouts = new Dictionary<AssetId, MeshBakeLayout>();
             foreach (var input in meshInputs) {
                 cancellationToken.ThrowIfCancellationRequested(); RequireStage();
                 var bundle = Path.Combine(stage, input.Id.Value.ToString("N"));
                 var cooked = MeshCook.Cook(input.Path, bundle, (ulong)maximumFileBytes, cancellationToken);
                 foreach (var file in cooked.Files) input.Files.Add(file);
                 if (cooked.Id != input.Id) throw new InvalidDataException("Mesh recipe identity changed during preparation.");
+                if (cooked.BakeLayout is { } layout) layouts.Add(cooked.Id, layout);
                 meshes.Add(new() { Id = cooked.Id.Value, Input = Path.Combine(bundle, cooked.Id.Value.ToString("N") + ".siaasset") });
             }
             var preparedRecipe = JsonSerializer.SerializeToUtf8Bytes(scene with { Meshes = meshes.ToArray() },
@@ -87,7 +94,8 @@ internal static partial class ContentCook
             var sceneRecipePath = Path.Combine(stage, "scene.json");
             await using (var file = new FileStream(sceneRecipePath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 65536, FileOptions.Asynchronous)) await file.WriteAsync(preparedRecipe, cancellationToken);
-            var published = await ScenePack.PackAsync(sceneRecipePath, output, maximumFileBytes, maximumTotalBytes, cancellationToken);
+            var published = await ScenePack.PackAsync(sceneRecipePath, output, maximumFileBytes, maximumTotalBytes, cancellationToken,
+                recipe.Lightmap, layouts);
             if (published != sceneId) throw new InvalidDataException("Unexpected published scene identity.");
             return published;
         }

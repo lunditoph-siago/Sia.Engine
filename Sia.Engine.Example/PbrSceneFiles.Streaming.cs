@@ -72,7 +72,7 @@ internal static partial class PbrSceneFiles
         ArgumentOutOfRangeException.ThrowIfNegative(maximumRequiredBytes);
         var prepared = await PrepareVirtualAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
         var scene = PbrSceneComposition.ResolveVirtual(prepared.Scene.Data, r => prepared.Meshes[r.Value].Data,
-            r => prepared.Products[r.Value].Data, r => prepared.Materials[r.Value].Data, r => prepared.Textures[r.Value].Data, out _);
+            r => prepared.Products[r.Value].Data, r => prepared.Materials[r.Value].Data, r => prepared.Textures[r.Value].Data);
         var required = PbrSceneStream.RequiredPages(scene, maximumRequiredBytes);
         var total = prepared.EncodedBytes;
         foreach (var page in required) {
@@ -89,7 +89,7 @@ internal static partial class PbrSceneFiles
         catch { await source.DisposeAsync(); throw; }
     }
 
-    internal static (Entity Root, PbrSceneStream Stream, Guid[] SourceInstances) AcquireStreaming(World world, PreparedStreaming prepared)
+    internal static (Entity Root, PbrSceneStream Stream) AcquireStreaming(World world, PreparedStreaming prepared)
     {
         AssetLibrary.RegisterAsset<MeshVirtualPageAsset, MeshVirtualPageRecord>();
         var acquired = AcquireVirtual(world, prepared.Index);
@@ -103,7 +103,7 @@ internal static partial class PbrSceneFiles
                     try { return world.AcquireAsset(reference.Value, () => record, use).Get<MeshVirtualPageAsset>().Data; }
                     finally { use.Destroy(); }
                 }, maximumRequiredBytes: prepared.MaximumRequiredBytes);
-            return (acquired.Root, stream, acquired.SourceInstances);
+            return (acquired.Root, stream);
         }
         catch { acquired.Root.Destroy(); throw; }
     }

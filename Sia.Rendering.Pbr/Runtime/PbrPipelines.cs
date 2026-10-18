@@ -12,6 +12,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private readonly GpuResources _gpu;
     private readonly World _sourceWorld;
     private readonly bool _sceneGi;
+    private readonly bool _staticLightmap;
+    private readonly bool _residentInstances;
 
     public bool SeparateDirectResolvePass { get; }
 
@@ -59,17 +61,24 @@ internal sealed unsafe class PbrPipelines : IDisposable
 
     public Entity Output { get; }
 
-    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false)
+    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false)
     {
         _sourceWorld = frame.ResourceWorld;
         _gpu = new(frame, 0);
         _sceneGi = sceneGi;
+        _staticLightmap = staticLightmap;
+        _residentInstances = residentInstances;
         try {
             var limits = _gpu.Limits;
+            var vertexPlanes=residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes;
+            if (limits.MaxVertexBuffers < vertexPlanes || limits.MaxVertexAttributes < vertexPlanes)
+                throw new NotSupportedException("PBR vertex input requires four attribute planes.");
             if (gpuStream && limits.MaxStorageBuffersPerShaderStage < 8)
                 throw new NotSupportedException("Instanced GPU visibility requires eight storage buffers per shader stage.");
-            if (sceneGi && limits.MaxSampledTexturesPerShaderStage < 11)
-                throw new NotSupportedException("Scene probes require eleven sampled textures.");
+            if (residentInstances && limits.MaxStorageBuffersPerShaderStage < 7)
+                throw new NotSupportedException("Shared Raster visibility requires seven storage buffers per shader stage.");
+            if (limits.MaxSampledTexturesPerShaderStage < 10 + (sceneGi ? 1 : 0) + (staticLightmap ? 3 : 0))
+                throw new NotSupportedException("PBR frame lighting exceeds the device sampled-texture limit.");
             if (limits.MaxStorageBuffersPerShaderStage < 6 || limits.MaxBindGroups < 4 || limits.MaxSampledTexturesPerShaderStage < 10 || limits.MaxSamplersPerShaderStage < 8 || limits.MaxComputeInvocationsPerWorkgroup < 64)
                 throw new NotSupportedException("Fused PBR requires 4 bind groups, 6 storage buffers, 10 sampled textures, 8 samplers and 64 compute lanes.");
             if (surfaceData && limits.MaxStorageTexturesPerShaderStage < 3)
@@ -94,6 +103,11 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 frameEntries.Add(GpuBinding.Texture(9, WGPUTextureSampleType.Float, k_Shade, WGPUTextureViewDimension._3D));
                 frameEntries.Add(GpuBinding.Buffer(10, WGPUBufferBindingType.Uniform, k_Shade, 48));
             }
+            if (staticLightmap) {
+                frameEntries.Add(GpuBinding.Texture(12, WGPUTextureSampleType.Uint, k_Shade));
+                frameEntries.Add(GpuBinding.Texture(13, WGPUTextureSampleType.Uint, k_Shade));
+                frameEntries.Add(GpuBinding.Texture(14, WGPUTextureSampleType.Uint, k_Shade, WGPUTextureViewDimension._2DArray));
+            }
             FrameLayout = GpuBinding.Layout(_gpu, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(frameEntries));
             RasterFrameLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Vertex, 512),
@@ -104,7 +118,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 GpuBinding.Buffer(1, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(2, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute)
             ]);
-            GeometryLayout = GpuBinding.Layout(_gpu, Enumerable.Range(0, gpuStream ? 3 : 2).Select(i => GpuBinding.Buffer((uint)i, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Vertex | WGPUShaderStage.Compute)).ToArray());
+            GeometryLayout = GpuBinding.Layout(_gpu, Enumerable.Range(0, gpuStream || residentInstances ? 3 : 2).Select(i => GpuBinding.Buffer((uint)i, WGPUBufferBindingType.ReadOnlyStorage, k_All)).ToArray());
             var material = new WGPUBindGroupLayoutEntry[12];
             material[0] = GpuBinding.Buffer(0, WGPUBufferBindingType.ReadOnlyStorage, k_Shade, 96);
             material[1] = GpuBinding.Buffer(1, WGPUBufferBindingType.Uniform, k_Shade, 16);
@@ -196,7 +210,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
             TileClassify = Compute(tiles, tilePipelineLayout, "classify");
             var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
                 PbrShaderSource.CompileAcquired(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
-                    streamInstances: gpuStream, shadingWork: gpuStream), "pbr-resolve"));
+                    streamInstances: gpuStream, shadingWork: gpuStream, staticLightmap: staticLightmap, residentInstances: residentInstances), "pbr-resolve"));
             var shading = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
             Background = Compute(shade, shading, "background");
             Resolve = Compute(shade, shading, "resolve");
@@ -228,7 +242,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
         => _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
             PbrShaderSource.CompileAcquired(_sourceWorld, file, writableClusters, sceneGi: _sceneGi,
                 streamInstances: streamInstances, shadingWork: shadingWork,
-                compatibilityUniformPadding: compatibilityUniformPadding), file));
+                compatibilityUniformPadding: compatibilityUniformPadding, staticLightmap: _staticLightmap, residentInstances: _residentInstances), file));
 
     private Entity Compute(Entity shader, Entity layout, string entry)
     {
@@ -258,11 +272,11 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 Data = v,
                 Length = (nuint)vs.Length
             };
-            var attributeCount = vertex is "forward_vertex" or "transparent_vertex" ? 3 : vertex is "prepass_vertex" or "shadow_vertex" ? 1 : 0;
-            var attributes = stackalloc WGPUVertexAttribute[3];
-            var buffers = stackalloc WGPUVertexBufferLayout[3];
+            var attributeCount = vertex is "forward_vertex" or "transparent_vertex" ? (_residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes) : vertex is "prepass_vertex" or "shadow_vertex" ? 1 : 0;
+            var attributes = stackalloc WGPUVertexAttribute[StreamGeometryPage.VertexPlanes];
+            var buffers = stackalloc WGPUVertexBufferLayout[StreamGeometryPage.VertexPlanes];
             for (var index = 0; index < attributeCount; index++) {
-                attributes[index] = new() { Format = WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
+                attributes[index] = new() { Format = _residentInstances && index==2?WGPUVertexFormat.Uint32x4:WGPUVertexFormat.Float32x4, ShaderLocation = (uint)index };
                 buffers[index] = new() { ArrayStride = 16, StepMode = WGPUVertexStepMode.Vertex, AttributeCount = 1, Attributes = &attributes[index] };
             }
             descriptor.Vertex.BufferCount = (nuint)attributeCount;

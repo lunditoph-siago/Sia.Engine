@@ -17,6 +17,8 @@ public sealed partial class PbrSceneStream
     private readonly Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> _prepare;
     private readonly Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> _acquire;
     public ReadOnlyMemory<VisibilityInstance> Instances { get; }
+    /// <summary>Authored section instances before opaque/transparent page partitioning.</summary>
+    public int SourceInstanceCount { get; }
     public PbrSceneAsset Bootstrap { get; }
     public Aabb Bounds { get; }
     public Aabb GeometryBounds { get; }
@@ -32,7 +34,7 @@ public sealed partial class PbrSceneStream
     {
         ArgumentNullException.ThrowIfNull(scene);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
-        var result = new Dictionary<AssetId, MeshVirtualPageDescriptor>(); long bytes = 0;
+        var result = new Dictionary<AssetId, MeshVirtualPageDescriptor>(); long bytes = StreamGeometryPage.MaximumBytes;
         foreach (var instance in scene.Instances.Span) {
             var geometry = scene.Geometry.Span[instance.Geometry]; var index = geometry.Product; var part = index.Parts[geometry.Part];
             var transparent = scene.Materials.Span[instance.Material].AlphaBlend;
@@ -46,7 +48,7 @@ public sealed partial class PbrSceneStream
                         continue;
                     }
                     bytes = checked(bytes + descriptor.VertexCount * (long)(MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0))
-                        + descriptor.TriangleCount * 12L + descriptor.VertexCount * 48L + descriptor.TriangleCount * 12L);
+                        + descriptor.TriangleCount * 12L);
                     if (bytes > maximumBytes) throw new InvalidOperationException("Required virtual pages exceed their decoded bootstrap budget.");
                     result.Add(descriptor.Id, descriptor);
                 }
@@ -76,6 +78,7 @@ public sealed partial class PbrSceneStream
         Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire)
     {
         (_prepare, _acquire) = (prepare, acquire); Bounds = scene.Bounds; Identity = scene.TransportIdentity;
+        SourceInstanceCount = scene.Instances.Length;
         var minimum = new float3(float.PositiveInfinity); var maximum = new float3(float.NegativeInfinity);
         long nodeCount = 0;
         foreach (var geometry in scene.Geometry.Span) {
@@ -117,7 +120,8 @@ public sealed partial class PbrSceneStream
                         }
                         if (transparentInstances.Count == PbrSceneData.MaximumInstances)
                             throw new InvalidOperationException("Transparent page expansion exceeds its instance limit.");
-                        transparentInstances.Add(new(g, instance.Material, instance.Transform));
+                        transparentInstances.Add(new(g, instance.Material, instance.Transform) {
+                            AuthoredId = instance.AuthoredId, MaterialSlot = instance.MaterialSlot });
                     }
                 }
                 continue;
@@ -135,8 +139,8 @@ public sealed partial class PbrSceneStream
                         }
                         else {
                             _pageUses.Add(id, (index, range.Page));
-                            var gpuBytes = checked(descriptor.VertexCount * 48 + descriptor.TriangleCount * 12);
-                            var decoded = checked(descriptor.VertexCount * (MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0)) + descriptor.TriangleCount * 12 + gpuBytes);
+                            var gpuBytes = checked(descriptor.VertexCount * StreamGeometryPage.VertexBytes + descriptor.TriangleCount * 12);
+                            var decoded = checked(descriptor.VertexCount * (MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0)) + descriptor.TriangleCount * 12);
                             PageTable.Add(id, new(id, gpuBytes, descriptor.VertexCount, descriptor.TriangleCount, decoded));
                         }
                         pages[r] = new(id, range.FirstTriangle, range.TriangleCount);
@@ -148,7 +152,8 @@ public sealed partial class PbrSceneStream
                 }
                 hierarchies.Add(new(part.RootCount, nodes));
             }
-            opaque.Add(new(instance.Transform, instance.Material) { AssetIndex = h });
+            opaque.Add(new(instance.Transform, instance.Material) {
+                AssetIndex = h, AuthoredId = instance.AuthoredId, MaterialSlot = instance.MaterialSlot });
         }
         Hierarchies = [.. hierarchies]; Instances = opaque.ToArray();
         TransparentGeometry = [.. transparentGeometry]; TransparentInstances = [.. transparentInstances];

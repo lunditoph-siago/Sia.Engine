@@ -92,5 +92,10 @@ fn shadow_vertex(
     @builtin(instance_index) packed: u32
 ) -> @builtin(position) vec4<f32> {
     let position = vec4<f32>(p.xyz, 1.0);
+#if RESIDENT_INSTANCES
+    let world = instances[packed >> 3u].transform * position;
+    return shadow_matrix(packed & 7u) * world;
+#else
     return shadow_matrix(packed & 7u) * position;
+#endif
 }

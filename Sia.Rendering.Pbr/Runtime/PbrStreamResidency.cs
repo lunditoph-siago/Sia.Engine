@@ -118,7 +118,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         (_source, _arena, _settings) = (source, arena, settings);
         _pages = [.. source.PageTable.Values];
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
-        _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes + r.Data.Vertices.Length * 48 + r.Data.Indices.Length * 4),
+        _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes),
             2 * MeshVirtualPageData.MaximumEncodedBytes, settings.MaximumRequests, settings.DecodedBytes);
         _norms = new float[source.Instances.Length];
         for (var i = 0; i < _norms.Length; i++) _norms[i] = PbrGpuScene.TransformNorm(source.Instances.Span[i].Transform);
@@ -150,10 +150,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                             throw new InvalidOperationException("Resident roots cannot fit in the geometry arena.");
                         var upload = arena.Prepare(page, allocation,
                             settings.GpuTraversal ? float4x4.identity : instance.Transform,
+                            settings.GpuTraversal ? 0u : (uint)i,
                             settings.GpuTraversal ? 1 : instance.MaterialIndex + 1);
                         while (!upload.Complete) arena.Advance(upload, uint.MaxValue);
                         _resident.Add(key, new(allocation, true, 0));
-                        _rootBytes += page.Bytes.Length;
+                        _rootBytes += page.UploadBytes;
                     }
                     var draw = Draw(i, node, part, _resident[key].Allocation);
                     _roots.Add(draw);
@@ -425,7 +426,8 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         transform = instance.Transform;
                         material = instance.MaterialIndex + 1;
                     }
-                    _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform, material));
+                    _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
+                        _settings.GpuTraversal ? 0u : (uint)candidate.Key.Instance, material));
                     break;
                 }
                 if (_upload is null) break;

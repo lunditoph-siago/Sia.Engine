@@ -5,7 +5,11 @@ namespace Sia.Engine.Rendering.Pbr;
 
 /// <summary>Parameter is t in origin + t * direction, not distance unless direction has unit length.</summary>
 public readonly record struct PbrBvhHit(Guid InstanceId, int Instance, int SourceTriangle,
-    int MaterialSlot, int Material, double Parameter, float3 Barycentric, bool FrontFace);
+    int MaterialSlot, int Material, double Parameter, float3 Barycentric, bool FrontFace)
+{
+    /// <summary>World-space unit geometric normal in authored winding; back-face hits do not flip it.</summary>
+    public float3 GeometricNormal { get; init; }
+}
 
 /// <summary>
 /// Immutable CPU instance acceleration over acquired local BVHs. Build never copies/rebuilds mesh geometry.

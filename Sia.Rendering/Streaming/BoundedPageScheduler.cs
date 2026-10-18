@@ -42,6 +42,13 @@ public sealed class BoundedPageScheduler<TPrepared> : IAsyncDisposable
     public IEnumerable<string> ReadyIds => _requests.Where(p => !p.Value.Cancellation.IsCancellationRequested
         && p.Value.Task.IsCompletedSuccessfully).Select(p => p.Key);
 
+    /// <summary>Owner-context query including canceled reads that still retain their reservation.</summary>
+    public bool HasRequest(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        return _requests.ContainsKey(id);
+    }
+
     public BoundedPageScheduler(Func<string, CancellationToken, Task<TPrepared>> read, Func<TPrepared, int> decodedBytes, int maximumPageBytes,
         int maximumRequests = 2, long maximumDecodedBytes = 1024 * 1024)
     {

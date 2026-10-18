@@ -39,12 +39,12 @@ internal sealed partial class PbrGpuScene
                     rootsT += (uint)source.PageTable[id].Triangles;
                 }
             }
-            var rootBytes = checked((rootsV * 48) + (rootsT * 12));
+            var rootBytes = checked((rootsV * StreamGeometryPage.VertexBytes) + (rootsT * 12));
             if (rootBytes > arenaBudget)
                 throw new ArgumentException($"Stream roots/bootstrap require {rootBytes} bytes, exceeding remaining geometry budget {arenaBudget}.");
             var detailBytes = System.Math.Min(streaming.DetailBytes, arenaBudget - rootBytes);
             var maxBinding = _gpu.Limits.MaxStorageBufferBindingSize;
-            var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / 48), maxBinding / 48);
+            var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes), maxBinding / StreamGeometryPage.VertexBytes);
             var triangleCapacity = System.Math.Min(rootsT + (detailBytes / 5 / 12), maxBinding / 12);
             if (vertexCapacity < rootsV || triangleCapacity < rootsT)
                 throw new NotSupportedException("Stream roots exceed WebGPU storage binding limits.");
@@ -59,7 +59,7 @@ internal sealed partial class PbrGpuScene
                     throw new InvalidOperationException("Unable to reserve transparent bootstrap.");
                 using var temporary = new GpuResources(frame, 0);
                 var encoder = temporary.Own(Wgpu.CreateCommandEncoder(temporary.Device));
-                for (uint plane = 0; plane < 3; plane++)
+                for (uint plane = 0; plane < StreamGeometryPage.VertexPlanes; plane++)
                     Wgpu.CopyBufferToBuffer(encoder.GetWgpu<WGPUCommandEncoder>(), bootstrap.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * bootstrap.VertexCount * 16,
                         Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * VertexCount * 16, (ulong)bootstrap.VertexCount * 16);
                 Wgpu.CopyBufferToBuffer(encoder.GetWgpu<WGPUCommandEncoder>(), bootstrap.Topology.GetWgpu<WGPUBuffer>(), 0,

@@ -5,16 +5,9 @@
 #import pbr/Providers/environment
 #import rendering/Lighting/local_light
 
-fn scene_lighting(
-    position: vec3<f32>,
-    normal: vec3<f32>,
-    base: vec3<f32>,
-    metal: f32,
-    rough: f32,
-    emission: vec3<f32>,
-    ao: f32,
-    pixel: vec2<f32>,
-) -> vec3<f32> {
+fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
+    let position = surface.position; let normal = surface.normal;
+    let base = surface.base; let metal = surface.metal; let rough = surface.rough;
     let view = unit(frame.eye.xyz - position);
     let view_z = (frame.view * vec4<f32>(position, 1.0)).z;
     var color = vec3<f32>(0.0);
@@ -68,9 +61,9 @@ fn scene_lighting(
         }
         color += attenuation * direct_lighting(normal, view, direction, radiance.rgb, base, metal, rough);
     }
-    return color + get_indirect_lighting(position, normal, view, base, metal, rough) * ao + emission;
+    return color + get_indirect_lighting(surface, view) * surface.ao + surface.emission;
 }
 
 fn shade(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
-    return scene_lighting(surface.position, surface.normal, surface.base, surface.metal, surface.rough, surface.emission, surface.ao, pixel);
+    return scene_lighting(surface, pixel);
 }
