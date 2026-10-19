@@ -6,7 +6,7 @@ const scenes = {
 export function readSceneOptions(pageUrl) {
   const parameters = new URL(pageUrl).searchParams;
   const pipeline = parameters.get('pipeline') ?? 'bunny';
-  if (!Object.hasOwn(scenes, pipeline)) throw new Error('Expected pipeline bunny|unlit. Bistro is available in the native example.');
+  if (!Object.hasOwn(scenes, pipeline)) throw new Error('Expected pipeline bunny|unlit.');
   const scene = scenes[pipeline];
   for (const name of parameters.keys()) {
     if (!['pipeline', 'quality', 'scene', 'environment', 'probes'].includes(name))

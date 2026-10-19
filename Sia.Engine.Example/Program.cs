@@ -16,11 +16,11 @@ public static partial class Program
 #endif
             using var streamHttp = new HttpClient();
             ExampleContent.Entry? content = null;
-            if (pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny && scenePath is null) {
+            if (pipeline == ScenePipeline.Bunny && scenePath is null) {
 #if BROWSER
                 throw new ArgumentException("The browser entry point must supply its default reference-scene URL.");
 #else
-                content = ExampleContent.Default(pipeline, Path.Combine(AppContext.BaseDirectory, "Assets"), options.Quality);
+                content = ExampleContent.Default(Path.Combine(AppContext.BaseDirectory, "Assets"), options.Quality);
                 scenePath = content.Scene;
 #endif
             }
@@ -51,10 +51,10 @@ public static partial class Program
                 await app.RunAsync();
             }
             finally {
-                await app.StopSceneStreamingAsync();
-                await BrowserOwner.RunGraphicsAsync(() => {
+                await BrowserOwner.RunGraphicsAsync(async () => {
+                    await app.StopSceneStreamingAsync();
                     app.Dispose();
-                    return Task.FromResult(0);
+                    return 0;
                 });
             }
 #else
