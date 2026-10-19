@@ -32,7 +32,7 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void InitializeScene()
     {
-        if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) {
+        if (_pipeline == ScenePipeline.Bunny) {
             _qualitySettings = PbrRendererSettings.ForQuality(_options.Quality).Resolve(WebGpuCapabilities.Read(_device));
             Console.WriteLine($"Render quality: {_options.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
         }
@@ -58,9 +58,11 @@ internal sealed unsafe partial class SceneExampleApp
             .Add<CameraSystem>()
             .CreateStage(_sceneWorld);
 
-        AcquireReferenceScene();
-        AcquireLightingAssets();
-        AcquireCaptureAssets();
+        if (_pipeline == ScenePipeline.Bunny) {
+            AcquireReferenceScene();
+            AcquireLightingAssets();
+            AcquireCaptureAssets();
+        }
         BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
@@ -68,22 +70,16 @@ internal sealed unsafe partial class SceneExampleApp
             return;
         }
 
-        if (_pipeline == ScenePipeline.Unlit) {
-            var pipeline = UnlitPipeline.Create(
-                _renderWorld.Entities,
-                _renderDevice,
-                _surfaceFormat,
-                WGPUTextureFormat.Depth32Float,
-                new ShaderAsset(new ShaderAssetId("sia:unlit"),
-                    UnlitShaderSource.Acquire(_renderWorld.Entities).Get<WgslSourceResource>().Source), "unlit");
-            _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-                .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
-                .Build();
-            return;
-        }
-
-        InitializeMaterialRendering();
-        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer!).Build();
+        var pipeline = UnlitPipeline.Create(
+            _renderWorld.Entities,
+            _renderDevice,
+            _surfaceFormat,
+            WGPUTextureFormat.Depth32Float,
+            new ShaderAsset(new ShaderAssetId("sia:unlit"),
+                UnlitShaderSource.Acquire(_renderWorld.Entities).Get<WgslSourceResource>().Source), "unlit");
+        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
+            .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
+            .Build();
     }
 
     private void BuildScene()
@@ -97,7 +93,7 @@ internal sealed unsafe partial class SceneExampleApp
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             CameraMatrices.Identity));
-        if (_pipeline is ScenePipeline.Pbr or ScenePipeline.Bunny) { BuildMaterialScene(); return; }
+        if (_pipeline == ScenePipeline.Bunny) { BuildMaterialScene(); return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
         var groundMeshAsset = CreateRasterMesh(groundMesh);
@@ -164,24 +160,11 @@ internal sealed unsafe partial class SceneExampleApp
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
-            UpdatePatchInspection(deltaTime);
-            target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
+            UpdateBunnyInspection(deltaTime);
+            target = (_bunnyBounds.Min + _bunnyBounds.Max) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
-            eye = PatchEye(aspect, target);
+            eye = BunnyEye(aspect, target);
         }
-#if !BROWSER
-        else if (_pipeline == ScenePipeline.Pbr) {
-            UpdatePatchInspection(deltaTime);
-            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
-            var size = _materialBounds.Max - _materialBounds.Min;
-            target = new float3(-15.1f, 3.9f, 1.6f);
-            var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
-            eye = new float3(-16.1f, 4.0f, 1.7f);
-            UpdateFreeCamera(deltaTime, ref eye, ref target);
-            var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
-            _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
-        }
-#endif
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
         var world = _sceneWorld!;
