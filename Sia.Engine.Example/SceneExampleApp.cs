@@ -41,10 +41,10 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _preparedLighting = lighting;
         _preparedLightmaps = lightmaps;
         _preparedCaptures = captures;
-        _patchDebugMode = _pipeline == ScenePipeline.Bunny
+        _bunnyDebugMode = _pipeline == ScenePipeline.Bunny
             ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded;
-        _patchDistance = _pipeline == ScenePipeline.Pbr ? .6f : 0;
-        _patchTour = _pipeline == ScenePipeline.Bunny;
+        _bunnyDistance = 0;
+        _bunnyTour = _pipeline == ScenePipeline.Bunny;
     }
 
 #if !BROWSER

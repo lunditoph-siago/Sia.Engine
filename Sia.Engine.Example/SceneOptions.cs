@@ -15,11 +15,7 @@ internal sealed record SceneOptions
     internal static SceneOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
-#if BROWSER
         var pipeline = ScenePipeline.Bunny;
-#else
-        var pipeline = ScenePipeline.Pbr;
-#endif
         RenderQuality? quality = null;
         string? scene = null, environment = null, probes = null;
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -32,9 +28,6 @@ internal sealed record SceneOptions
                     pipeline = value switch {
                         "bunny" => ScenePipeline.Bunny,
                         "unlit" => ScenePipeline.Unlit,
-#if !BROWSER
-                        "pbr" => ScenePipeline.Pbr,
-#endif
                         _ => throw new ArgumentException("Unsupported scene pipeline.")
                     };
                     break;

@@ -4,7 +4,6 @@ using Sia.Engine.Rendering;
 
 namespace Sia.Engine.Example;
 
-// The example's four entry points, not an asset registry or asset-core policy.
 internal static partial class ExampleContent
 {
     internal sealed record Entry
@@ -18,9 +17,6 @@ internal static partial class ExampleContent
     internal sealed record Catalog
     {
         public required Entry Bunny { get; init; }
-        public Entry? BistroExterior { get; init; }
-        public Entry? BistroInterior { get; init; }
-        public Entry? BistroWine { get; init; }
     }
 
 #if !BROWSER
@@ -47,20 +43,15 @@ internal static partial class ExampleContent
                 || parts[2][..^suffix.Length] != id.ToString("N"))
                 throw new InvalidDataException("Example content paths require Content/<sha256>/<nonempty-uuid> and the selected record suffix.");
         }
-        var bistro = new[] { catalog.BistroExterior, catalog.BistroInterior, catalog.BistroWine };
-        if (bistro.Any(entry => entry is not null) && bistro.Any(entry => entry is null))
-            throw new InvalidDataException("Native content requires all three Bistro scenes.");
-        foreach (var entry in new[] { catalog.Bunny }.Concat(bistro.OfType<Entry>())) {
-            if (entry is null) throw new InvalidDataException("Every default requires a scene entry.");
-            Path(entry.Scene, ".siascene");
-            if (entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
-                || entry.ReflectionCaptures.Distinct(StringComparer.Ordinal).Count() != entry.ReflectionCaptures.Length)
-                throw new InvalidDataException("Default captures require at most sixteen distinct references.");
-            foreach (var lighting in entry.ReflectionCaptures.Concat(new[] { entry.Lightmaps, entry.Environment }.OfType<string>())) {
-                Path(lighting, ".siaasset");
-                if (lighting[..lighting.LastIndexOf('/')] != entry.Scene[..entry.Scene.LastIndexOf('/')])
-                    throw new InvalidDataException("Default scene and lighting must belong to the same checked content snapshot.");
-            }
+        var entry = catalog.Bunny ?? throw new InvalidDataException("Bunny requires a scene entry.");
+        Path(entry.Scene, ".siascene");
+        if (entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
+            || entry.ReflectionCaptures.Distinct(StringComparer.Ordinal).Count() != entry.ReflectionCaptures.Length)
+            throw new InvalidDataException("Default captures require at most sixteen distinct references.");
+        foreach (var lighting in entry.ReflectionCaptures.Concat(new[] { entry.Lightmaps, entry.Environment }.OfType<string>())) {
+            Path(lighting, ".siaasset");
+            if (lighting[..lighting.LastIndexOf('/')] != entry.Scene[..entry.Scene.LastIndexOf('/')])
+                throw new InvalidDataException("Default scene and lighting must belong to the same checked content snapshot.");
         }
     }
 
@@ -69,13 +60,12 @@ internal static partial class ExampleContent
             Environment = entry.Environment is { } environment ? map(environment) : null,
             ReflectionCaptures = entry.ReflectionCaptures.Select(map).ToArray() };
 
-    internal static Entry Default(ScenePipeline pipeline, string assetsDirectory, RenderQuality quality = RenderQuality.High)
+    internal static Entry Default(string assetsDirectory, RenderQuality quality = RenderQuality.High)
     {
         var catalog = Read(Path.Combine(assetsDirectory, "default-scenes.json")); Validate(catalog);
-        var entry = pipeline == ScenePipeline.Bunny ? catalog.Bunny : catalog.BistroExterior
-            ?? throw new InvalidDataException("Bistro requires a native content package.");
+        var entry = catalog.Bunny;
         string Resolve(string relative) => Path.Combine(assetsDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
-        if (pipeline == ScenePipeline.Bunny && quality == RenderQuality.Low) entry = entry with { Lightmaps = null };
+        if (quality == RenderQuality.Low) entry = entry with { Lightmaps = null };
         return MapPaths(entry, Resolve);
     }
 #endif
