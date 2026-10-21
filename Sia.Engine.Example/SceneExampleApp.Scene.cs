@@ -1,4 +1,5 @@
 using Sia;
+using Sia.Asset;
 using Sia.Engine;
 using Sia.Engine.Camera;
 using Sia.Engine.Lighting;
@@ -31,16 +32,20 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void InitializeScene()
     {
-        if (_pipeline == ScenePipeline.Pbr) {
-            _qualitySettings = PbrRendererSettings.ForQuality(Program.Quality).Resolve(WebGpuCapabilities.Read(_device));
-            Console.WriteLine($"Render quality: {Program.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
+        if (_pipeline == ScenePipeline.Bunny) {
+            _qualitySettings = PbrRendererSettings.ForQuality(_options.Quality).Resolve(WebGpuCapabilities.Read(_device));
+            Console.WriteLine($"Render quality: {_options.Quality}; shadow resolution {_qualitySettings.ShadowResolution}.");
         }
         _sceneWorld = new World();
         _renderWorld = new RenderWorld();
 
-        var meshRegistry = _renderWorld.Entities.AcquireAddon<MeshRegistry>();
+        AssetLibrary.RegisterAsset<MeshSourceAsset, MeshSourceRecord>();
+        AssetLibrary.RegisterAsset<MeshRasterAsset, MeshRasterRecord>();
+        AssetLibrary.RegisterAsset<MeshManifestAsset, MeshManifestRecord>();
+        _renderWorld.Entities.AcquireAddon<AssetLibrary>();
+        _renderWorld.Entities.AcquireAddon<MeshRegistry>();
         _renderWorld.Entities.AcquireAddon<MeshGpuStore>();
-        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(Program.Width, Program.Height);
+        _sceneWorld.AcquireAddon<Viewport>().Value = new ViewportSize(InitialWidth, InitialHeight);
         _sceneWorld.AcquireAddon<ClusterGridConfig>();
         _sceneWorld.AcquireAddon<ShadowAtlasConfig>();
         _sceneWorld.AcquireAddon<EnvironmentLighting>().Sky = new ProceduralSky {
@@ -53,31 +58,31 @@ internal sealed unsafe partial class SceneExampleApp
             .Add<CameraSystem>()
             .CreateStage(_sceneWorld);
 
-        BuildScene(meshRegistry);
+        if (_pipeline == ScenePipeline.Bunny) {
+            AcquireReferenceScene();
+            AcquireLightingAssets();
+            AcquireCaptureAssets();
+        }
+        BuildScene();
 
         if (_pipeline == ScenePipeline.Bunny) {
-            InitializePatchLod();
+            InitializeBunnyRendering();
             return;
         }
 
-        if (_pipeline == ScenePipeline.Unlit) {
-            var pipeline = UnlitPipeline.Create(
-                _renderWorld.Entities,
-                _renderDevice,
-                _surfaceFormat,
-                WGPUTextureFormat.Depth32Float,
-                UnlitShaderSource.Load(), "unlit");
-            _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
-                .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
-                .Build();
-            return;
-        }
-
-        InitializeMaterialRendering();
-        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>().Add(_sceneRenderer!).Build();
+        var pipeline = UnlitPipeline.Create(
+            _renderWorld.Entities,
+            _renderDevice,
+            _surfaceFormat,
+            WGPUTextureFormat.Depth32Float,
+            new ShaderAsset(new ShaderAssetId("sia:unlit"),
+                UnlitShaderSource.Acquire(_renderWorld.Entities).Get<WgslSourceResource>().Source), "unlit");
+        _renderPipeline = new RenderFeaturePipelineBuilder<RenderFrameContext>()
+            .Add(new UnlitRenderFeature(new UnlitRenderer(pipeline)))
+            .Build();
     }
 
-    private void BuildScene(MeshRegistry meshRegistry)
+    private void BuildScene()
     {
         var world = _sceneWorld!;
 
@@ -88,23 +93,22 @@ internal sealed unsafe partial class SceneExampleApp
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             CameraMatrices.Identity));
-        if (_pipeline == ScenePipeline.Bunny) { return; }
-        if (_pipeline == ScenePipeline.Pbr) { BuildMaterialScene(); return; }
+        if (_pipeline == ScenePipeline.Bunny) { BuildMaterialScene(); return; }
 
         var groundMesh = ProceduralMesh.Plane(width: 20.0f, depth: 20.0f);
-        var groundHandle = meshRegistry.Register(groundMesh);
+        var groundMeshAsset = CreateRasterMesh(groundMesh);
         world.Create(HList.From(
             new Transform(new float3(0, -0.6f, 0), quaternion.identity, new float3(1, 1, 1)),
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             new Bounds(groundMesh.Bounds),
             new WorldBounds(groundMesh.Bounds),
-            new MeshComponent(groundHandle),
+            new MeshComponent(groundMeshAsset),
             new UnlitMaterial(new float4(0.12f, 0.16f, 0.22f, 1.0f)),
             new MeshRenderer()));
 
         var sphereMesh = ProceduralMesh.Sphere(radius: 0.45f);
-        var sphereHandle = meshRegistry.Register(sphereMesh);
+        var sphereMeshAsset = CreateRasterMesh(sphereMesh);
         var gridSteps = _gridExtent * 2;
 
         for (var gx = -_gridExtent; gx <= _gridExtent; gx++) {
@@ -119,7 +123,7 @@ internal sealed unsafe partial class SceneExampleApp
                     new Node<SceneGraph>(null),
                     new Bounds(sphereMesh.Bounds),
                     new WorldBounds(sphereMesh.Bounds),
-                    new MeshComponent(sphereHandle),
+                    new MeshComponent(sphereMeshAsset),
                     new UnlitMaterial(new float4(
                         0.15f + 0.8f * metallic,
                         0.15f + 0.8f * roughness,
@@ -130,14 +134,14 @@ internal sealed unsafe partial class SceneExampleApp
         }
 
         var occluderMesh = ProceduralMesh.Cube(size: 1.6f);
-        var occluderHandle = meshRegistry.Register(occluderMesh);
+        var occluderMeshAsset = CreateRasterMesh(occluderMesh);
         world.Create(HList.From(
             new Transform(new float3(5.5f, 2.5f, 1.0f), quaternion.identity, new float3(1, 1, 1)),
             GlobalTransform.Identity,
             new Node<SceneGraph>(null),
             new Bounds(occluderMesh.Bounds),
             new WorldBounds(occluderMesh.Bounds),
-            new MeshComponent(occluderHandle),
+            new MeshComponent(occluderMeshAsset),
             new UnlitMaterial(new float4(1.0f, 0.55f, 0.12f, 1.0f)),
             new MeshRenderer()));
 
@@ -153,33 +157,13 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
-        var nextScale = _resolutionController?.Scale ?? Program.RenderScale;
-        if (_renderScale != nextScale) {
-            _renderScale = nextScale;
-            OnFramebufferResized();
-        }
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
-            UpdatePatchInspection(deltaTime);
-            target = (_patchBounds.Min + _patchBounds.Max) * 0.5f;
+            UpdateBunnyInspection(deltaTime);
+            target = (_bunnyBounds.Min + _bunnyBounds.Max) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
-            eye = PatchEye(aspect, target);
-        }
-        else if (_pipeline == ScenePipeline.Pbr) {
-            UpdatePatchInspection(deltaTime);
-            var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
-            var size = _materialBounds.Max - _materialBounds.Min;
-            target = new float3(-15.1f, 3.9f, 1.6f);
-            var extent = System.Math.Max(size.z, System.Math.Max(size.y, size.x / aspect));
-            eye = new float3(-16.1f, 4.0f, 1.7f);
-            UpdateFreeCamera(deltaTime, ref eye, ref target);
-            if (Program.BenchmarkMotion && Program.BenchmarkFrames > 0) {
-                var yaw = 1.4f * MathF.Sin((_benchmarkFrames - 120) * MathF.Tau / Program.BenchmarkFrames);
-                target = eye + math.mul(quaternion.RotateY(yaw), target - eye);
-            }
-            var verticalFov = 2 * MathF.Atan(MathF.Tan(MathF.PI / 6) * System.Math.Max(1, (16f / 9) / aspect));
-            _camera.Get<CameraComponent>() = new(verticalFov, .1f, System.Math.Max(100, extent * 4));
+            eye = BunnyEye(aspect, target);
         }
         var rotation = quaternion.LookRotation(math.normalize(eye - target), new float3(0, 1, 0));
 
@@ -195,7 +179,7 @@ internal sealed unsafe partial class SceneExampleApp
         if (_sceneWorld is not { } world) {
             return;
         }
-        world.AcquireAddon<Viewport>().Value = new ViewportSize(RenderWidth, RenderHeight);
+        world.AcquireAddon<Viewport>().Value = new ViewportSize(_framebufferWidth, _framebufferHeight);
     }
 
     private void DisposeScene()
@@ -205,6 +189,19 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneWorld?.Dispose();
         _sceneWorld = null;
         _sceneRenderer?.Dispose();
+        foreach (var root in _captureRoots) if (root.IsValid) root.Destroy();
+        _captureRoots.Clear(); _captureInputs = null; _preparedCaptures = null;
+        if (_assetRoot.IsValid) _assetRoot.Destroy();
+        _assetRoot = default;
+        _referenceScene = null;
+        _preparedLighting = null;
+        _bakedEnvironment = null;
+        _bakedProbes = null;
+        _preparedLightmaps = null;
+        _lightmapInput = null;
+        _materialStream = null;
+        _traceScene = null;
+        _rasterScene = null;
         _renderWorld?.Dispose();
         _renderWorld = null;
         _sceneRenderer = null;

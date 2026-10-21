@@ -23,4 +23,18 @@ public static class WorldAssetLibraryExtensions
 
     public static bool TryGetAsset(this World world, IAssetRecord record, out Entity entity)
         => world.GetAddon<AssetLibrary>().TryGet(record, out entity);
+
+    public static Entity AcquireAsset<TAssetRecord>(this World world, AssetId id,
+        Func<TAssetRecord> createRecord, AssetLife life = AssetLife.Persistent)
+        where TAssetRecord : class, IAssetRecord
+        => world.GetAddon<AssetLibrary>().AcquireEntity(id, createRecord, life);
+
+    public static Entity AcquireAsset<TAssetRecord>(this World world, AssetId id,
+        Func<TAssetRecord> createRecord, Entity referrer, AssetLife life = AssetLife.Automatic)
+        where TAssetRecord : class, IAssetRecord
+        => world.GetAddon<AssetLibrary>().AcquireEntity(id, createRecord, referrer, life);
+
+    public static bool TryGetAsset<TAssetRecord>(this World world, AssetId id, out Entity entity)
+        where TAssetRecord : IAssetRecord
+        => world.GetAddon<AssetLibrary>().TryGet<TAssetRecord>(id, out entity);
 }

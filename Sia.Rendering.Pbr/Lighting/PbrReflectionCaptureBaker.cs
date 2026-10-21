@@ -1,49 +1,46 @@
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
+/// <summary>Offline value producer over explicit acquired static inputs; owns scratch, never assets, files or GPU resources.</summary>
 public static class PbrReflectionCaptureBaker
 {
-    /// <summary>Offline static proxy capture: emission, environment diffuse and one shadowed directional light.
-    /// Retains the supplied sky/SH/BRDF, and filters scene radiance into its specular cube.</summary>
-    public static PbrReflectionCaptureAsset Bake(PbrSceneAsset scene, IblEnvironmentAsset environment,
-        float3 position, Aabb bounds, float3 towardLight = default, float3 lightRadiance = default,
-        float maximumDistance = 1000, ulong maximumTraceBytes = 128ul * 1024 * 1024,
+    private readonly record struct Surface(float3 Albedo, float3 Emission, bool DoubleSided);
+
+    public static IblEnvironmentAsset Bake(PbrBvhScene staticScene, IblEnvironmentAsset source, float3 position, Aabb bounds,
+        PbrReflectionCaptureSettings? settings = null, ulong maximumWorkingBytes = 32ul * 1024 * 1024,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(scene);
-        ArgumentNullException.ThrowIfNull(environment);
-        PbrReflectionCaptureAsset.ValidateRegion(position, bounds);
-        if (!float.IsFinite(maximumDistance) || maximumDistance <= .01f
-            || !math.all(math.isfinite(lightRadiance) & (lightRadiance >= 0))
-            || !math.all(math.isfinite(towardLight)) || !float.IsFinite(math.lengthsq(towardLight))
-            || math.any(lightRadiance > 0) && math.lengthsq(towardLight) < 1e-8f)
-            throw new ArgumentException("Invalid reflection capture lighting or distance.");
+        ArgumentNullException.ThrowIfNull(staticScene); ArgumentNullException.ThrowIfNull(source);
+        var inputs = settings ?? new(); inputs.Validate(); PbrReflectionCaptureData.ValidateRegion(position, bounds);
         cancellationToken.ThrowIfCancellationRequested();
-        var trace = PbrSceneTransport.BuildStatic(scene, maximumTraceBytes);
-        var packed = trace.Packed.ToArray();
-        var sh = environment.Coefficients.ToArray();
-        var light = math.any(lightRadiance > 0) ? math.normalize(towardLight) : new float3(0, 1, 0);
-        var captured = IblEnvironmentBaker.BakeRadiance(environment, (direction, background) => {
-            var hit = PbrLightmapBaker.Trace(packed, position, direction, maximumDistance);
-            if (hit.Triangle < 0) return background;
-            var indices = packed[(int)packed[0].y + hit.Triangle];
-            var vertices = (int)packed[1].x;
-            var a = packed[vertices + (int)indices.x].xyz;
-            var b = packed[vertices + (int)indices.y].xyz;
-            var c = packed[vertices + (int)indices.z].xyz;
-            var material = (int)packed[0].w + (int)indices.w * 2;
-            var albedo = packed[material];
-            if (!hit.Front && albedo.w < .5f) return background;
-            var normal = math.normalize(math.cross(b - a, c - a)) * (hit.Front ? 1 : -1);
-            var point = position + direction * hit.Distance + normal * .01f;
-            var value = packed[material + 1].xyz
-                + albedo.xyz * math.max(IrradianceSh.Evaluate(sh, normal), float3.zero) / MathF.PI;
-            var cosine = MathF.Max(0, math.dot(normal, light));
-            if (cosine > 0 && PbrLightmapBaker.Trace(packed, point, light, maximumDistance).Triangle < 0)
-                value += albedo.xyz * lightRadiance * (cosine / MathF.PI);
-            return value;
-        }, cancellationToken);
-        return new(trace.Identity.Span, PbrReflectionCaptureAsset.HashEnvironment(environment), position, bounds, captured);
+        const ulong filterBytes = 6ul * IblEnvironmentAsset.CubeSize * IblEnvironmentAsset.CubeSize * 12 + IblEnvironmentAsset.CubeTexels * 16ul;
+        var materialBytes = (ulong)staticScene.Materials.Length * ((ulong)Unsafe.SizeOf<Surface>() + 1);
+        if (filterBytes + materialBytes >= maximumWorkingBytes)
+            throw new ArgumentException("Capture working budget cannot hold filtering and material scratch.", nameof(maximumWorkingBytes));
+        var trace = PbrBvhTrace.Build(staticScene, maximumWorkingBytes - filterBytes - materialBytes, cancellationToken);
+        var materials = new Surface[staticScene.Materials.Length]; var opaque = new bool[materials.Length];
+        for (var at = 0; at < materials.Length; at++) {
+            cancellationToken.ThrowIfCancellationRequested(); var material = staticScene.Materials[at]; var value = PbrSceneTransport.Surface(material);
+            if (!math.all(math.isfinite(value.Albedo.xyz)) || math.any(value.Albedo.xyz < 0) || math.any(value.Albedo.xyz > 1)
+                || !math.all(math.isfinite(value.Emission.xyz)) || math.any(value.Emission.xyz < 0) || math.any(value.Emission.xyz > 1e18f))
+                throw new ArgumentException("Capture materials exceed finite diffuse/emission transport limits.", nameof(staticScene));
+            materials[at] = new(value.Albedo.xyz, value.Emission.xyz, material.DoubleSided); opaque[at] = !material.AlphaBlend;
+        }
+        var towardLight = math.normalize(inputs.TowardLight);
+        return IblEnvironmentBaker.BakeRadiance(source, (direction, background) => {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!trace.TryTrace(position, direction, out var hit, 0, inputs.MaximumDistance, cancellationToken, opaque)) return background;
+            var material = materials[hit.Material];
+            if (!hit.FrontFace && !material.DoubleSided) return float3.zero;
+            var normal = hit.FrontFace ? hit.GeometricNormal : -hit.GeometricNormal;
+            var point = position + direction * (float)hit.Parameter + normal * inputs.RayBias;
+            var result = material.Emission + material.Albedo * math.max(IrradianceSh.Evaluate(source.Coefficients.Span, normal), float3.zero) / MathF.PI;
+            var cosine = MathF.Max(0, math.dot(normal, towardLight));
+            if (cosine > 0 && !trace.TryTrace(point, towardLight, out _, 0, inputs.MaximumDistance, cancellationToken, opaque))
+                result += material.Albedo * inputs.LightRadiance * (cosine / MathF.PI);
+            return result;
+        }, inputs.FilterSamples, maximumWorkingBytes - materialBytes - trace.PayloadBytes, cancellationToken);
     }
 }

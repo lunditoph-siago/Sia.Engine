@@ -7,12 +7,10 @@
 fn triangle_debug_color(ordinal: u32) -> vec3<f32> {
     var hash = 2166136261u;
 #if SHADING_WORK
-    if ((ordinal & CONVENTIONAL_TRIANGLE_BIT) == 0u) {
-        hash = (hash ^ (stream_triangle(ordinal).y + 1u)) * 16777619u;
-    }
+    hash = (hash ^ (stream_triangle(ordinal).y + 1u)) * 16777619u;
 #endif
     for (var corner = 0u; corner < 3u; corner++) {
-        let position = geometry_record(vertex_index(ordinal, corner)).xyz;
+        let position = vertex_plane(vertex_index(ordinal, corner)).xyz;
         let bits = bitcast<vec3<u32>>(position);
         hash = (hash ^ bits.x) * 16777619u;
         hash = (hash ^ bits.y) * 16777619u;

@@ -8,7 +8,10 @@ using Sia.WebGPU;
 namespace Sia.Engine.Rendering.Pbr;
 
 [StructLayout(LayoutKind.Sequential)]
-internal readonly record struct PbrInstanceGpu(float4x4 Transform, float4x4 NormalTransform, uint4 Material);
+internal readonly record struct PbrInstanceGpu(float4x4 Transform, float4x4 NormalTransform, uint4 Material)
+{
+    public uint4 Geometry { get; init; }
+}
 
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal readonly record struct PbrWorkGpu(uint Triangle, uint Instance);
@@ -22,12 +25,14 @@ internal sealed partial class PbrGpuScene : IDisposable
         Aabb Bounds,
         bool DoubleSided,
         uint FirstIndex,
-        uint Instance,
-        uint CoarseFirst,
-        uint CoarseCount,
-        float Error)
+        uint Instance)
     {
         public float3 Center => Bounds.Center;
+        public uint SourceInstance { get; init; } = Instance;
+        public ReadOnlyMemory<MeshRasterLod> Lods { get; init; }
+        public float ErrorScale { get; init; } = 1;
+        public uint InstanceCount { get; init; } = 1;
+        public uint TriangleOffset { get; init; }
     }
 
     private readonly GpuResources _gpu;
@@ -38,123 +43,62 @@ internal sealed partial class PbrGpuScene : IDisposable
     public Entity Group { get; }
 
     public uint VertexCount { get; }
-    internal bool CompactVertices { get; }
-    internal uint VertexPlanes => CompactVertices ? 2u : 3u;
-    internal ulong GeometryVertexBytes { get; }
-    internal ulong LightmapMetadataPrefixBytes { get; }
+    public uint VertexPlanes { get; } = StreamGeometryPage.VertexPlanes;
     public uint TriangleOffset { get; }
     public uint SingleSidedTriangles { get; }
     public uint OpaqueTriangles { get; }
     public uint TriangleCount { get; }
 
     public Aabb Bounds { get; private set; }
-    internal bool LocalInstances => _residentSource is not null;
-    internal ulong Revision { get; private set; }
     public Draw[] Transparent { get; }
-    public Draw[] Opaque { get; }
-    internal Draw[] Conventional { get; } = [];
+    public Draw[] Opaque { get; private set; }
 
     public ulong Bytes => _gpu.Bytes + (_arena?.Bytes ?? 0) + (Streaming?.Hierarchy?.Bytes ?? 0);
 
-    public PbrGpuScene(in GpuFrame frame, PbrSceneAsset source, Entity layout, ulong budget, int[] materialBatches, Entity instances = default,
-        PbrLightmapAsset? lightmaps = null, PbrLightmapStream? pagedLightmaps = null, bool compactVertices = true,
-        ReadOnlyMemory<int> sourceInstances = default, int instanceOffset = 0, int lightmapOwnerBits = 0,
-        bool preserveInstances = false, ReadOnlyMemory<int> authoredInstances = default)
+    private PbrGpuScene(in GpuFrame frame, PbrSceneStream source, Entity layout, ulong budget, int[] materialBatches, Entity instances)
+        : this(frame, source.Materials, source.TransparentInstances, source.TransparentGeometry.Length,
+            g => new(source.TransparentGeometry[g]), layout, budget, materialBatches, instances, (uint)source.Instances.Length) { }
+
+    private PbrGpuScene(in GpuFrame frame, ReadOnlyMemory<PbrMaterialAsset> materials,
+        ReadOnlyMemory<PbrSceneInstance> sourceInstances, int geometryCount, Func<int, PbrResidentGeometry> prepareGeometry,
+        Entity layout, ulong budget, int[] materialBatches, Entity instanceBuffer, uint instanceBase = 0)
     {
         _gpu = new(frame, budget);
-        CompactVertices = compactVertices;
-        var geometries = new PbrResidentGeometry?[source.Geometry.Length];
+        var geometries = new PbrResidentGeometry?[geometryCount];
         float4[]? vertexScratch = null;
         uint[]? indexScratch = null;
-        uint[]? compactScratch = null;
-        int[]? chartScratch = null;
-        ReadOnlyMemory<PbrLightmapReceiver> lightmapReceivers = lightmaps?.Receivers ?? pagedLightmaps?.Receivers ?? default;
-        ReadOnlyMemory<PbrLightmapChart> lightmapCharts = lightmaps?.Charts ?? pagedLightmaps?.Charts ?? default;
-        var planes = lightmapReceivers.IsEmpty ? 3 : 4;
-        var charted = !lightmapCharts.IsEmpty;
-        var receiverMappings = planes == 3 ? null : new float4[source.Instances.Length];
-        var receiverIndices = lightmaps?.Encoding == PbrLightmapEncoding.L1Unorm8 || charted ? new int[source.Instances.Length] : null;
-        var receiverCharts = charted ? lightmapCharts.ToArray().Select((chart, index) => (chart, index))
-            .GroupBy(c => c.chart.StaticInstance).ToDictionary(g => g.Key, g => g.ToArray()) : null;
-        if (planes == 4) {
-            var mapping = lightmapReceivers.ToArray().Select((receiver, index) => (receiver, index))
-                .ToDictionary(item => item.receiver.StaticInstance);
-            var staticIndex = 0;
-            for (var i = 0; i < source.Instances.Length; i++) {
-                if (source.Instances.Span[i].Dynamic) continue;
-                if (mapping.TryGetValue(sourceInstances.IsEmpty ? staticIndex : sourceInstances.Span[i], out var entry)) {
-                    receiverMappings![i] = entry.receiver.ScaleBias;
-                    if (receiverIndices is not null) receiverIndices[i] = entry.index;
-                }
-                staticIndex++;
-            }
-        }
         try {
-            if (source.HasDynamicInstances || preserveInstances) {
-                _residentSource = source;
-                _instanceOffset = instanceOffset;
-                _instanceData = new PbrInstanceGpu[System.Math.Max(1, instanceOffset + source.Instances.Length)];
-                _enabled = Enumerable.Repeat(true, _instanceData.Length).ToArray();
-                _unscaledErrors = new float[_instanceData.Length];
-                _drawSlots = new (bool Transparent, int Index)[_instanceData.Length];
-                for (var i = 0; i < source.Instances.Length; i++) {
-                    var instance = source.Instances.Span[i];
-                    _instanceData[i + instanceOffset] = new(instance.Transform, math.transpose(math.inverse(instance.Transform)),
-                        new((uint)instance.Material, 0, checked((uint)(authoredInstances.IsEmpty ? i : authoredInstances.Span[i]) + 1),
-                            instance.Dynamic ? 1u : 0u));
-                    _drawSlots[i + instanceOffset] = (false, -1);
-                }
-                Instances = instances != default ? instances : _gpu.Upload<PbrInstanceGpu>(_instanceData);
-            }
+            if ((ulong)instanceBase + (ulong)sourceInstances.Length > (1ul << 24) + 1)
+                throw new ArgumentOutOfRangeException(nameof(sourceInstances), "Packed instance indices must be exact Float32 integers.");
             for (var g = 0; g < geometries.Length; g++)
-                geometries[g] = new(source.Geometry.Span[g].Build.Tree);
+                geometries[g] = prepareGeometry(g);
             var totalVertices = 0;
             var totalTriangles = 0;
-            foreach (var instance in source.Instances.Span) {
+            var localInstances = instanceBuffer != default;
+            var counted = new HashSet<int>();
+            foreach (var instance in sourceInstances.Span) {
+                if (localInstances && !counted.Add(instance.Geometry)) continue;
                 var geometry = geometries[instance.Geometry]!;
                 totalVertices = checked(totalVertices + geometry.VertexCount);
-                totalTriangles = checked(totalTriangles + (int)checked(geometry.Fine + geometry.Coarse));
+                totalTriangles = checked(totalTriangles + (int)geometry.TriangleCount);
             }
-            var geometryBytes = CompactVertices ? CompactVertexBytes((uint)totalVertices, planes == 4, lightmapOwnerBits)
-                : checked((ulong)totalVertices * (uint)planes * 16);
-            GeometryVertexBytes = geometryBytes;
-            var metadata = CreateLightmapMetadata(lightmaps, pagedLightmaps);
-            var metadataCount = metadata.Length;
-            var vertexBytes = geometryBytes + (ulong)metadataCount * 16;
+            var vertexBytes = checked((ulong)totalVertices * StreamGeometryPage.VertexBytes);
             var indexBytes = checked((ulong)totalTriangles * 12);
             if (vertexBytes > _gpu.Limits.MaxStorageBufferBindingSize || indexBytes > _gpu.Limits.MaxStorageBufferBindingSize
-                || vertexBytes + indexBytes > budget - _gpu.Bytes)
-                throw new ArgumentException($"Baked resident geometry needs {vertexBytes + indexBytes} bytes; budget {budget}. "
-                    + $"Vertices: {totalVertices}, {geometryBytes} bytes plus {metadataCount * 16L} metadata bytes; "
-                    + $"indices: {indexBytes} bytes; storage binding limit: {_gpu.Limits.MaxStorageBufferBindingSize} bytes.");
+                || vertexBytes + indexBytes > budget)
+                throw new ArgumentException($"Baked resident geometry needs {vertexBytes + indexBytes} bytes; budget {budget}.");
             VertexCount = (uint)totalVertices;
             TriangleOffset = 0;
             Vertices = _gpu.Buffer(vertexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst);
             Topology = _gpu.Buffer(indexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst);
-            if (metadata.Length > 0)
-                Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), geometryBytes, metadata);
-            if (charted) {
-                chartScratch = ArrayPool<int>.Shared.Rent(lightmapReceivers.ToArray().Max(r => r.Resolution * r.Resolution));
-            }
             const int vertexBatch = 16384;
             const int indexBatch = 65536;
-            var lightmapWordStride = lightmapOwnerBits > 0 ? 1 : 2;
-            if (CompactVertices) compactScratch = ArrayPool<uint>.Shared.Rent(vertexBatch * (planes == 4 ? 8 + lightmapWordStride : 8));
-            else vertexScratch = ArrayPool<float4>.Shared.Rent(vertexBatch * planes);
+            vertexScratch = ArrayPool<float4>.Shared.Rent(vertexBatch * StreamGeometryPage.VertexPlanes);
             indexScratch = ArrayPool<uint>.Shared.Rent(indexBatch);
             void FlushVertices(int count, uint first)
             {
                 if (count == 0) return;
-                if (CompactVertices) {
-                    for (var plane = 0; plane < 2; plane++)
-                        Wgpu.WriteBuffer<uint>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), ((ulong)plane * (uint)totalVertices + first) * 16,
-                            compactScratch.AsSpan(plane * vertexBatch * 4, count * 4));
-                    if (planes == 4)
-                        Wgpu.WriteBuffer<uint>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), (ulong)totalVertices * 32 + (ulong)first * (uint)lightmapWordStride * 4,
-                            compactScratch.AsSpan(vertexBatch * 8, count * lightmapWordStride));
-                    return;
-                }
-                for (var plane = 0; plane < planes; plane++) {
+                for (var plane = 0; plane < StreamGeometryPage.VertexPlanes; plane++) {
                     var at = checked((ulong)plane * (uint)totalVertices + first);
                     Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), at * 16,
                         vertexScratch.AsSpan(plane * vertexBatch, count));
@@ -170,39 +114,26 @@ internal sealed partial class PbrGpuScene : IDisposable
             var maximum = new float3(float.NegativeInfinity);
             int Bin(int i)
             {
-                var m = source.Materials.Span[source.Instances.Span[i].Material];
+                var m = materials.Span[sourceInstances.Span[i].Material];
                 return m.AlphaBlend ? 2 : m.DoubleSided ? 1 : 0;
             }
-            var order = Enumerable.Range(0, source.Instances.Length).OrderBy(Bin)
-                .ThenBy(i => materialBatches[source.Instances.Span[i].Material]);
+            var order = Enumerable.Range(0, sourceInstances.Length).OrderBy(Bin)
+                .ThenBy(i => materialBatches[sourceInstances.Span[i].Material]);
             uint vertexOffset = 0, triangleOffset = 0;
+            var shared = new Dictionary<int, uint>();
             foreach (var i in order) {
-                var instance = source.Instances.Span[i];
-                var material = source.Materials.Span[instance.Material];
+                var instance = sourceInstances.Span[i];
+                var material = materials.Span[instance.Material];
                 var geometry = geometries[instance.Geometry]!;
-                var normal = math.transpose(math.inverse(instance.Transform));
-                var chartResolution = 0;
-                if (charted && receiverMappings![i].x > 0) {
-                    var receiver = lightmapReceivers.Span[receiverIndices![i]];
-                    chartResolution = receiver.Resolution;
-                    chartScratch!.AsSpan(0, chartResolution * chartResolution).Fill(-1);
-                    foreach (var (chart, index) in receiverCharts![receiver.StaticInstance])
-                        for (var y = chart.Y - receiver.Y; y < chart.Y - receiver.Y + chart.Height; y++)
-                            chartScratch.AsSpan(y * chartResolution + chart.X - receiver.X, chart.Width).Fill(index);
-                    geometry.ValidateLightmapCharts(chartScratch.AsSpan(0, chartResolution * chartResolution), chartResolution);
-                }
-                for (var first = 0; first < geometry.VertexCount;) {
+                var transform = localInstances ? float4x4.identity : instance.Transform;
+                var normal = math.transpose(math.inverse(transform));
+                var upload = !localInstances || !shared.ContainsKey(instance.Geometry);
+                var drawFirst = triangleOffset;
+                if (!upload) drawFirst = shared[instance.Geometry];
+                for (var first = 0; upload && first < geometry.VertexCount;) {
                     var count = System.Math.Min(vertexBatch - bufferedVertices, geometry.VertexCount - first);
-                    if (CompactVertices) geometry.PackCompactVertices(compactScratch, first, count,
-                        LocalInstances ? float4x4.identity : instance.Transform,
-                        LocalInstances ? float4x4.identity : normal, LocalInstances ? i + instanceOffset : instance.Material, vertexBatch,
-                        planes == 3 ? null : receiverMappings![i], receiverIndices?[i] ?? 0,
-                        chartResolution == 0 ? default : chartScratch.AsSpan(0, chartResolution * chartResolution), chartResolution, bufferedVertices, lightmapWordStride, lightmapOwnerBits);
-                    else geometry.PackVertices(vertexScratch.AsSpan(bufferedVertices), first, count,
-                        LocalInstances ? float4x4.identity : instance.Transform,
-                        LocalInstances ? float4x4.identity : normal, LocalInstances ? i + instanceOffset : instance.Material, vertexBatch,
-                        planes == 3 ? null : receiverMappings![i], receiverIndices?[i] ?? 0,
-                        chartResolution == 0 ? default : chartScratch.AsSpan(0, chartResolution * chartResolution), chartResolution);
+                    geometry.PackVertices(vertexScratch.AsSpan(bufferedVertices), first, count,
+                        transform, normal, instance.Material, checked(instanceBase + (uint)i), vertexBatch);
                     first += count;
                     bufferedVertices += count;
                     if (bufferedVertices == vertexBatch) {
@@ -211,23 +142,19 @@ internal sealed partial class PbrGpuScene : IDisposable
                         bufferedVertices = 0;
                     }
                 }
-                geometry.WriteIndices(ref indexWriter, vertexOffset);
-                var triangles = checked(geometry.Fine + geometry.Coarse);
+                if (upload) geometry.WriteIndices(ref indexWriter, vertexOffset);
+                var triangles = geometry.TriangleCount;
                 var bounds = BoundsTransform.Apply(geometry.Bounds, instance.Transform);
                 minimum = math.min(minimum, bounds.Min);
                 maximum = math.max(maximum, bounds.Max);
-                if (triangles != 0) {
-                    var draws = material.AlphaBlend ? transparent : opaque;
-                    if (LocalInstances) {
-                        _drawSlots![i + instanceOffset] = (material.AlphaBlend, draws.Count);
-                        _unscaledErrors![i + instanceOffset] = geometry.Error;
-                    }
-                    draws.Add(new(triangleOffset, geometry.Fine,
-                        instance.Material, bounds, material.DoubleSided, triangleOffset * 3, (uint)(i + instanceOffset),
-                        triangleOffset + geometry.Fine, geometry.Coarse, geometry.Error * TransformNorm(instance.Transform)));
+                if (triangles != 0)
+                    (material.AlphaBlend ? transparent : opaque).Add(new(drawFirst, geometry.TriangleCount,
+                        instance.Material, bounds, material.DoubleSided, drawFirst * 3, checked(instanceBase + (uint)i)) { SourceInstance = (uint)i });
+                if (upload) {
+                    shared.TryAdd(instance.Geometry, triangleOffset);
+                    vertexOffset += (uint)geometry.VertexCount;
+                    triangleOffset += triangles;
                 }
-                vertexOffset += (uint)geometry.VertexCount;
-                triangleOffset += triangles;
                 if (Bin(i) == 0) SingleSidedTriangles = triangleOffset;
                 if (Bin(i) <= 1) OpaqueTriangles = triangleOffset;
             }
@@ -241,8 +168,7 @@ internal sealed partial class PbrGpuScene : IDisposable
                 GpuBinding.Buffer(0, Vertices),
                 GpuBinding.Buffer(1, Topology)
             };
-            if (LocalInstances) entries.Add(GpuBinding.Buffer(2, Instances));
-            else if (instances != default) entries.Add(GpuBinding.Buffer(2, instances));
+            if (instanceBuffer != default) entries.Add(GpuBinding.Buffer(2, instanceBuffer));
             Group = GpuBinding.Group(_gpu, layout, CollectionsMarshal.AsSpan(entries));
         }
         catch {
@@ -252,27 +178,25 @@ internal sealed partial class PbrGpuScene : IDisposable
         finally {
             if (indexScratch is not null) ArrayPool<uint>.Shared.Return(indexScratch);
             if (vertexScratch is not null) ArrayPool<float4>.Shared.Return(vertexScratch);
-            if (compactScratch is not null) ArrayPool<uint>.Shared.Return(compactScratch);
-            if (chartScratch is not null) ArrayPool<int>.Shared.Return(chartScratch);
             foreach (var geometry in geometries) geometry?.Dispose();
         }
     }
 
-    internal static ulong CompactVertexBytes(uint vertices, bool lightmaps, int lightmapOwnerBits = 0)
-        => (ulong)vertices * 32 + (lightmaps ? lightmapOwnerBits > 0 ? ((ulong)vertices + 3) / 4 * 16 : ((ulong)vertices + 1) / 2 * 16 : 0);
-
     internal static float TransformNorm(float4x4 m)
     {
-        var a = math.abs(m.c0.xyz);
-        var b = math.abs(m.c1.xyz);
-        var c = math.abs(m.c2.xyz);
-        var column = MathF.Max(a.x + a.y + a.z, MathF.Max(b.x + b.y + b.z, c.x + c.y + c.z));
+        var a = math.abs((double3)m.c0.xyz);
+        var b = math.abs((double3)m.c1.xyz);
+        var c = math.abs((double3)m.c2.xyz);
+        var column = System.Math.Max(a.x + a.y + a.z, System.Math.Max(b.x + b.y + b.z, c.x + c.y + c.z));
         var rows = a + b + c;
-        return MathF.Sqrt(column * MathF.Max(rows.x, MathF.Max(rows.y, rows.z)));
+        var norm = System.Math.Sqrt(column * System.Math.Max(rows.x, System.Math.Max(rows.y, rows.z)));
+        var rounded = (float)norm;
+        return rounded < norm ? MathF.BitIncrement(rounded) : rounded;
     }
 
     public void Dispose()
     {
+        _instanceMotion = null; _pendingInstanceMotion = null;
         Streaming?.Hierarchy?.Dispose();
         _gpu.Dispose();
         _arena?.Dispose();

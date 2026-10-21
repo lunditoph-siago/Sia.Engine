@@ -12,31 +12,51 @@ public readonly record struct PageSchedulerStatistics(
     long Failed,
     long Cancelled);
 
-public sealed class BoundedPageScheduler : IAsyncDisposable
+public sealed class BoundedPageScheduler<TPrepared> : IAsyncDisposable
 {
-    private readonly BoundedRequests<string, StreamGeometryPage> _requests;
+    private sealed class Request(
+        StreamPageDemand demand,
+        Task<TPrepared> task,
+        CancellationTokenSource cancellation)
+    {
+        public readonly StreamPageDemand Demand = demand;
+        public readonly CancellationTokenSource Cancellation = cancellation;
+        public readonly Task<TPrepared> Task = task;
+    }
+
+    private readonly Func<string, CancellationToken, Task<TPrepared>> _read;
+    private readonly Dictionary<string, Request> _requests = [with(StringComparer.Ordinal)];
     private readonly Dictionary<string, DateTime> _retry = [with(StringComparer.Ordinal)];
     private readonly Dictionary<string, StreamPageDemand> _wanted = [with(StringComparer.Ordinal)];
     private readonly List<string> _expiredRetries = [];
-    private readonly List<BoundedRequests<string, StreamGeometryPage>.Request> _requestSnapshot = [];
+    private readonly List<KeyValuePair<string, Request>> _requestSnapshot = [];
+    private readonly Func<TPrepared, int> _decodedBytes;
+    private readonly int _maximumPageBytes;
+    private readonly int _maximumRequests;
     private readonly long _maximumBytes;
-    private long _completed, _failed, _cancelled;
+    private long _reserved, _peak, _completed, _failed, _cancelled;
     private bool _disposed;
-    private Task? _stop;
 
-    public PageSchedulerStatistics Statistics => new(_requests.Count, _requests.ReservedBytes, _requests.PeakBytes, _completed, _failed, _cancelled);
+    public PageSchedulerStatistics Statistics => new(_requests.Count, _reserved, _peak, _completed, _failed, _cancelled);
 
-    public IEnumerable<string> ReadyIds => _requests.Requests.Where(p => !p.IsCancellationRequested
-        && p.Read.IsCompletedSuccessfully).Select(p => p.Key);
+    public IEnumerable<string> ReadyIds => _requests.Where(p => !p.Value.Cancellation.IsCancellationRequested
+        && p.Value.Task.IsCompletedSuccessfully).Select(p => p.Key);
 
-    public BoundedPageScheduler(Func<string, CancellationToken, Task<StreamGeometryPage>> read,
-        int maximumRequests = 2, long maximumDecodedBytes = 2 * StreamGeometryPage.MaximumBytes)
+    /// <summary>Owner-context query including canceled reads that still retain their reservation.</summary>
+    public bool HasRequest(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        return _requests.ContainsKey(id);
+    }
+
+    public BoundedPageScheduler(Func<string, CancellationToken, Task<TPrepared>> read, Func<TPrepared, int> decodedBytes, int maximumPageBytes,
+        int maximumRequests = 2, long maximumDecodedBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(read);
-        if (maximumRequests < 1 || maximumDecodedBytes < StreamGeometryPage.MaximumBytes)
+        if (maximumRequests < 1 || maximumPageBytes < 1 || maximumDecodedBytes < maximumPageBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumRequests));
-        _maximumBytes = maximumDecodedBytes;
-        _requests = new((id, token) => Task.Run(() => read(id, token)), maximumRequests, maximumDecodedBytes, StringComparer.Ordinal);
+        ArgumentNullException.ThrowIfNull(decodedBytes);
+        (_read, _decodedBytes, _maximumPageBytes, _maximumRequests, _maximumBytes) = (read, decodedBytes, maximumPageBytes, maximumRequests, maximumDecodedBytes);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
@@ -52,7 +72,7 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
         foreach (var id in _expiredRetries)
             _retry.Remove(id);
         foreach (var d in demands) {
-            if (string.IsNullOrEmpty(d.Id) || d.DecodedBytes is < 28 or > StreamGeometryPage.MaximumBytes || !float.IsFinite(d.Priority))
+            if (string.IsNullOrEmpty(d.Id) || (d.DecodedBytes < 1 || d.DecodedBytes > _maximumPageBytes) || !float.IsFinite(d.Priority))
                 throw new ArgumentException("Invalid page demand.");
             ref var previous = ref CollectionsMarshal.GetValueRefOrAddDefault(wanted, d.Id, out var exists);
             if (exists) {
@@ -62,33 +82,33 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
             }
             else previous = d;
         }
-        foreach (var request in _requests.Requests)
-            if (wanted.TryGetValue(request.Key, out var demand) && request.ReservedBytes != demand.DecodedBytes)
+        foreach (var pair in _requests)
+            if (wanted.TryGetValue(pair.Key, out var demand) && pair.Value.Demand.DecodedBytes != demand.DecodedBytes)
                 throw new ArgumentException("An in-flight page reservation cannot change size.");
         _requestSnapshot.Clear();
-        _requestSnapshot.AddRange(_requests.Requests);
-        foreach (var request in _requestSnapshot) {
-            if (!wanted.ContainsKey(request.Key) && _requests.Cancel(request.Key)) _cancelled++;
-            if (request.Read.IsCompleted && (request.IsCancellationRequested || !request.Read.IsCompletedSuccessfully)) {
-                if (request.Read.IsFaulted) {
-                    _ = request.Read.Exception;
+        foreach (var pair in _requests)
+            _requestSnapshot.Add(pair);
+        foreach (var pair in _requestSnapshot) {
+            var request = pair.Value;
+            if (!wanted.ContainsKey(pair.Key) && !request.Cancellation.IsCancellationRequested) {
+                request.Cancellation.Cancel();
+                _cancelled++;
+            }
+            if (request.Task.IsCompleted && (request.Cancellation.IsCancellationRequested || !request.Task.IsCompletedSuccessfully)) {
+                if (request.Task.IsFaulted) {
+                    _ = request.Task.Exception;
                     _failed++;
-                    _retry[request.Key] = DateTime.UtcNow.AddSeconds(1);
+                    _retry[pair.Key] = DateTime.UtcNow.AddSeconds(1);
                     if (_retry.Count > 1024) _retry.Remove(_retry.MinBy(p => p.Value).Key);
                 }
-                _requests.Release(request.Key);
+                Remove(pair.Key);
             }
         }
         _requestSnapshot.Clear();
-        Admit();
-    }
-
-    private void Admit()
-    {
-        while (_requests.Count < _requests.Capacity) {
+        while (_requests.Count < _maximumRequests) {
             StreamPageDemand? best = null;
-            foreach (var candidate in _wanted.Values) {
-                if (_requests.Contains(candidate.Id) || candidate.DecodedBytes > _maximumBytes - _requests.ReservedBytes
+            foreach (var candidate in wanted.Values) {
+                if (_requests.ContainsKey(candidate.Id) || _reserved + candidate.DecodedBytes > _maximumBytes
                     || _retry.ContainsKey(candidate.Id))
                     continue;
                 if (best is not { } current || candidate.Priority > current.Priority
@@ -96,45 +116,64 @@ public sealed class BoundedPageScheduler : IAsyncDisposable
                     best = candidate;
             }
             if (best is not { } d) break;
-            if (!_requests.TryStart(d.Id, d.DecodedBytes)) break;
+            var cancellation = new CancellationTokenSource();
+            Task<TPrepared> task;
+            try {
+                task = Task.Run(() => _read(d.Id, cancellation.Token));
+            }
+            catch (Exception error) { task = Task.FromException<TPrepared>(error); }
+            var request = new Request(d, task, cancellation);
+            _requests.Add(d.Id, request);
+            _reserved += d.DecodedBytes;
+            _peak = System.Math.Max(_peak, _reserved);
         }
     }
 
-    public bool TryGetReady(string id, out StreamGeometryPage? page)
+    public bool TryGetReady(string id, out TPrepared? page)
     {
-        page = null;
-        if (!_requests.TryGet(id, out var request) || request.IsCancellationRequested || !request.Read.IsCompletedSuccessfully)
+        page = default;
+        if (!_requests.TryGetValue(id, out var request) || request.Cancellation.IsCancellationRequested || !request.Task.IsCompletedSuccessfully)
             return false;
-        page = request.Read.Result;
-        if (page.Bytes.Length != request.ReservedBytes)
+        page = request.Task.Result;
+        if (_decodedBytes(page!) != request.Demand.DecodedBytes)
             throw new InvalidDataException("Decoded page exceeded its reservation.");
         return true;
     }
 
-    /// <summary>Releases a fully consumed page and immediately admits queued reads within both limits.</summary>
     public void Acknowledge(string id)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_requests.TryGet(id, out var request) || !request.Read.IsCompletedSuccessfully || request.IsCancellationRequested)
+        if (!_requests.TryGetValue(id, out var request) || !request.Task.IsCompletedSuccessfully || request.Cancellation.IsCancellationRequested)
             throw new InvalidOperationException("Page request is not successfully ready.");
-        _requests.Release(id);
         _completed++;
-        _wanted.Remove(id);
-        Admit();
+        Remove(id);
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        if (_disposed) return;
         _disposed = true;
-        return new(_stop ??= DrainAsync());
-    }
-
-    private async Task DrainAsync()
-    {
-        await _requests.DisposeAsync().ConfigureAwait(false);
+        foreach (var request in _requests.Values)
+            request.Cancellation.Cancel();
+        foreach (var request in _requests.Values) {
+            try {
+                await request.Task.ConfigureAwait(false);
+            }
+            catch (Exception) { _ = request.Task.Exception; }
+            request.Cancellation.Dispose();
+        }
+        _requests.Clear();
         _retry.Clear();
         _wanted.Clear();
         _expiredRetries.Clear();
         _requestSnapshot.Clear();
+        _reserved = 0;
+    }
+
+    private void Remove(string id)
+    {
+        var request = _requests[id];
+        _reserved -= request.Demand.DecodedBytes;
+        request.Cancellation.Dispose();
+        _requests.Remove(id);
     }
 }

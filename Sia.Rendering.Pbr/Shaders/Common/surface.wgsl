@@ -7,6 +7,11 @@ struct Surface {
     normal: vec3<f32>,
     base: vec3<f32>,
     uv: vec2<f32>,
+    bake_uv: vec2<f32>,
+    bake_uv_dx: vec2<f32>,
+    bake_uv_dy: vec2<f32>,
+    bake_present: bool,
+    source_instance: u32,
     metal: f32,
     rough: f32,
     ao: f32,
@@ -14,9 +19,6 @@ struct Surface {
     opacity: f32,
     transport: vec2<f32>,
     valid: bool,
-    lightmap: vec3<f32>,
-    lightmap_dx: vec2<f32>,
-    lightmap_dy: vec2<f32>,
 }
 
 fn sample_material(

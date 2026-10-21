@@ -14,8 +14,4 @@ public readonly record struct RenderFrameContext(
     RenderGraphTextureKey DepthTarget,
     WGPULoadOp ColorLoadOp = WGPULoadOp.Clear,
     bool ColorCacheable = true,
-    ViewportSize? Viewport = null)
-{
-    /// <summary>Discards temporal data when this camera jumps discontinuously.</summary>
-    public bool CameraCut { get; init; }
-}
+    ViewportSize? Viewport = null);

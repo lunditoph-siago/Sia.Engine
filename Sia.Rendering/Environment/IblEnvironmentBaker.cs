@@ -1,3 +1,4 @@
+using Sia;
 using Sia.Math;
 using Sia.WebGPU;
 
@@ -5,7 +6,14 @@ namespace Sia.Engine.Rendering;
 
 public static partial class IblEnvironmentBaker
 {
-    internal static string ShaderSource()
+    internal static string ShaderSource(World world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return CompileSource(module => RenderingShaderSource.AcquireModule(world, module) is { } entity
+            ? entity.Get<WgslSourceResource>().Source : null);
+    }
+
+    private static string CompileSource(Func<string, string?> read)
     {
         var definitions = new Dictionary<string, string> {
             ["ENV_CUBE_SIZE"] = IblEnvironmentAsset.CubeSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -13,7 +21,8 @@ public static partial class IblEnvironmentBaker
             ["ENV_CUBE_TEXELS"] = IblEnvironmentAsset.CubeTexels.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["ENV_LUT_SIZE"] = IblEnvironmentAsset.LutSize.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
-        return RenderingShaderSource.Compile(RenderingShaderSource.ReadModule("rendering/Baking/environment")!, definitions);
+        return RenderingShaderSource.CompileResolved(read("rendering/Baking/environment")
+            ?? throw new InvalidOperationException("Missing environment bake source."), (module, _) => read(module), definitions);
     }
 
     public static IblEnvironmentAsset Bake(in GpuFrame frame, WgpuHandle<WGPUInstance> instance, ProceduralSky sky)
@@ -33,7 +42,7 @@ public static partial class IblEnvironmentBaker
         ]);
         var group = GpuBinding.Group(gpu, layout, [GpuBinding.Buffer(0, uniform), GpuBinding.Buffer(1, output)]);
         var pipelineLayout = GpuBinding.PipelineLayout(gpu, layout);
-        var shader = gpu.Own(Wgpu.CreateWgslShaderModule(gpu.Device, ShaderSource(), "rendering-offline-environment"));
+        var shader = gpu.Own(Wgpu.CreateWgslShaderModule(gpu.Device, ShaderSource(frame.ResourceWorld), "rendering-offline-environment"));
         var bake = Compute(gpu, pipelineLayout.GetWgpu<WGPUPipelineLayout>(), shader.GetWgpu<WGPUShaderModule>(), "bake_environment");
         var sh = Compute(gpu, pipelineLayout.GetWgpu<WGPUPipelineLayout>(), shader.GetWgpu<WGPUShaderModule>(), "bake_sh");
         var encoder = gpu.Own(Wgpu.CreateCommandEncoder(gpu.Device));

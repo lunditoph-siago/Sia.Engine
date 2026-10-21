@@ -19,7 +19,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Assets/bunny.siapatch" LogicalName="Sia.Engine.Example.bunny.siapatch" />
     <Compile Remove="obj_desktop\**" />
     <EmbeddedResource Remove="obj_desktop\**" />
     <None Remove="obj_desktop\**" />
@@ -31,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sia.Engine\Sia.Engine.csproj" />
+    <ProjectReference Include="..\Sia.Asset.CodeGenerators\Sia.Asset.CodeGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sia.Camera\Sia.Camera.csproj" />
     <ProjectReference Include="..\Sia.Light\Sia.Light.csproj" />
     <ProjectReference Include="..\Sia.Mesh\Sia.Mesh.csproj" />
@@ -51,5 +51,5 @@
       <_WasmPInvokeModules Include="__Internal_glfw" />
     </ItemGroup>
   </Target>
-  <Import Project="Bistro.targets" />
+  <Import Project="ExampleContent.targets" />
 </Project>

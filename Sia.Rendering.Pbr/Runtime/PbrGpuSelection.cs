@@ -14,6 +14,7 @@ internal sealed class PbrGpuSelection : IDisposable
         public Task? Mapping;
         public bool Recorded;
         public long Frame;
+        public ulong PoseRevision;
     }
 
     private readonly GpuResources _gpu;
@@ -27,6 +28,7 @@ internal sealed class PbrGpuSelection : IDisposable
     private readonly List<int> _activeFeedback = [];
     private long _clock;
     private long _latestFrame = -1;
+    private ulong _poseRevision;
     private int _capture = -1;
     private bool _disposed;
 
@@ -69,8 +71,7 @@ internal sealed class PbrGpuSelection : IDisposable
                 + ((ulong)hierarchy.NodeCapacity * 3));
             Work = _gpu.Buffer(checked(workRecords * (ulong)Unsafe.SizeOf<uint4>()),
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
-            // Preserve the first20 draw/counter/dispatch words;32 quota words follow.
-            Arguments = _gpu.Buffer(208, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
+            Arguments = _gpu.Buffer(80, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             // A writable counter buffer cannot also supply this dispatch's indirect arguments.
             DispatchArguments = _gpu.Buffer(16, WGPUBufferUsage.Indirect | WGPUBufferUsage.CopyDst);
             Feedback = _gpu.Buffer(FeedbackBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
@@ -110,11 +111,16 @@ internal sealed class PbrGpuSelection : IDisposable
     {
         _clock++;
         _capture = -1;
+        if (_poseRevision != residency.PoseRevision) {
+            _poseRevision = residency.PoseRevision;
+            _latestFrame = -1; VisibleTriangles = 0; DeferredRefinements = 0;
+            _activeFeedback.Clear(); Array.Clear(_latest);
+        }
         foreach (var slot in _slots) {
             if (slot.Mapping is { IsCompleted: true } mapping) {
                 try {
                     mapping.GetAwaiter().GetResult();
-                    if (slot.Frame > _latestFrame) {
+                    if (AcceptFeedback(slot.PoseRevision, slot.Frame)) {
                         Wgpu.GetMappedRangeReadOnly<uint>(slot.Buffer.GetWgpu<WGPUBuffer>(), 0, _latest.Length).CopyTo(_latest);
                         _activeFeedback.Clear();
                         for (var i = 0; i < (int)_hierarchy.PageCount; i++)
@@ -155,6 +161,9 @@ internal sealed class PbrGpuSelection : IDisposable
             lod.EyeNear, lod.ForwardPixels);
         Wgpu.WriteBuffer<PbrGpuHierarchy.Configuration>(_gpu.Queue, _configuration[view].GetWgpu<WGPUBuffer>(), 0, [value]);
     }
+
+    private bool AcceptFeedback(ulong poseRevision, long frame)
+        => poseRevision == _poseRevision && frame > _latestFrame;
 
     public void Reset(WgpuHandle<WGPUCommandEncoder> encoder)
     {
@@ -197,10 +206,6 @@ internal sealed class PbrGpuSelection : IDisposable
             pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
             try {
                 Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
-                Wgpu.SetComputePipeline(pass, (even ? _hierarchy.AssessEven : _hierarchy.AssessOdd).GetWgpu<WGPUComputePipeline>());
-                Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
-                Wgpu.SetComputePipeline(pass, _hierarchy.PrepareRefinement.GetWgpu<WGPUComputePipeline>());
-                Wgpu.DispatchWorkgroups(pass, 1);
                 Wgpu.SetComputePipeline(pass, (even ? _hierarchy.TraverseEven : _hierarchy.TraverseOdd).GetWgpu<WGPUComputePipeline>());
                 Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
             }
@@ -234,6 +239,7 @@ internal sealed class PbrGpuSelection : IDisposable
         Wgpu.CopyBufferToBuffer(encoder, Feedback.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), 0, FeedbackBytes);
         Wgpu.CopyBufferToBuffer(encoder, Arguments.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), FeedbackBytes, 64);
         slot.Frame = _clock;
+        slot.PoseRevision = _poseRevision;
         slot.Recorded = true;
     }
 

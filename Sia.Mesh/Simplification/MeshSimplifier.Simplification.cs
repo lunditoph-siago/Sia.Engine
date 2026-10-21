@@ -1,0 +1,147 @@
+using Sia.Math;
+
+namespace Sia.Engine.Mesh;
+
+internal static partial class MeshSimplifier
+{
+    internal static (MeshData Geometry, float Error) Reduce(MeshData mesh, int target,
+        float normalWeight, float uvWeight, CancellationToken cancellationToken, bool strictManifold = true)
+    {
+        var (triangles, incident, locked) = Topology(mesh, cancellationToken, strictManifold);
+        var deleted = new bool[triangles.Length];
+        var revisions = new int[mesh.Vertices.Length];
+        var positions = mesh.Vertices.Select(Position).ToArray();
+        var coordinateCount = mesh.HasBakeUvs ? 14 : 12;
+        var quadricSize = coordinateCount * (coordinateCount + 1) / 2;
+        var quadrics = BuildQuadrics(mesh, triangles, locked, normalWeight, uvWeight, cancellationToken,
+            coordinateCount, out var coordinates, out var positionScale);
+        var maximumCost = 0d;
+        var candidates = new PriorityQueue<Collapse, (double Cost, double Length, int From, int To)>();
+        var edges = new HashSet<(int, int)>();
+        foreach (var face in triangles) {
+            edges.Add(Edge(face.A, face.B)); edges.Add(Edge(face.B, face.C)); edges.Add(Edge(face.C, face.A));
+        }
+        foreach (var (a, b) in edges) { Enqueue(a, b); Enqueue(b, a); }
+        var remaining = triangles.Length;
+        while (remaining - 2 >= target && candidates.TryDequeue(out var collapse, out var priority)) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (from, to, fromRevision, toRevision) = collapse;
+            if (fromRevision != revisions[from] || toRevision != revisions[to] || incident[from].Count == 0
+                || incident[to].Count == 0 || locked[from]) { continue; }
+            if (!CanCollapse(from, to, triangles, incident, locked, positions, mesh)) { continue; }
+            maximumCost = System.Math.Max(maximumCost, priority.Cost);
+            var affected = new HashSet<int>();
+            foreach (var t in incident[from].Concat(incident[to])) {
+                var face = triangles[t];
+                affected.Add(face.A); affected.Add(face.B); affected.Add(face.C);
+            }
+            foreach (var t in incident[from].ToArray()) {
+                var face = triangles[t];
+                incident[face.A].Remove(t); incident[face.B].Remove(t); incident[face.C].Remove(t);
+                if (face.Contains(to)) { deleted[t] = true; remaining--; }
+                else {
+                    face = face.Replace(from, to);
+                    triangles[t] = face;
+                    incident[face.A].Add(t); incident[face.B].Add(t); incident[face.C].Add(t);
+                }
+            }
+            for (var i = 0; i < quadricSize; i++) { quadrics[to * quadricSize + i] += quadrics[from * quadricSize + i]; }
+            edges.Clear();
+            foreach (var v in affected) {
+                revisions[v]++;
+                foreach (var t in incident[v]) {
+                    var face = triangles[t];
+                    edges.Add(Edge(face.A, face.B)); edges.Add(Edge(face.B, face.C)); edges.Add(Edge(face.C, face.A));
+                }
+            }
+            foreach (var (a, b) in edges) { Enqueue(a, b); Enqueue(b, a); }
+        }
+        var indices = new uint[remaining * 3];
+        var offset = 0;
+        for (var t = 0; t < triangles.Length; t++) {
+            if (deleted[t]) { continue; }
+            indices[offset++] = (uint)triangles[t].A;
+            indices[offset++] = (uint)triangles[t].B;
+            indices[offset++] = (uint)triangles[t].C;
+        }
+        var error = RoundUp(System.Math.Sqrt(maximumCost) * positionScale);
+        return (MeshPatchBuilder.Compact(mesh.Vertices, indices, mesh.BakeUvs, cancellationToken: cancellationToken), error);
+
+        void Enqueue(int from, int to)
+        {
+            if (locked[from] || incident[from].Count == 0 || incident[to].Count == 0) { return; }
+            var point = coordinates.AsSpan(to * coordinateCount, coordinateCount);
+            var cost = Evaluate(quadrics.AsSpan(from * quadricSize, quadricSize), point)
+                + Evaluate(quadrics.AsSpan(to * quadricSize, quadricSize), point);
+            if (!double.IsFinite(cost)) { return; }
+            candidates.Enqueue(new(from, to, revisions[from], revisions[to]),
+                (System.Math.Max(0, cost), math.lengthsq(positions[from] - positions[to]), from, to));
+        }
+    }
+
+    private static bool CanCollapse(int from, int to, Triangle[] triangles, HashSet<int>[] incident, bool[] locked,
+        double3[] positions, MeshData mesh)
+    {
+        var vertices = mesh.Vertices;
+        if (vertices[from].Tangent.w != vertices[to].Tangent.w) { return false; }
+        var fromNeighbors = Neighbors(from);
+        var toNeighbors = Neighbors(to);
+        if (locked[to] && fromNeighbors.Any(vertex => vertex != to && locked[vertex] && !toNeighbors.Contains(vertex))) {
+            return false;
+        }
+        var common = 0;
+        foreach (var vertex in fromNeighbors) { if (toNeighbors.Contains(vertex)) { common++; } }
+        if (common != 2 || incident[from].Count(t => triangles[t].Contains(to)) != 2) { return false; }
+        var faces = new HashSet<(int, int, int)>();
+        foreach (var t in incident[to]) {
+            var face = triangles[t];
+            if (!face.Contains(from)) { faces.Add(Face(face.A, face.B, face.C)); }
+        }
+        foreach (var t in incident[from]) {
+            var before = triangles[t];
+            if (before.Contains(to)) { continue; }
+            var after = before.Replace(from, to);
+            if (!faces.Add(Face(after.A, after.B, after.C))) { return false; }
+            var oldNormal = math.cross(positions[before.B] - positions[before.A], positions[before.C] - positions[before.A]);
+            var newNormal = math.cross(positions[after.B] - positions[after.A], positions[after.C] - positions[after.A]);
+            if (math.dot(oldNormal, newNormal) <= 0) { return false; }
+            if (!PreservesUV(before, after, false) || (mesh.HasBakeUvs && !PreservesUV(before, after, true))) { return false; }
+        }
+        return faces.Count != 0;
+
+        HashSet<int> Neighbors(int v)
+        {
+            var neighbors = new HashSet<int>();
+            foreach (var t in incident[v]) {
+                var face = triangles[t];
+                neighbors.Add(face.A); neighbors.Add(face.B); neighbors.Add(face.C);
+            }
+            neighbors.Remove(v);
+            return neighbors;
+        }
+
+        bool PreservesUV(Triangle before, Triangle after, bool bake)
+        {
+            var oldArea = UVArea(before, bake);
+            return oldArea == 0 || oldArea * UVArea(after, bake) > 0;
+        }
+
+        double UVArea(Triangle face, bool bake)
+        {
+            var a = bake ? mesh.BakeUvs[face.A] : vertices[face.A].UV;
+            var b = bake ? mesh.BakeUvs[face.B] : vertices[face.B].UV;
+            var c = bake ? mesh.BakeUvs[face.C] : vertices[face.C].UV;
+            return ((double)b.x - a.x) * ((double)c.y - a.y) - ((double)b.y - a.y) * ((double)c.x - a.x);
+        }
+    }
+
+    private static float RoundUp(double value)
+    {
+        if (value == 0) { return 0; }
+        var result = MathF.BitIncrement((float)value);
+        if (!float.IsFinite(result)) { throw new ArgumentException("Spatial error exceeds the supported finite range."); }
+        return result;
+    }
+
+    private readonly record struct Collapse(int From, int To, int FromRevision, int ToRevision);
+}

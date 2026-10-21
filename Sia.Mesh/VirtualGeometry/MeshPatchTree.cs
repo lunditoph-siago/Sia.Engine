@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -17,9 +18,19 @@ public sealed partial class MeshPatchTree
     public int MeshletCount => _meshlets.Meshlets.Length;
     public int MeshletVertexCount => _meshlets.VertexIndices.Length;
     public Aabb Bounds => _geometry.Bounds;
+    public ulong PayloadBytes => CalculatePayloadBytes([Nodes.Length, VertexCount, _geometry.Indices.Length,
+        MeshletCount, MeshletVertexCount, _meshlets.TriangleIndices.Length, _meshlets.SourceTriangleIndices.Length], HasBakeUvs);
+
+    private static ulong CalculatePayloadBytes(ReadOnlySpan<int> counts, bool bakeUvs) =>
+        (ulong)counts[0] * (ulong)Unsafe.SizeOf<MeshPatchNode>()
+        + (ulong)counts[1] * (ulong)(MeshVertex.Stride + (bakeUvs ? 8 : 0))
+        + (ulong)counts[2] * sizeof(uint) + (ulong)counts[3] * (ulong)Unsafe.SizeOf<Meshlet>()
+        + (ulong)counts[4] * sizeof(uint) + (ulong)counts[5] + (ulong)counts[6] * sizeof(uint);
 
     // Validated, allocation-free views; callers cannot mutate the tree storage.
     public ReadOnlySpan<MeshVertex> Vertices => _geometry.Vertices;
+    public ReadOnlySpan<float2> BakeUvs => _geometry.BakeUvs;
+    public bool HasBakeUvs => _geometry.HasBakeUvs;
     public ReadOnlySpan<uint> Indices => _geometry.Indices;
     public ReadOnlySpan<Meshlet> Meshlets => _meshlets.Meshlets;
     public ReadOnlySpan<uint> MeshletVertexIndices => _meshlets.VertexIndices;
@@ -35,7 +46,7 @@ public sealed partial class MeshPatchTree
     }
 
     public (MeshData Geometry, MeshletData Meshlets) CopyGeometry() => (
-        new(_geometry.Vertices.ToArray(), _geometry.Indices.ToArray(), _geometry.Bounds),
+        new(_geometry.Vertices.ToArray(), _geometry.Indices.ToArray(), _geometry.Bounds) { BakeUvs = _geometry.BakeUvs.ToArray() },
         new(_meshlets.Meshlets.ToArray(), _meshlets.VertexIndices.ToArray(),
             _meshlets.TriangleIndices.ToArray(), _meshlets.SourceTriangleIndices.ToArray()));
 
@@ -46,12 +57,17 @@ public sealed partial class MeshPatchTree
         var seen = new HashSet<MeshPatch>(ReferenceEqualityComparer.Instance);
         foreach (var root in roots) { Add(root, -1); }
         var snapshots = new List<BuildPatch>();
+        bool? hasBakeUvs = null;
         for (var i = 0; i < patches.Count; i++) {
             cancellationToken.ThrowIfCancellationRequested();
             var (patch, parent) = patches[i];
             ArgumentNullException.ThrowIfNull(patch.Geometry);
             ArgumentNullException.ThrowIfNull(patch.Geometry.Vertices);
             ArgumentNullException.ThrowIfNull(patch.Geometry.Indices);
+            patch.Geometry.ValidateBakeUvs();
+            if (hasBakeUvs is { } present && present != patch.Geometry.HasBakeUvs)
+                throw new ArgumentException("All patches in a tree must agree on bake UV presence.", nameof(roots));
+            hasBakeUvs = patch.Geometry.HasBakeUvs;
             ArgumentNullException.ThrowIfNull(patch.Children);
             var children = patch.Children.ToArray();
             if (!float.IsFinite(patch.LocalEstimatedSpatialError) || patch.LocalEstimatedSpatialError < 0
@@ -61,18 +77,21 @@ public sealed partial class MeshPatchTree
             }
             var childOffset = patches.Count;
             foreach (var child in children) { Add(child, i); }
-            snapshots.Add(new(new(patch.Geometry.Vertices.ToArray(), patch.Geometry.Indices.ToArray(), default),
+            snapshots.Add(new(new(patch.Geometry.Vertices.ToArray(), patch.Geometry.Indices.ToArray(), default) {
+                BakeUvs = patch.Geometry.BakeUvs.ToArray()
+            },
                 patch.LocalEstimatedSpatialError, parent, childOffset, children.Length));
         }
 
         var nodes = new MeshPatchNode[snapshots.Count];
         var vertices = new List<MeshVertex>();
+        var bakeUvs = new List<float2>();
         var indices = new List<uint>();
         var clusters = new List<Meshlet>();
         var vertexReferences = new List<uint>();
         var localIndices = new List<byte>();
         var sourceTriangles = new List<uint>();
-        var vertexIdentities = new Dictionary<VertexIdentity, int>();
+        var vertexIdentities = new Dictionary<MeshVertexIdentity, int>();
         var boundaries = new Dictionary<(int, int), int>[nodes.Length];
         var finestTriangles = 0;
         for (var i = 0; i < snapshots.Count; i++) {
@@ -80,10 +99,13 @@ public sealed partial class MeshPatchTree
             var patch = snapshots[i];
             var mesh = patch.Geometry;
             var meshlets = MeshletBuilder.Build(mesh, maxVertices, maxTriangles, cancellationToken: cancellationToken);
-            var vertexIds = VertexIds(mesh.Vertices, vertexIdentities);
+            var vertexIds = VertexIds(mesh.Vertices, mesh.BakeUvs, vertexIdentities);
             boundaries[i] = Boundary(mesh.Indices, vertexIds);
             for (var v = 0; v < vertexIds.Length; v++) {
-                if (vertexIds[v] == vertices.Count) { vertices.Add(mesh.Vertices[v]); }
+                if (vertexIds[v] == vertices.Count) {
+                    vertices.Add(mesh.Vertices[v]);
+                    if (mesh.HasBakeUvs) bakeUvs.Add(mesh.BakeUvs[v]);
+                }
             }
             var min = new float3(float.PositiveInfinity);
             var max = new float3(float.NegativeInfinity);
@@ -133,7 +155,7 @@ public sealed partial class MeshPatchTree
         for (var r = 1; r < roots.Length; r++) {
             bounds = new(math.min(bounds.Min, nodes[r].Bounds.Min), math.max(bounds.Max, nodes[r].Bounds.Max));
         }
-        return new(nodes, roots.Length, finestTriangles, new(vertices.ToArray(), indices.ToArray(), bounds),
+        return new(nodes, roots.Length, finestTriangles, new(vertices.ToArray(), indices.ToArray(), bounds) { BakeUvs = bakeUvs.ToArray() },
             new(clusters.ToArray(), vertexReferences.ToArray(), localIndices.ToArray(), sourceTriangles.ToArray()));
 
         void Add(MeshPatch patch, int parent)
@@ -144,45 +166,22 @@ public sealed partial class MeshPatchTree
         }
     }
 
-    private static int[] VertexIds(ReadOnlySpan<MeshVertex> vertices, Dictionary<VertexIdentity, int> identities)
+    private static int[] VertexIds(ReadOnlySpan<MeshVertex> vertices, ReadOnlySpan<float2> bakeUvs,
+        Dictionary<MeshVertexIdentity, int> identities)
     {
         var ids = new int[vertices.Length];
         for (var i = 0; i < ids.Length; i++) {
             var v = vertices[i];
             if (!float.IsFinite(v.Normal.x) || !float.IsFinite(v.Normal.y) || !float.IsFinite(v.Normal.z)
-                || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y) || !v.HasFiniteTangent || !v.HasFiniteLightmapUV) {
+                || !float.IsFinite(v.UV.x) || !float.IsFinite(v.UV.y) || !v.HasFiniteTangent) {
                 throw new ArgumentException("Patch attributes must be finite.", nameof(vertices));
             }
-            var identity = Identity(v);
+            var identity = MeshVertexIdentity.Create(v, bakeUvs.IsEmpty ? default : bakeUvs[i]);
             ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, identity, out var exists);
             if (!exists) { id = identities.Count - 1; }
             ids[i] = id;
         }
         return ids;
-    }
-
-    private static int[] VertexIds(MeshVertex[] vertices)
-    {
-        var ids = new int[vertices.Length];
-        var identities = new Dictionary<int, int>(vertices.Length, new VertexIndexComparer(vertices));
-        for (var i = 0; i < ids.Length; i++) {
-            ref var id = ref CollectionsMarshal.GetValueRefOrAddDefault(identities, i, out var exists);
-            if (!exists) { id = identities.Count - 1; }
-            ids[i] = id;
-        }
-        return ids;
-    }
-
-    private static VertexIdentity Identity(MeshVertex vertex) => new(
-        vertex.Position.x, vertex.Position.y, vertex.Position.z,
-        vertex.Normal.x, vertex.Normal.y, vertex.Normal.z, vertex.UV.x, vertex.UV.y,
-        vertex.Tangent.x, vertex.Tangent.y, vertex.Tangent.z, vertex.Tangent.w,
-        vertex.LightmapUV.x, vertex.LightmapUV.y);
-
-    private sealed class VertexIndexComparer(MeshVertex[] vertices) : IEqualityComparer<int>
-    {
-        public bool Equals(int a, int b) => Identity(vertices[a]).Equals(Identity(vertices[b]));
-        public int GetHashCode(int index) => Identity(vertices[index]).GetHashCode();
     }
 
     private static Dictionary<(int, int), int> Boundary(ReadOnlySpan<uint> indices, ReadOnlySpan<int> ids)
@@ -226,6 +225,4 @@ public sealed partial class MeshPatchTree
         a.Count == b.Count && a.All(entry => b.TryGetValue(entry.Key, out var value) && value == entry.Value);
 
     private readonly record struct BuildPatch(MeshData Geometry, float LocalError, int Parent, int ChildOffset, int ChildCount);
-    private readonly record struct VertexIdentity(float X, float Y, float Z, float Nx, float Ny, float Nz, float U, float V,
-        float Tx, float Ty, float Tz, float Tw, float Lu, float Lv);
 }

@@ -2,10 +2,15 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
+/// <summary>One runtime transform update addressed by stable authored identity, independent of draw packing.</summary>
+public readonly record struct PbrInstanceTransform(Guid Id, float4x4 Transform);
+
 public readonly record struct VisibilityInstance(float4x4 Transform, PbrMaterial Material)
 {
     public int AssetIndex { get; init; }
     public int MaterialIndex { get; init; }
+    public Guid AuthoredId { get; init; }
+    public int MaterialSlot { get; init; } = -1;
 
     public VisibilityInstance(float4x4 transform, int materialIndex)
         : this(transform, new PbrMaterial(float3.one, 1, 1, float3.one, 1))

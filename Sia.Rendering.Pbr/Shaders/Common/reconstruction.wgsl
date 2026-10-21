@@ -33,11 +33,12 @@ fn surface_at(ordinal: u32, pixel: vec2<f32>) -> Surface {
     let normal = a.normal * bary.x + b.normal * bary.y + c.normal * bary.z;
     let tangent = a.tangent * bary.x + b.tangent * bary.y + c.tangent * bary.z;
     let t = tangent.xyz;
-    var result = sample_material(m, wa.xyz * bary.x + wb.xyz * bary.y + wc.xyz * bary.z, normal, vec4<f32>(t, tangent.w), uv, uv_dx, uv_dy, dot(cross(wb.xyz - wa.xyz, wc.xyz - wa.xyz), frame.eye.xyz - wa.xyz) >= 0.0);
-    result.lightmap = a.lightmap * bary.x + b.lightmap * bary.y + c.lightmap * bary.z;
-    result.lightmap_dx = (a.lightmap.xy * dx.x + b.lightmap.xy * dx.y + c.lightmap.xy * dx.z
-        - result.lightmap.xy * dot(dx, vec3<f32>(1.0))) / denominator;
-    result.lightmap_dy = (a.lightmap.xy * dy.x + b.lightmap.xy * dy.y + c.lightmap.xy * dy.z
-        - result.lightmap.xy * dot(dy, vec3<f32>(1.0))) / denominator;
-    return result;
+    surface = sample_material(m, wa.xyz * bary.x + wb.xyz * bary.y + wc.xyz * bary.z, normal, vec4<f32>(t, tangent.w), uv, uv_dx, uv_dy, dot(cross(wb.xyz - wa.xyz, wc.xyz - wa.xyz), frame.eye.xyz - wa.xyz) >= 0.0);
+    surface.bake_uv = a.bake_uv * bary.x + b.bake_uv * bary.y + c.bake_uv * bary.z;
+    surface.bake_uv_dx = (a.bake_uv * dx.x + b.bake_uv * dx.y + c.bake_uv * dx.z - surface.bake_uv * dot(dx, vec3<f32>(1.0))) / denominator;
+    surface.bake_uv_dy = (a.bake_uv * dy.x + b.bake_uv * dy.y + c.bake_uv * dy.z - surface.bake_uv * dot(dy, vec3<f32>(1.0))) / denominator;
+    surface.bake_present = a.bake_present && b.bake_present && c.bake_present
+        && a.source_instance == b.source_instance && a.source_instance == c.source_instance;
+    surface.source_instance = a.source_instance;
+    return surface;
 }

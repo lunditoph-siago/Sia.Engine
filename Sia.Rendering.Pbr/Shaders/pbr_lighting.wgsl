@@ -70,7 +70,12 @@ fn indirect_lighting(
     let k_s = f;
     let k_d = (vec3<f32>(1.0) - k_s) * (1.0 - metallic);
     let diffuse = k_d * base_color * irradiance / PBR_PI;
-    let env_brdf = sample_brdf_lut(brdf_lut, brdf_lut_sampler, n_dot_v, roughness);
-    let specular = prefiltered * (f0 * env_brdf.x + vec3<f32>(env_brdf.y));
+    let specular = prefiltered * indirect_specular_weight(normal, view_dir, base_color, metallic, roughness, brdf_lut, brdf_lut_sampler);
     return diffuse + specular;
+}
+
+fn indirect_specular_weight(normal: vec3<f32>, view_dir: vec3<f32>, base: vec3<f32>, metallic: f32,
+    roughness: f32, brdf_lut: texture_2d<f32>, brdf_sampler: sampler) -> vec3<f32> {
+    let brdf = sample_brdf_lut(brdf_lut, brdf_sampler, max(dot(normal, view_dir), 1e-4), roughness);
+    return mix(vec3<f32>(0.04), base, metallic) * brdf.x + vec3<f32>(brdf.y);
 }

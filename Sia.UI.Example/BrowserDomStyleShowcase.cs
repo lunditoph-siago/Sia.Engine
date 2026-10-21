@@ -1,4 +1,3 @@
-using System.Reflection;
 using Sia;
 using Sia.Graphics.Text;
 using Sia.Reactive;
@@ -76,7 +75,7 @@ internal sealed class BrowserDomStyleShowcase : IDisposable
         _world.Dispatcher.Listen<Activate>(OnActivate);
 
         _theme = _world.Create(HList.From(ShowcaseTheme.Dark));
-        _font = LoadFont();
+        _font = ShowcaseFont.Load(_world);
         CreateNodes();
         _layoutStage = SystemChain.Empty.AddReactiveUi().CreateStage(_world);
     }
@@ -267,16 +266,6 @@ internal sealed class BrowserDomStyleShowcase : IDisposable
         else if (!value && target.Contains<TMarker>()) {
             target.Remove<TMarker>();
         }
-    }
-
-    private static Font LoadFont()
-    {
-        using var stream = typeof(BrowserDomStyleShowcase).Assembly.GetManifestResourceStream(
-            "Sia.UI.Example.NotoSans-UiSubset.ttf")
-            ?? throw new InvalidOperationException("The embedded browser font was not found.");
-        using var memory = new MemoryStream();
-        stream.CopyTo(memory);
-        return new Font(memory.ToArray());
     }
 
     public void Dispose()

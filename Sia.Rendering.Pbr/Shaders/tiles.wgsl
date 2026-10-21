@@ -41,7 +41,7 @@ fn classify(
     workgroupBarrier();
     if (all(id.xy < frame.size.xy)) {
         let visible = textureLoad(ids, vec2<i32>(id.xy), 0).x;
-        if (valid_triangle_id(visible)) {
+        if (visible > 0u && visible <= frame.geometry.z) {
             let material = triangle_material(visible - 1u);
             let batch_id = materials[material].indices.y;
             atomicOr( & mask[batch_id / 32u], 1u << (batch_id % 32u));

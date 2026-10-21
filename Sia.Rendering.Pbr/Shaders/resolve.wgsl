@@ -10,13 +10,15 @@
 @group(3) @binding(0) var ids: texture_2d<u32>;
 @group(3) @binding(1) var depth: texture_depth_2d;
 @group(3) @binding(2) var<storage, read> tile_data: array<u32>;
+#if LIVE_REFLECTIONS
+@group(3) @binding(3) var hdr: texture_storage_2d<rgba32float, write>;
+@group(3) @binding(7) var reflection_specular: texture_storage_2d_array<rgba32float, write>;
+#else
 @group(3) @binding(3) var hdr: texture_storage_2d<rgba16float, write>;
+#endif
 #if SURFACE_DATA
 @group(3) @binding(4) var normal_roughness: texture_storage_2d<rgba16float, write>;
 @group(3) @binding(5) var base_metallic: texture_storage_2d<rgba8unorm, write>;
-#endif
-#if SCENE_REFLECTIONS
-@group(3) @binding(7) var reflection_inputs: texture_storage_2d<rgba32float, write>;
 #endif
 
 @compute @workgroup_size(8, 8)
@@ -25,11 +27,16 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let visible = textureLoad(ids, vec2<i32>(id.xy), 0).x;
+#if LIVE_REFLECTIONS
+    // Initialize every receiver lane, including debug, discarded and background pixels.
+    textureStore(reflection_specular, vec2<i32>(id.xy), 0, vec4<f32>(0));
+    textureStore(reflection_specular, vec2<i32>(id.xy), 1, vec4<f32>(0));
+#endif
     if (frame.size.w == 4u) {
         var color = vec3<f32>(0.02);
         if (visible != 0u) {
             color = vec3<f32>(1.0, 0.0, 1.0);
-            if (valid_triangle_id(visible)) {
+            if (visible <= frame.geometry.z) {
                 color = triangle_debug_color(visible - 1u);
             }
         }
@@ -48,10 +55,6 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(normal_roughness, vec2<i32>(id.xy), vec4<f32>(0.0));
     textureStore(base_metallic, vec2<i32>(id.xy), vec4<f32>(0.0));
 #endif
-#if SCENE_REFLECTIONS
-    textureStore(reflection_inputs, vec2<i32>(id.xy), vec4<f32>(0, 0, 0, 1));
-    textureStore(reflection_inputs, vec2<i32>(id.xy + vec2<u32>(frame.size.x, 0u)), vec4<f32>(0));
-#endif
 }
 
 fn resolve_pixel(pixel: vec2<u32>) {
@@ -59,13 +62,22 @@ fn resolve_pixel(pixel: vec2<u32>) {
         return;
     }
     let id = textureLoad(ids, vec2<i32>(pixel), 0).x;
-    if (!valid_triangle_id(id)) {
+    if (id == 0u || id > frame.geometry.z) {
         return;
     }
     if (materials[triangle_material(id - 1u)].indices.y != batch.x) {
         return;
     }
     let surface = surface_at(id - 1u, vec2<f32>(pixel) + .5);
+#if LIVE_REFLECTIONS
+    if (surface.valid && frame.size.w == 0u) {
+        let view = unit(frame.eye.xyz - surface.position);
+        let weight = indirect_specular_weight(surface.normal, view, surface.base, surface.metal, surface.rough, brdf_lut, brdf_sampler) * surface.ao;
+        let baseline = get_environment_specular(surface.position, reflect(-view, surface.normal), surface.rough) * weight;
+        textureStore(reflection_specular, vec2<i32>(pixel), 0, vec4<f32>(weight, f32(surface.source_instance + 1u)));
+        textureStore(reflection_specular, vec2<i32>(pixel), 1, vec4<f32>(baseline, surface.rough));
+    }
+#endif
 #if SURFACE_DATA
     var data: VisibilitySurfaceData;
     if (surface.valid) {
@@ -74,23 +86,6 @@ fn resolve_pixel(pixel: vec2<u32>) {
     }
     textureStore(normal_roughness, vec2<i32>(pixel), data.normal_roughness);
     textureStore(base_metallic, vec2<i32>(pixel), data.base_metallic);
-#endif
-#if SCENE_REFLECTIONS
-    var weight = vec3<f32>(0);
-    var reflection_depth = 1.0;
-    if (surface.valid) {
-        let view = unit(frame.eye.xyz - surface.position);
-        let brdf = sample_brdf_lut(brdf_lut, brdf_sampler, max(dot(surface.normal, view), 1e-4), surface.rough);
-        weight = (mix(vec3<f32>(.04), surface.base, surface.metal) * brdf.x + vec3<f32>(brdf.y)) * surface.ao;
-        // Compatibility permits neither fragment nor compute textureLoad of depth.
-        // The resolved surface already lies on the rasterized triangle at this pixel.
-        let clip = frame.vp * vec4<f32>(surface.position, 1);
-        reflection_depth = clip.z / clip.w;
-    }
-    textureStore(reflection_inputs, vec2<i32>(pixel), vec4<f32>(weight, reflection_depth));
-    var receiver = vec4<f32>(0);
-    if (surface.valid) { receiver = vec4<f32>(surface.position, f32(receiver_instance_index(id - 1u) + 1u)); }
-    textureStore(reflection_inputs, vec2<i32>(pixel + vec2<u32>(frame.size.x, 0u)), receiver);
 #endif
     var color = vec3<f32>(0.0);
     if (surface.valid) {
@@ -102,7 +97,11 @@ fn resolve_pixel(pixel: vec2<u32>) {
             default: { color = shade(surface, vec2<f32>(pixel) + .5); }
         }
     }
+#if LIVE_REFLECTIONS
+    textureStore(hdr, vec2<i32>(pixel), vec4<f32>(color, 1));
+#else
     textureStore(hdr, vec2<i32>(pixel), vec4<f32>(min(color, vec3<f32>(65504)), 1));
+#endif
 }
 
 @compute @workgroup_size(8, 8)

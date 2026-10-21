@@ -36,36 +36,22 @@ public sealed record PbrRendererSettings
     public ulong ViewBytes { get; init; } = 256ul * 1024 * 1024;
     public PbrStreamingSettings Streaming { get; init; } = new();
     public PbrTextureStreamingSettings TextureStreaming { get; init; } = new();
+    public PbrLightmapInput? Lightmaps { get; init; }
+    public PbrLightmapStreamingSettings LightmapStreaming { get; init; } = new();
 
     public IblEnvironmentAsset? BakedEnvironment { get; init; }
-    public PbrReflectionCaptureAsset? BakedReflections { get; init; }
+    public ReadOnlyMemory<PbrReflectionCaptureInput> ReflectionCaptures { get; init; }
+    public ulong ReflectionCaptureBytes { get; init; } = 20ul * 1024 * 1024;
+    public PbrReflectionSettings? Reflections { get; init; }
     public DiffuseProbeAsset? BakedProbes { get; init; }
-    /// <summary>Optional canonical static BVH, used by dynamic GI; live actors retain their separate trace.</summary>
-    public SceneTraceData? StaticTransport { get; init; }
-    public PbrLightmapAsset? BakedLightmaps { get; init; }
-    public PbrLightmapStream? StreamedLightmaps { get; init; }
-    public PbrTextureStreamingSettings LightmapStreaming { get; init; } = new() { MipBias = 0 };
-    public ulong LightmapBytes { get; init; } = 32ul * 1024 * 1024;
     public bool DynamicSceneGi { get; init; }
-    public bool SceneReflections { get; init; }
-    public bool TemporalReflections { get; init; }
-    public float ReflectionMaximumDistance { get; init; } = 1000;
-    public uint ReflectionMaximumVisits { get; init; } = 256;
+    /// <summary>Explicit acquired independent BVH input for dynamic transport; no implicit product acquisition.</summary>
+    public PbrBvhScene? TraceScene { get; init; }
     public uint ProbeUpdates { get; init; } = 4;
     public uint ProbeSamples { get; init; } = 64;
     public uint3 ProbeDimensions { get; init; } = new(4, 4, 4);
     public Aabb? ProbeBounds { get; init; }
     public ulong SceneGiBytes { get; init; } = 160ul * 1024 * 1024;
-
-    internal SceneTraceData? GetStaticTransport(ReadOnlySpan<byte> identity, ulong maximumBytes)
-    {
-        if (!DynamicSceneGi || StaticTransport is not { } trace) return null;
-        if (identity.Length != 32 || !trace.Identity.Span.SequenceEqual(identity))
-            throw new ArgumentException("Prepared static transport belongs to different scene geometry/materials.", nameof(StaticTransport));
-        if ((ulong)trace.Packed.Length * 16 > maximumBytes)
-            throw new ArgumentException("Prepared static transport exceeds its GI or device buffer budget.", nameof(StaticTransport));
-        return trace;
-    }
 
     public PbrRendererSettings Resolve(RenderCapabilities capabilities)
     {
@@ -75,33 +61,32 @@ public sealed record PbrRendererSettings
         return this with { ShadowResolution = System.Math.Min(ShadowResolution, capabilities.MaxTextureDimension2D) };
     }
 
-    public static PbrRendererSettings ForQuality(RenderQuality quality)
-    {
-        var path = quality switch {
-            RenderQuality.Low => PbrOpaquePath.ForwardPlus,
-            RenderQuality.Medium or RenderQuality.High => PbrOpaquePath.Visibility,
-            _ => throw new ArgumentOutOfRangeException(nameof(quality))
-        };
-        var virtualGeometry = path == PbrOpaquePath.Visibility;
-        var dynamicLighting = quality == RenderQuality.High;
-        return new() {
-            OpaquePath = path,
-            TargetPixelError = .0625f,
+    public static PbrRendererSettings ForQuality(RenderQuality quality) => quality switch {
+        RenderQuality.Low => new() {
+            OpaquePath = PbrOpaquePath.ForwardPlus,
+            GeometryBytes = 256ul * 1024 * 1024,
+            TargetPixelError = 1,
+            ShadowTexelError = 1,
+            ShadowResolution = 256,
+            Streaming = new() { MaximumSelectionNodesPerView = 1024 }
+        },
+        RenderQuality.Medium => new() {
+            OpaquePath = PbrOpaquePath.Visibility,
+            TargetPixelError = .25f,
             ShadowTexelError = .25f,
-            ShadowResolution = 512,
-            GeometryBytes = (virtualGeometry ? 320ul : 256ul) * 1024 * 1024,
-            Streaming = virtualGeometry ? new() {
-                DetailBytes = 128ul * 1024 * 1024,
-                MaximumSelectionNodesPerView = 131072,
-                MaximumRequests = 16,
-                DecodedBytes = 16L * StreamGeometryPage.MaximumBytes,
-                UploadBytesPerFrame = 2 * 1024 * 1024
-            } : new() { GpuTraversal = false, MaximumSelectionNodesPerView = 1024 },
-            DynamicSceneGi = dynamicLighting,
-            SceneReflections = dynamicLighting,
-            TemporalReflections = dynamicLighting
-        };
-    }
+            ShadowResolution = 512
+        },
+        RenderQuality.High => new() {
+            OpaquePath = PbrOpaquePath.Visibility,
+            DynamicSceneGi = true,
+            Reflections = new(),
+            ViewBytes = 1280ul * 1024 * 1024,
+            TargetPixelError = 0,
+            ShadowTexelError = 0,
+            ShadowResolution = 1024
+        },
+        _ => throw new ArgumentOutOfRangeException(nameof(quality))
+    };
 }
 
 public readonly record struct PbrFrameStatistics(
@@ -110,6 +95,9 @@ public readonly record struct PbrFrameStatistics(
     ulong SceneBytes,
     ulong ViewBytes);
 
+public readonly record struct PbrReflectionTargets(RenderGraphTextureKey Radiance, RenderGraphTextureKey HitMetadata,
+    RenderGraphTextureKey CurrentSpecular, RenderGraphTextureKey OpaqueColor);
+
 public sealed class PbrRenderer :
     IPrepareRenderFeature<RenderFrameContext>,
     IRenderGraphContributor<RenderFrameContext>,
@@ -117,19 +105,23 @@ public sealed class PbrRenderer :
 {
     private static readonly string[] s_TimingStages = [
         "pbr-frame", "clusters", "shadows", "hierarchy", "triangle-expansion", "opaque",
-        "probe-update", "material-lighting", "reflections", "transparency", "output"
+        "probe-update", "material-lighting", "reflection-trace", "reflection-compose", "transparency", "output"
     ];
 
     public static ReadOnlySpan<string> GpuTimingStages => s_TimingStages;
 
     private readonly List<PbrView> _views = [];
     private readonly HashSet<RenderView> _preparedViews = [];
+    private readonly PbrGpuRetirement _retirements = new();
+    private readonly Sia.WebGPU.WgpuHandle<Sia.WebGPU.WGPUQueue> _queue;
+    private bool _queueDrained;
+    internal ulong PreparedFrameIndex { get; private set; }
     private bool _disposed;
     private RenderWorld? _streamWorld;
     private ulong _streamFrame;
-    private readonly ulong _dynamicTraceBytes;
-    private ulong _dynamicTraceRevision;
-    internal ulong DynamicTraceUploadBytes { get; private set; }
+    private readonly HashSet<Guid>? _staticInstanceIds;
+    private PbrBvhTrace? _trace, _pendingTrace;
+    private SceneTraceData? _traceData, _pendingTraceData;
 
     public RenderFeatureKey Key { get; } = new("pbr");
     public VisibilityDebugMode DebugMode { get; set; }
@@ -139,8 +131,7 @@ public sealed class PbrRenderer :
     public Aabb Bounds => Scene.Bounds;
     public PbrStreamingStatistics? StreamingStatistics => Scene.Streaming?.Statistics;
     public PbrTextureStreamingStatistics TextureStreamingStatistics => Materials.Statistics;
-    public PbrLightmapStreamingStatistics? LightmapStreamingStatistics => Lightmaps?.PagedSource is not null ? Lightmaps.Statistics : null;
-    public ulong ResourceRevision => Materials.Revision + (Lightmaps?.Revision ?? 0);
+    public ulong ResourceRevision => Materials.Revision;
     public PbrGpuTraversalStatistics GpuTraversalStatistics {
         get {
             var bytes = Scene.Streaming?.Hierarchy?.Bytes ?? 0;
@@ -164,126 +155,126 @@ public sealed class PbrRenderer :
     internal PbrGpuScene Scene { get; }
     internal PbrMaterials Materials { get; }
     internal IblEnvironmentGpu Environment { get; }
+    internal PbrReflectionCaptureGpu? Captures { get; }
     internal DiffuseProbeGpu? Probes { get; }
     internal PbrLightmapGpu? Lightmaps { get; }
     internal PbrRendererSettings Settings { get; }
+    internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
-    internal bool HasSurfaceData => Settings.ExportSurfaceData || Settings.SceneReflections;
-    internal float ProbeMaximumDistance => Settings.BakedLightmaps?.Settings.MaximumDistance
-        ?? Settings.StreamedLightmaps?.Settings.MaximumDistance ?? 1000;
 
-    public PbrRenderer(
-        in GpuFrame frame,
-        PbrSceneAsset scene,
-        WGPUTextureFormat outputFormat,
+    public PbrRenderer(in GpuFrame frame, PbrRasterScene scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, scene, null, outputFormat, settings) { }
+        : this(frame, null, scene, outputFormat, settings ?? PbrRendererSettings.ForQuality(RenderQuality.Low)) { }
 
     public PbrRenderer(in GpuFrame frame, PbrSceneStream scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, scene.Bootstrap, scene, outputFormat, settings) { }
+        : this(frame, scene, null, outputFormat, settings) { }
 
-    private PbrRenderer(in GpuFrame frame, PbrSceneAsset scene, PbrSceneStream? stream,
+    private PbrRenderer(in GpuFrame frame, PbrSceneStream? stream, PbrRasterScene? raster,
         WGPUTextureFormat outputFormat, PbrRendererSettings? settings)
     {
-        ArgumentNullException.ThrowIfNull(scene);
+        if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
-        if (Settings.BakedReflections is { } capture) {
-            var identity = stream is null ? PbrSceneTransport.StaticIdentity(scene) : stream.StaticIdentity.ToArray();
-            if (!capture.SceneIdentity.Span.SequenceEqual(identity)
-                || Settings.BakedEnvironment is null || Settings.BakedEnvironment.Sky != capture.Environment.Sky
-                || !capture.EnvironmentIdentity.Span.SequenceEqual(PbrReflectionCaptureAsset.HashEnvironment(Settings.BakedEnvironment)))
-                throw new ArgumentException("Reflection capture requires matching static geometry and baked sky.", nameof(settings));
-        }
-        if (Settings.BakedLightmaps is not null && Settings.StreamedLightmaps is not null)
-            throw new ArgumentException("Choose resident or paged lightmaps, not both.", nameof(settings));
-        if (Settings.BakedLightmaps is not null || Settings.StreamedLightmaps is not null) {
-            var lightmapIdentity = Settings.BakedLightmaps?.SceneIdentity ?? Settings.StreamedLightmaps!.SceneIdentity;
-            var lightmapReceivers = Settings.BakedLightmaps?.Receivers ?? Settings.StreamedLightmaps!.Receivers;
-            PbrGpuScene.ValidateLightmapSource(scene, stream, lightmapIdentity.Span, lightmapReceivers.Span);
+        if (Settings.Reflections is { } reflectionSettings) {
+            reflectionSettings.Validate();
+            if (!Settings.DynamicSceneGi || Settings.OpaquePath != PbrOpaquePath.Visibility)
+                throw new ArgumentException("Live reflections require Visibility and the shared dynamic local-BVH transport input.", nameof(settings));
+            Settings = Settings with { ExportSurfaceData = true };
         }
         OutputFormat = outputFormat;
         if (!float.IsFinite(Settings.TargetPixelError) || Settings.TargetPixelError < 0
             || !float.IsFinite(Settings.ShadowTexelError) || Settings.ShadowTexelError < 0)
             throw new ArgumentOutOfRangeException(nameof(settings));
         if (!Enum.IsDefined(Settings.OpaquePath)) throw new ArgumentOutOfRangeException(nameof(settings));
+        if (raster is not null && Settings.OpaquePath != PbrOpaquePath.ForwardPlus)
+            throw new ArgumentException("Direct Raster input requires the conventional Forward+ path.", nameof(settings));
         if (Settings.ExportSurfaceData && Settings.OpaquePath != PbrOpaquePath.Visibility)
             throw new ArgumentException("Shared surface export requires the Visibility path.", nameof(settings));
         if (Settings.DynamicSceneGi && Settings.OpaquePath != PbrOpaquePath.Visibility)
             throw new ArgumentException("Dynamic scene GI requires the Visibility path.", nameof(settings));
-        if (Settings.SceneReflections && (!Settings.DynamicSceneGi || Settings.OpaquePath != PbrOpaquePath.Visibility))
-            throw new ArgumentException("Scene reflections require High's dynamic scene transport and Visibility path.", nameof(settings));
-        if (Settings.TemporalReflections && !Settings.SceneReflections)
-            throw new ArgumentException("Temporal reflections require scene reflections.", nameof(settings));
-        if (Settings.SceneReflections && (!float.IsFinite(Settings.ReflectionMaximumDistance)
-            || Settings.ReflectionMaximumDistance <= .01f || Settings.ReflectionMaximumVisits is < 1 or > 4096))
-            throw new ArgumentOutOfRangeException(nameof(settings), "Reflection distance and visit budget must be finite and bounded.");
+        if (Settings.DynamicSceneGi) {
+            if (Settings.TraceScene is not { } traceScene)
+                throw new ArgumentException("Dynamic scene GI requires explicitly acquired independent Mesh BVHs.", nameof(settings));
+            var identity = stream?.Identity ?? raster!.TransportIdentity;
+            if (!traceScene.TransportIdentity.Span.SequenceEqual(identity.Span))
+                throw new ArgumentException("Trace input differs from authored render geometry/materials/instances.", nameof(settings));
+        }
         if (Settings.GpuTiming && !WebGpuCapabilities.Read(frame.Device.GetWgpu<WGPUDevice>()).TimestampQueries)
             throw new NotSupportedException("GPU timing requires timestamp-query to be enabled on the device.");
         if (Settings.ShadowResolution is < 64 or > 4096) throw new ArgumentOutOfRangeException(nameof(settings));
         if (outputFormat is not (WGPUTextureFormat.RGBA8Unorm or WGPUTextureFormat.RGBA8UnormSrgb or WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.BGRA8UnormSrgb))
             throw new ArgumentException("PBR output currently requires an SDR RGBA/BGRA surface.", nameof(outputFormat));
+        var captures = PbrReflectionCaptureGpu.Validate(Settings.ReflectionCaptures.Span,
+            (stream?.Identity ?? raster!.TransportIdentity).Span,
+            Settings.BakedEnvironment, Settings.ReflectionCaptureBytes);
+        if (captures.Length != 0) {
+            _staticInstanceIds = [];
+            foreach (var capture in captures) foreach (var id in capture.Capture.StaticInstances) _staticInstanceIds.Add(id);
+        }
+        int[]? lightmapRows = null;
+        if (Settings.Lightmaps is { } input) {
+            ArgumentNullException.ThrowIfNull(input.Set); ArgumentNullException.ThrowIfNull(input.PrepareProduct); ArgumentNullException.ThrowIfNull(input.AcquireProduct);
+            ArgumentNullException.ThrowIfNull(input.PreparePage); ArgumentNullException.ThrowIfNull(input.AcquirePage);
+            ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
+            lightmapRows = stream is not null ? input.Set.BindReceivers(stream)
+                : input.Set.BindReceivers(raster!.Instances.Span);
+            _staticInstanceIds ??= [];
+            foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
+            if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
+        }
         try {
-            var configuration = PbrPipelineConfiguration.Create(scene, stream, Settings);
-            var sceneGi = configuration.SceneGi;
+            _queue = frame.Queue.GetWgpu<WGPUQueue>();
+            var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
+            if (stream?.RequiresInstancing == true && !Settings.Streaming.GpuTraversal)
+                throw new NotSupportedException("Mixed scene input requires local shared GPU instance storage.");
             if (stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
-            Pipelines = new(frame, outputFormat, configuration);
-            if (Settings.StreamedLightmaps is { } pagedLightmaps)
-                Lightmaps = new(frame, pagedLightmaps, scene, Settings.LightmapBytes, Settings.LightmapStreaming, stream);
-            Materials = new(frame, scene.Materials.Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
-            Scene = stream is null ? new(frame, scene, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches,
-                lightmaps: Settings.BakedLightmaps, pagedLightmaps: Settings.StreamedLightmaps, lightmapOwnerBits: configuration.LightmapOwnerBits,
-                preserveInstances: Settings.SceneReflections)
-                : new(frame, stream, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming,
-                    Settings.BakedLightmaps, Settings.StreamedLightmaps, lightmapOwnerBits: configuration.LightmapOwnerBits,
-                    preserveInstances: Settings.SceneReflections);
-            Environment = new(frame, Settings.BakedEnvironment, Settings.BakedReflections?.Environment);
-            if (Settings.BakedLightmaps is { } bakedLightmaps) Lightmaps = new(frame, bakedLightmaps, Settings.LightmapBytes);
-            Lightmaps?.BindMetadata(Scene);
+            Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
+                stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
+                Settings.Reflections is not null, Settings.Reflections?.History is not null);
+            Materials = new(frame, (raster?.Materials ?? stream!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
+            Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
+                : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
+            Environment = new(frame, Settings.BakedEnvironment);
+            if (captures.Length != 0) Captures = new(frame, captures, Settings.ReflectionCaptureBytes);
+            if (Settings.Lightmaps is { } lighting) {
+                var admission = Settings.LightmapStreaming;
+                Lightmaps = new(frame, lighting, lightmapRows!, admission);
+            }
             if (sceneGi) {
                 var dimensions = Settings.BakedProbes?.Dimensions ?? Settings.ProbeDimensions;
-                var probeBytes = DiffuseProbeGpu.FieldBytes(dimensions, Settings.DynamicSceneGi, configuration.LightmapSceneGi);
-                _dynamicTraceBytes = Settings.DynamicSceneGi && scene.HasDynamicInstances
-                    ? PbrSceneTransport.DynamicMaximumBytes(scene) : 0;
+                var probeBytes = DiffuseProbeGpu.FieldBytes(dimensions, Settings.DynamicSceneGi);
                 if (Settings.DynamicSceneGi && probeBytes >= Settings.SceneGiBytes)
                     throw new ArgumentException("The GI budget cannot hold the probe field.", nameof(settings));
                 var limits = Wgpu.GetLimits(frame.Device.GetWgpu<WGPUDevice>());
-                if (_dynamicTraceBytes > 0 && (_dynamicTraceBytes > Settings.SceneGiBytes - probeBytes
-                    || _dynamicTraceBytes > limits.MaxStorageBufferBindingSize || _dynamicTraceBytes > limits.MaxBufferSize))
-                    throw new NotSupportedException("Dynamic scene transport cannot fit its reserved GI or device buffer budget.");
                 var traceBudget = Settings.DynamicSceneGi
-                    ? System.Math.Min(Settings.SceneGiBytes - probeBytes - _dynamicTraceBytes,
+                    ? System.Math.Min(Settings.SceneGiBytes - probeBytes,
                         System.Math.Min(limits.MaxStorageBufferBindingSize, limits.MaxBufferSize)) : 0;
-                ReadOnlyMemory<byte> staticIdentity = Settings.BakedProbes is null && !scene.HasDynamicInstances
-                    && (!Settings.DynamicSceneGi || Settings.StaticTransport is null) ? ReadOnlyMemory<byte>.Empty
-                    : stream is null ? PbrSceneTransport.StaticIdentity(scene) : stream.StaticIdentity;
-                var staticBake = !staticIdentity.IsEmpty && Settings.BakedProbes is { } baked
-                    && baked.SceneIdentity.Span.SequenceEqual(staticIdentity.Span);
-                var staticDomain = staticBake || scene.HasDynamicInstances || Settings.StaticTransport is not null;
-                var tracing = Settings.DynamicSceneGi
-                    ? Settings.GetStaticTransport(staticIdentity.Span, traceBudget)
-                        ?? (stream is null ? staticDomain ? PbrSceneTransport.BuildStatic(scene, traceBudget) : PbrSceneTransport.Build(scene, traceBudget)
-                            : staticDomain ? PbrSceneTransport.BuildStatic(stream, traceBudget) : PbrSceneTransport.Build(stream, traceBudget)) : null;
+                if (Settings.DynamicSceneGi) {
+                    _trace = PbrBvhTrace.Build(Settings.TraceScene!, Settings.SceneGiBytes);
+                    _traceData = PbrSceneTransport.Build(_trace, traceBudget);
+                }
+                var tracing = _traceData;
+                DiffuseProbeReference? reference = null;
+                if (Settings.DynamicSceneGi && Settings.Lightmaps is { } baked) {
+                    var referenceScene = baked.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
+                    var referenceTrace = PbrBvhTrace.Build(referenceScene, Settings.SceneGiBytes);
+                    var referenceData = PbrSceneTransport.BuildReference(referenceTrace, _trace!, tracing!, traceBudget);
+                    var inputs = baked.Set.BakeSettings;
+                    reference = new(referenceData, inputs.Sky, inputs.TowardLight, inputs.LightRadiance,
+                        (uint)inputs.Samples, inputs.MaximumDistance, inputs.RayBias);
+                    var total = DiffuseProbeGpu.RequiredBytes(dimensions, tracing!, reference);
+                    if (total > Settings.SceneGiBytes)
+                        throw new ArgumentException("Paired probe field and transport exceed the total GI budget.", nameof(settings));
+                }
                 var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
                     Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
-                ReadOnlyMemory<byte> identity = tracing is not null ? tracing.Identity
-                    : staticBake ? staticIdentity
-                    : stream is null ? PbrSceneTransport.Identity(scene) : stream.Identity;
-                if (scene.HasDynamicInstances && Settings.BakedProbes is not null && !staticBake)
-                    throw new ArgumentException("Dynamic instances require probes baked from the static source domain.", nameof(settings));
-                if (!asset.SceneIdentity.Span.SequenceEqual(identity.Span))
+                var identity = (tracing?.Identity ?? raster?.TransportIdentity ?? stream!.Identity).ToArray();
+                if (!asset.SceneIdentity.Span.SequenceEqual(identity))
                     throw new ArgumentException("Baked probes belong to different scene geometry/materials.", nameof(settings));
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))
                     throw new ArgumentOutOfRangeException(nameof(settings), "Invalid dynamic probe update budget.");
-                var bakedLighting = Settings.BakedLightmaps?.Settings ?? Settings.StreamedLightmaps?.Settings;
-                DiffuseProbeLighting? reference = configuration.LightmapSceneGi
-                    ? new(bakedLighting!.Sky, bakedLighting.TowardLight, bakedLighting.LightRadiance, bakedLighting.MaximumDistance) : null;
-                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, _dynamicTraceBytes, reference);
-                if (_dynamicTraceBytes > 0) {
-                    DynamicTraceUploadBytes = Probes.UpdateDynamicTracing(Scene.BuildDynamicTracing(_dynamicTraceBytes));
-                    _dynamicTraceRevision = Scene.Revision;
-                }
+                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference);
             }
         }
         catch {
@@ -297,6 +288,69 @@ public sealed class PbrRenderer :
 
     public RenderGraphBufferKey GetGpuTimingsTarget(RenderViewKey view) => new("pbr/" + view.Value + "/timings");
 
+    /// <summary>
+    /// Stages absolute transforms by authored instance ID for the next frame preparation on this renderer's
+    /// owner context. All sections move together; acquired geometry and authored bake identity remain unchanged.
+    /// Static lightmap receivers cannot move. Shared Raster or local GPU Virtual storage is required.
+    /// </summary>
+    public void UpdateInstanceTransforms(ReadOnlySpan<PbrInstanceTransform> updates)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var update in updates)
+            if (_staticInstanceIds?.Contains(update.Id) == true)
+                throw new ArgumentException("Static lightmap receivers cannot receive runtime transforms.", nameof(updates));
+        PbrBvhTrace? nextTrace = null; SceneTraceData? nextData = null;
+        if (_trace is not null && !updates.IsEmpty) {
+            nextTrace = (_pendingTrace ?? _trace).WithTransforms(updates, Settings.SceneGiBytes);
+            var currentData = _pendingTraceData ?? _traceData!;
+            nextData = currentData.WithInstances(nextTrace.PackGpuInstances((ulong)currentData.Instances.Length * 16));
+        }
+        Scene.StageTransforms(updates);
+        if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; }
+    }
+
+    /// <summary>Stages actor enable/disable for drawing and live transport. Frozen static bake receivers cannot be disabled.</summary>
+    public void UpdateInstanceVisibility(ReadOnlySpan<PbrInstanceVisibility> updates)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var update in updates)
+            if (_staticInstanceIds?.Contains(update.Id) == true)
+                throw new ArgumentException("Static bake receivers cannot change runtime visibility.", nameof(updates));
+        PbrBvhTrace? nextTrace = null; SceneTraceData? nextData = null;
+        if (_trace is not null && !updates.IsEmpty) {
+            nextTrace = (_pendingTrace ?? _trace).WithVisibility(updates, Settings.SceneGiBytes);
+            var currentData = _pendingTraceData ?? _traceData!;
+            nextData = currentData.WithInstances(nextTrace.PackGpuInstances((ulong)currentData.Instances.Length * 16));
+        }
+        Scene.StageVisibility(updates);
+        if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; }
+    }
+
+    /// <summary>Stages explicit late-bound diffuse transport values by asset ID; draw materials and frozen reference inputs are separate.</summary>
+    public void UpdateTransportMaterials(ReadOnlySpan<PbrTransportMaterial> updates)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (updates.IsEmpty) return;
+        if (_trace is null) throw new InvalidOperationException("Live material transport requires dynamic GI.");
+        var current = _pendingTraceData ?? _traceData!;
+        var ids = _trace.Scene.MaterialIds; var seen = new HashSet<Sia.Asset.AssetId>();
+        if (updates.Length > ids.Length) throw new ArgumentException("Too many live transport material updates.", nameof(updates));
+        var rows = current.Packed.ToArray();
+        foreach (var update in updates) {
+            var index = ids.IndexOf(update.Id);
+            if (index < 0 || !seen.Add(update.Id) || update.Material is null)
+                throw new ArgumentException("Live transport updates require unique acquired material IDs.", nameof(updates));
+            var values = PbrSceneTransport.Surface(update.Material);
+            if (!math.all(math.isfinite(values.Albedo)) || !math.all(math.isfinite(values.Emission))
+                || math.any(values.Albedo.xyz < 0) || math.any(values.Albedo.xyz > 1)
+                || math.any(values.Emission.xyz < 0) || math.any(values.Emission.xyz > 1e18f))
+                throw new ArgumentException("Live diffuse/emission inputs exceed the finite bake transport domain.", nameof(updates));
+            (rows[index * 2], rows[index * 2 + 1]) = values;
+        }
+        var next = current.WithSurfaces(rows, Settings.SceneGiBytes);
+        _pendingTrace = _pendingTrace ?? _trace; _pendingTraceData = next;
+    }
+
     public VisibilitySurfaceTargets GetSurfaceTargets(RenderViewKey view, RenderGraphTextureKey depth)
     {
         if (!Settings.ExportSurfaceData)
@@ -306,27 +360,24 @@ public sealed class PbrRenderer :
             new(prefix + "normal-roughness"), new(prefix + "base-metallic"));
     }
 
+    /// <summary>View-owned raw radiance/distance and hit metadata, separate from material weight/baseline and final HDR.</summary>
+    public PbrReflectionTargets GetReflectionTargets(RenderViewKey view)
+    {
+        if (Settings.Reflections is null) throw new InvalidOperationException("Live reflections must be enabled before requesting their targets.");
+        var prefix = "pbr/" + view.Value + "/";
+        return new(new(prefix + "reflection-signal"), new(prefix + "reflection-metadata"),
+            new(prefix + "reflection-specular"), new(prefix + "opaque-hdr"));
+    }
+
     public void Prepare(in RenderFeatureContext<RenderFrameContext> context)
         => PrepareFrame(context.RenderWorld, [context]);
-
-    /// <summary>Updates an authored Dynamic source slot, resident or streamed. Call before PrepareFrame; source asset and bake stay immutable.</summary>
-    public void SetInstanceTransform(int instance, float4x4 transform)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        Scene.SetInstanceTransform(instance, transform);
-    }
-
-    /// <summary>Hides or restores an authored Dynamic source slot, including its live shadow.</summary>
-    public void SetInstanceEnabled(int instance, bool enabled)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        Scene.SetInstanceEnabled(instance, enabled);
-    }
 
     public void PrepareFrame(RenderWorld world, ReadOnlySpan<RenderFeatureContext<RenderFrameContext>> contexts)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(world);
+        PreparedFrameIndex = world.FrameIndex;
+        _retirements.Collect();
         if (Settings.DynamicSceneGi && contexts.Length > 1)
             throw new NotSupportedException("Dynamic probes currently require one view per renderer.");
         _preparedViews.Clear();
@@ -341,7 +392,7 @@ public sealed class PbrRenderer :
                 throw new ArgumentException("A PBR batch must share scene world, resource world, device and queue.", nameof(contexts));
         }
         _preparedViews.Clear();
-        if (Scene.Streaming is not null || Lightmaps?.PagedSource is not null) {
+        if (Scene.Streaming is not null || Lightmaps is not null) {
             if (_streamWorld is not null && !ReferenceEquals(_streamWorld, world))
                 throw new InvalidOperationException("A streaming renderer belongs to one render world.");
             if (_streamWorld is not null && _streamFrame == world.FrameIndex)
@@ -353,16 +404,16 @@ public sealed class PbrRenderer :
                 throw new NotSupportedException("Atmosphere migration is not part of the resident PBR core.");
             Environment.Update(environment.Sky);
         }
-        if (Scene.Streaming is not null || Lightmaps?.PagedSource is not null) {
+        if (Scene.Streaming is not null || Lightmaps is not null) {
             _streamWorld = world;
             _streamFrame = world.FrameIndex;
         }
-        DynamicTraceUploadBytes = 0;
-        if (_dynamicTraceBytes > 0 && _dynamicTraceRevision != Scene.Revision) {
-            DynamicTraceUploadBytes = Probes!.UpdateDynamicTracing(Scene.BuildDynamicTracing(_dynamicTraceBytes));
-            _dynamicTraceRevision = Scene.Revision;
+        if (_pendingTraceData is { } pendingTraceData) Probes!.UpdateInstances(pendingTraceData);
+        Scene.ApplyTransforms();
+        if (_pendingTrace is { } pendingTrace) {
+            _trace = pendingTrace; _traceData = _pendingTraceData;
+            _pendingTrace = null; _pendingTraceData = null;
         }
-        Scene.UploadInstances();
         Scene.Streaming?.BeginFrame();
         Materials.BeginFrame();
         Lightmaps?.BeginFrame();
@@ -370,7 +421,7 @@ public sealed class PbrRenderer :
         ulong viewBytes = 0;
         foreach (ref readonly var context in contexts) {
             var view = FindView(context.View, context.Frame.Frame);
-            view.Prepare(context.Frame, world.FrameIndex);
+            view.Prepare(context.Frame);
             triangles = checked(triangles + view.VisibleTriangles);
             viewBytes = checked(viewBytes + view.Bytes);
         }
@@ -379,7 +430,7 @@ public sealed class PbrRenderer :
         Materials.EndFrame();
         Lightmaps?.EndFrame();
         FrameStatistics = new(triangles, Materials.Groups.Length,
-            Scene.Bytes + Materials.Bytes + Environment.Bytes + (Probes?.Bytes ?? 0) + (Lightmaps?.Bytes ?? 0), viewBytes);
+            Scene.Bytes + Materials.Bytes + Environment.Bytes + (Captures?.Bytes ?? 0) + (Probes?.Bytes ?? 0) + (Lightmaps?.Bytes ?? 0), checked(viewBytes + _retirements.Bytes));
     }
 
     public void BuildRenderGraph(ref RenderGraphBuildContext graph, in RenderFeatureContext<RenderFrameContext> context)
@@ -400,27 +451,60 @@ public sealed class PbrRenderer :
     }
 
     internal void Forget(PbrView view) => _views.Remove(view);
+    /// <summary>Call on the owner only after successful queue submission of the prepared graph. Encoding alone cannot publish history.</summary>
+    public void NotifySubmittedFrame(ulong frameIndex)
+    {
+        if (frameIndex != PreparedFrameIndex) throw new InvalidOperationException("Submitted history must match the prepared render-world frame.");
+        foreach (var view in _views) view.SubmitReflectionHistory(frameIndex);
+    }
+
+    public void InvalidateReflectionHistory(RenderViewKey view)
+    {
+        foreach (var value in _views) if (value.View.Key == view) value.InvalidateReflectionHistory();
+    }
+    internal ulong RetiredBytes(PbrView view) => _retirements.BytesFor(view);
+    internal void RequireRetirementCapacity(PbrView view) => _retirements.RequireCapacity(view);
+    internal void RetireTargets(PbrView view, GpuResources? targets, GpuResources? frameResources = null, IDisposable? selection = null, ulong selectionBytes = 0)
+    {
+        if (targets is null && frameResources is null && selection is null) return;
+        if (_queueDrained) { selection?.Dispose(); targets?.Dispose(); frameResources?.Dispose(); return; }
+        var completion = GpuQueueCompletion.AfterSubmittedWork(_queue);
+        _retirements.Retire(view, checked((targets?.Bytes ?? 0) + (frameResources?.Bytes ?? 0) + selectionBytes), completion,
+            () => { selection?.Dispose(); targets?.Dispose(); frameResources?.Dispose(); });
+    }
 
     public async ValueTask StopStreamingAsync()
     {
+        // Capture completion on the owner before asynchronous joins; no resource mutation in continuations.
+        var queue = GpuQueueCompletion.AfterSubmittedWork(_queue);
+        var retired = _retirements.DrainAsync();
+        // Capture lightmap queue completion on the owner context before any await.
+        var lightmaps = Lightmaps?.StopAsync();
         await Materials.StopAsync().ConfigureAwait(false);
-        if (Lightmaps is not null) await Lightmaps.StopAsync().ConfigureAwait(false);
         if (Scene.Streaming is { } streaming) await streaming.DisposeAsync().ConfigureAwait(false);
+        if (lightmaps is not null) await lightmaps.ConfigureAwait(false);
+        if (!await queue.ConfigureAwait(false)) throw new InvalidOperationException("Renderer queue completion failed; view resources remain retained.");
+        await retired.ConfigureAwait(false); _queueDrained = true;
     }
 
     public void Dispose()
     {
         if (_disposed) return;
+        if ((_views.Count != 0 || _retirements.Bytes != 0) && !_queueDrained)
+            throw new InvalidOperationException("Await StopStreamingAsync before disposing view targets or pending retirements.");
+        if (Lightmaps is not null && !Lightmaps.IsStopped)
+            throw new InvalidOperationException("Await StopStreamingAsync before disposing streamed lightmaps.");
         if (Scene?.Streaming is not null && !Scene.Streaming.IsStopped)
             throw new InvalidOperationException("Await StopStreamingAsync before disposing a streaming renderer.");
         if (Materials is not null && !Materials.IsStopped)
             throw new InvalidOperationException("Await StopStreamingAsync before disposing streaming materials.");
-        if (Lightmaps is not null && !Lightmaps.IsStopped)
-            throw new InvalidOperationException("Await StopStreamingAsync before disposing streaming lightmaps.");
         _disposed = true;
+        _trace = null; _pendingTrace = null; _traceData = null; _pendingTraceData = null;
         while (_views.Count != 0)
             _views[^1].Dispose();
+        _retirements.Collect();
         Environment?.Dispose();
+        Captures?.Dispose();
         Probes?.Dispose();
         Lightmaps?.Dispose();
         Scene?.Dispose();

@@ -1,8 +1,17 @@
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Rendering.Pbr;
 
-public sealed record PbrLightmapBakeSettings
+/// <summary>A real surface sample; filtering-border samples have zero physical area.</summary>
+public readonly record struct PbrLightmapSurfaceTexel(float3 Position, float3 Normal, bool Covered)
+{
+    public int Chart { get; init; } = -1;
+    public int SourceTriangle { get; init; } = -1;
+    public double AreaWeight { get; init; }
+}
+
+public sealed partial record PbrLightmapBakeSettings
 {
     public ProceduralSky Sky { get; init; } = new();
     public float3 TowardLight { get; init; } = new(0, 1, 0);
@@ -13,138 +22,137 @@ public sealed record PbrLightmapBakeSettings
 
     internal void Validate()
     {
-        static bool Color(float3 v) => math.all(math.isfinite(v) & (v >= 0));
-        ArgumentNullException.ThrowIfNull(Sky);
-        if (!Color(Sky.Horizon) || !Color(Sky.Zenith) || !Color(Sky.Ground) || !Color(Sky.SunRadiance)
-            || !math.all(math.isfinite(Sky.SunDirection)) || math.lengthsq(Sky.SunDirection) < 1e-8f
-            || !float.IsFinite(math.lengthsq(Sky.SunDirection)) || !float.IsFinite(Sky.SunExponent) || Sky.SunExponent < 1
-            || !float.IsFinite(Sky.Intensity) || Sky.Intensity < 0 || !Color(LightRadiance)
-            || !math.all(math.isfinite(TowardLight)) || !float.IsFinite(math.lengthsq(TowardLight)) || math.lengthsq(TowardLight) < 1e-8f
-            || Samples is < 16 or > 1024 || !float.IsFinite(MaximumDistance) || MaximumDistance <= .001f
-            || !float.IsFinite(RayBias) || RayBias <= 0 || RayBias >= MaximumDistance)
-            throw new ArgumentException("Invalid surface bake lighting or integration settings.");
+        static bool Color(float3 color) => math.all(math.isfinite(color)) && math.all(color >= 0) && math.all(color <= 1e10f);
+        static bool Direction(float3 direction) => math.all(math.isfinite(direction)) && float.IsFinite(math.lengthsq(direction)) && math.lengthsq(direction) > 1e-8f;
+        if (Sky is null || !Color(Sky.Horizon) || !Color(Sky.Zenith) || !Color(Sky.Ground) || !Color(Sky.SunRadiance)
+            || !Direction(Sky.SunDirection) || !float.IsFinite(Sky.SunExponent) || Sky.SunExponent < 1
+            || !float.IsFinite(Sky.Intensity) || Sky.Intensity is < 0 or > 1e5f
+            || !Color(LightRadiance) || !Direction(TowardLight) || Samples is < 16 or > 1024
+            || !float.IsFinite(MaximumDistance) || MaximumDistance <= 0 || !float.IsFinite(RayBias)
+            || RayBias <= 0 || RayBias >= MaximumDistance)
+            throw new ArgumentException("Invalid lightmap bake lighting or bounded integration settings.");
     }
 }
 
-public static partial class PbrLightmapBaker
+/// <summary>
+/// Serial offline producer over caller-retained local BVHs. Owns bounded reusable scratch, not assets or IO.
+/// Integrates sky visibility, emission and one shadowed directional diffuse bounce using mean material colors.
+/// Direct-light shading is excluded. Callers serialize BakePage and publish/discard outputs explicitly.
+/// </summary>
+public sealed partial class PbrLightmapBaker
 {
-    /// <summary>Offline CPU BVH integration: sky visibility, emission and one visibility-tested directional bounce.</summary>
-    public static PbrLightmapAsset Bake(PbrLightmapInput input, PbrLightmapBakeSettings? settings = null,
-        ulong maximumTraceBytes = 128ul * 1024 * 1024, ulong maximumCoefficientBytes = 32ul * 1024 * 1024,
+    private readonly record struct Surface(float3 Albedo, float3 Emission, bool DoubleSided);
+    private readonly PbrBvhTrace _trace;
+    private readonly PbrLightmapBakeSettings _settings;
+    private readonly Surface[] _surfaces;
+    private readonly bool[] _opaqueMaterials;
+    private readonly float3[] _directions;
+    private readonly PbrLightmapCoefficients[] _scratch;
+    private readonly float3 _towardLight;
+    private int _busy;
+    public ulong PayloadBytes { get; }
+
+    public PbrLightmapBaker(PbrBvhTrace trace, PbrLightmapBakeSettings? settings = null,
+        ulong maximumWorkingBytes = 4ul * 1024 * 1024, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(trace); _settings = settings ?? new(); _settings.Validate();
+        cancellationToken.ThrowIfCancellationRequested();
+        var bytes = (ulong)trace.Scene.Materials.Length * ((ulong)Unsafe.SizeOf<Surface>() + sizeof(bool))
+            + (ulong)_settings.Samples * (ulong)Unsafe.SizeOf<float3>()
+            + PbrLightmapPageData.MaximumEdge * PbrLightmapPageData.MaximumEdge * (ulong)Unsafe.SizeOf<PbrLightmapCoefficients>();
+        // Reserve one maximum output page as well; external surface inputs/trace and retained outputs are caller-owned.
+        if (bytes + PbrLightmapPageData.MaximumEncodedBytes > maximumWorkingBytes)
+            throw new ArgumentException("Lightmap producer scratch and one output page exceed the configured working budget.", nameof(maximumWorkingBytes));
+        _trace = trace; PayloadBytes = bytes; _towardLight = math.normalize(_settings.TowardLight);
+        _surfaces = new Surface[trace.Scene.Materials.Length]; _directions = new float3[_settings.Samples];
+        _opaqueMaterials = new bool[trace.Scene.Materials.Length];
+        _scratch = new PbrLightmapCoefficients[PbrLightmapPageData.MaximumEdge * PbrLightmapPageData.MaximumEdge];
+        for (var index = 0; index < _surfaces.Length; index++) {
+            cancellationToken.ThrowIfCancellationRequested(); var material = trace.Scene.Materials[index];
+            var values = PbrSceneTransport.Surface(material);
+            if (!math.all(math.isfinite(values.Albedo.xyz)) || !math.all(math.isfinite(values.Emission.xyz))
+                || math.any(values.Albedo.xyz < 0) || math.any(values.Albedo.xyz > 1)
+                || math.any(values.Emission.xyz < 0) || math.any(values.Emission.xyz > 1e18f))
+                throw new ArgumentException("Lightmap bounce materials exceed finite diffuse/emission bounds.", nameof(trace));
+            _surfaces[index] = new(values.Albedo.xyz, values.Emission.xyz, material.DoubleSided);
+            _opaqueMaterials[index] = !material.AlphaBlend;
+        }
+        for (var index = 0; index < _directions.Length; index++) {
+            var y = 1 - 2 * (index + .5f) / _directions.Length; var radius = MathF.Sqrt(MathF.Max(0, 1 - y * y));
+            var angle = index * 2.39996323f;
+            _directions[index] = new(radius * MathF.Cos(angle), y, radius * MathF.Sin(angle));
+        }
+    }
+
+    public PbrLightmapPageData BakePage(int edge, ReadOnlySpan<PbrLightmapSurfaceTexel> surfaces,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(input);
-        var options = settings ?? new();
-        options.Validate();
+        ValidateShape(edge, surfaces.Length);
         cancellationToken.ThrowIfCancellationRequested();
-        if ((ulong)input.Texels.Length * 4 * 16 > maximumCoefficientBytes)
-            throw new InvalidOperationException("Surface coefficients exceed the configured CPU integration budget.");
-        var tracing = PbrSceneTransport.BuildStatic(input.Scene, maximumTraceBytes, finest: true).Packed.ToArray();
-        var coefficients = Integrate(input, options, tracing, Directions(options), cancellationToken);
-        return new(input.Resolution, input.Receivers.Span, PbrLightmapAsset.Identity(input.Scene), input.SurfaceIdentity.Span, options, coefficients, input.Charts.Span);
-    }
-
-    private static float3[] Directions(PbrLightmapBakeSettings options)
-    {
-        var directions = new float3[options.Samples];
-        for (var i = 0; i < directions.Length; i++) {
-            var y = 1 - 2 * (i + .5f) / options.Samples;
-            var radius = MathF.Sqrt(MathF.Max(0, 1 - y * y));
-            var theta = 2.39996323f * i;
-            directions[i] = new(MathF.Cos(theta) * radius, y, MathF.Sin(theta) * radius);
+        if (Interlocked.Exchange(ref _busy, 1) != 0) throw new InvalidOperationException("Lightmap pages must be produced serially by each baker.");
+        try {
+            Integrate(surfaces, cancellationToken);
+            return PbrLightmapPageData.Create(edge, _scratch.AsSpan(0, surfaces.Length), cancellationToken: cancellationToken);
         }
-        return directions;
+        finally { Volatile.Write(ref _busy, 0); }
     }
 
-    private static float4[] Integrate(PbrLightmapInput input, PbrLightmapBakeSettings options, float4[] tracing,
-        float3[] directions, CancellationToken cancellationToken)
+    /// <summary>
+    /// Produces unquantized values into a caller-owned page buffer for receiver-wide range measurement
+    /// and chart reduction. Failure/cancellation leaves that buffer unchanged; encoding and IO are explicit.
+    /// </summary>
+    public void BakePage(int edge, ReadOnlySpan<PbrLightmapSurfaceTexel> surfaces,
+        Span<PbrLightmapCoefficients> output, CancellationToken cancellationToken = default)
     {
-        var coefficients = new float4[input.Texels.Length * 4];
-        var light = math.normalize(options.TowardLight);
-        var scale = 4 * MathF.PI / options.Samples;
-        Parallel.For(0, input.Texels.Length, new ParallelOptions { CancellationToken = cancellationToken }, index => {
-            var texel = input.Texels.Span[index];
-            if (!texel.Covered) return;
-            float3 c0 = default, cy = default, cz = default, cx = default;
-            for (var sample = 0; sample < directions.Length; sample++) {
-                if ((sample & 31) == 0) cancellationToken.ThrowIfCancellationRequested();
-                var direction = directions[sample];
-                // A direction offset avoids hitting the receiver itself on either face.
-                var origin = texel.Position + direction * options.RayBias;
-                var hit = Trace(tracing, origin, direction, options.MaximumDistance);
-                var radiance = options.Sky.Evaluate(direction);
-                if (hit.Triangle >= 0) {
-                    var indices = tracing[(int)tracing[0].y + hit.Triangle];
-                    var start = (int)tracing[1].x;
-                    var a = tracing[start + (int)indices.x].xyz;
-                    var b = tracing[start + (int)indices.y].xyz;
-                    var c = tracing[start + (int)indices.z].xyz;
-                    var material = (int)tracing[0].w + (int)indices.w * 2;
-                    if (!hit.Front && tracing[material].w < .5f) radiance = default;
-                    else {
-                        var normal = math.normalize(math.cross(b - a, c - a));
-                        if (!hit.Front) normal = -normal;
-                        var point = origin + direction * hit.Distance + normal * options.RayBias;
-                        var cosine = MathF.Max(0, math.dot(normal, light));
-                        radiance = tracing[material + 1].xyz;
-                        if (cosine > 0 && Trace(tracing, point, light, options.MaximumDistance).Triangle < 0)
-                            radiance += tracing[material].xyz * options.LightRadiance * (cosine / MathF.PI);
+        ValidateShape(edge, surfaces.Length);
+        if (output.Length != surfaces.Length) throw new ArgumentException("Lighting output must match the surface page.", nameof(output));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (Interlocked.Exchange(ref _busy, 1) != 0) throw new InvalidOperationException("Lightmap pages must be produced serially by each baker.");
+        try {
+            Integrate(surfaces, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            _scratch.AsSpan(0, output.Length).CopyTo(output);
+        }
+        finally { Volatile.Write(ref _busy, 0); }
+    }
+
+    private static void ValidateShape(int edge, int count)
+    {
+        if (edge is < 2 or > PbrLightmapPageData.MaximumEdge || (edge & (edge - 1)) != 0 || count != edge * edge)
+            throw new ArgumentException("Lightmap surface page shape is invalid.");
+    }
+
+    private void Integrate(ReadOnlySpan<PbrLightmapSurfaceTexel> surfaces, CancellationToken cancellationToken)
+    {
+        for (var index = 0; index < surfaces.Length; index++) {
+                cancellationToken.ThrowIfCancellationRequested(); var surface = surfaces[index];
+                if (!surface.Covered) { _scratch[index] = default; continue; }
+                var length = math.lengthsq(surface.Normal);
+                if (!math.all(math.isfinite(surface.Position)) || !math.all(math.isfinite(surface.Normal)) || !float.IsFinite(length) || length <= 0)
+                    throw new ArgumentException("Covered lightmap surfaces require finite positions and nonzero normals.", nameof(surfaces));
+                var normal = surface.Normal / MathF.Sqrt(length); var origin = surface.Position + normal * _settings.RayBias;
+                float3 constant = default, cy = default, cz = default, cx = default;
+                foreach (var direction in _directions) {
+                    cancellationToken.ThrowIfCancellationRequested(); var radiance = _settings.Sky.Evaluate(direction);
+                    if (TraceOpaque(origin, direction, out var hit, cancellationToken)) {
+                        radiance = default; var material = _surfaces[hit.Material];
+                        if (hit.FrontFace || material.DoubleSided) {
+                            var n = hit.FrontFace ? hit.GeometricNormal : -hit.GeometricNormal;
+                            var point = origin + direction * (float)hit.Parameter + n * _settings.RayBias;
+                            radiance = material.Emission;
+                            var cosine = MathF.Max(0, math.dot(n, _towardLight));
+                            if (cosine > 0 && !TraceOpaque(point, _towardLight, out _, cancellationToken))
+                                radiance += material.Albedo * _settings.LightRadiance * (cosine / MathF.PI);
+                        }
                     }
+                    constant += radiance * .282094792f; cy += radiance * (.488602512f * direction.y);
+                    cz += radiance * (.488602512f * direction.z); cx += radiance * (.488602512f * direction.x);
                 }
-                c0 += radiance * .2820948f;
-                cy += radiance * (.4886025f * direction.y);
-                cz += radiance * (.4886025f * direction.z);
-                cx += radiance * (.4886025f * direction.x);
-            }
-            coefficients[index * 4] = new(c0 * scale, 1);
-            coefficients[index * 4 + 1] = new(cy * scale, 0);
-            coefficients[index * 4 + 2] = new(cz * scale, 0);
-            coefficients[index * 4 + 3] = new(cx * scale, 0);
-        });
-        for (var i = 0; i < input.FilterSources.Length; i++) {
-            if ((i & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
-            var source = input.FilterSources.Span[i];
-            if (source >= 0 && source != i) coefficients.AsSpan(source * 4, 4).CopyTo(coefficients.AsSpan(i * 4, 4));
+                var scale = 4 * MathF.PI / _directions.Length;
+                _scratch[index] = new(constant * scale, cy * scale, cz * scale, cx * scale, true);
         }
-        return coefficients;
     }
 
-    internal readonly record struct Hit(float Distance, int Triangle, bool Front);
-
-    internal static Hit Trace(float4[] data, float3 origin, float3 direction, float maximum)
-    {
-        var hit = new Hit(maximum, -1, true);
-        var inverse = new float3(1 / Safe(direction.x), 1 / Safe(direction.y), 1 / Safe(direction.z));
-        for (var node = 0; node < (int)data[0].x;) {
-            var lo = data[2 + node * 3];
-            var hi = data[3 + node * 3];
-            var a = (lo.xyz - origin) * inverse;
-            var b = (hi.xyz - origin) * inverse;
-            var near = math.min(a, b);
-            var far = math.max(a, b);
-            if (MathF.Max(MathF.Max(near.x, near.y), MathF.Max(near.z, .001f))
-                > MathF.Min(MathF.Min(far.x, far.y), MathF.Min(far.z, hit.Distance))) { node = (int)lo.w; continue; }
-            for (var i = 0; i < (int)data[4 + node * 3].x; i++) {
-                var triangle = (int)hi.w + i;
-                var indices = data[(int)data[0].y + triangle];
-                var start = (int)data[1].x;
-                var position = data[start + (int)indices.x].xyz;
-                var e1 = data[start + (int)indices.y].xyz - position;
-                var e2 = data[start + (int)indices.z].xyz - position;
-                var p = math.cross(direction, e2);
-                var determinant = math.dot(e1, p);
-                if (MathF.Abs(determinant) < 1e-8f) continue;
-                var t = origin - position;
-                var u = math.dot(t, p) / determinant;
-                var q = math.cross(t, e1);
-                var v = math.dot(direction, q) / determinant;
-                var distance = math.dot(e2, q) / determinant;
-                if (u >= 0 && v >= 0 && u + v <= 1 && distance > .001f && distance < hit.Distance)
-                    hit = new(distance, triangle, determinant > 0);
-            }
-            node++;
-        }
-        return hit;
-        static float Safe(float v) => MathF.Abs(v) < 1e-20f ? (v < 0 ? -1e-20f : 1e-20f) : v;
-    }
+    private bool TraceOpaque(float3 origin, float3 direction, out PbrBvhHit hit, CancellationToken token)
+        => _trace.TryTrace(origin, direction, out hit, 0, _settings.MaximumDistance, token, _opaqueMaterials);
 }

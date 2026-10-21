@@ -32,13 +32,10 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly GpuFrame _gpuFrame;
     private readonly GpuResources _gpu;
     private GpuResources? _sizeResources;
-    private readonly Entity _uniform, _lightData, _rasterShadowData, _clusters;
+    private readonly Entity _uniform, _lightData, _clusters;
     private readonly Entity _shadowAtlas, _shadowArray;
     private readonly Entity _frameGroup, _rasterGroup, _clusterGroup;
     private readonly Entity _outputUniform;
-    private readonly Entity _reflectionUniform;
-    private readonly Entity _reflectionFrameGroup;
-    private readonly Entity _captureBox;
     private readonly Entity _sampler;
     private readonly Entity _depthSampler;
     private readonly Entity[] _shadowViews = new Entity[k_ShadowLayers];
@@ -52,11 +49,11 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly EntityHandler _collectCaster, _collectDirectional, _collectPoint, _collectSpot;
     private readonly string _prefix;
     private readonly RenderGraphBufferKey _frameKey, _lightsKey, _clustersKey, _tilesKey;
-    private readonly RenderGraphBufferKey _probesKey, _traceKey, _dynamicTraceKey, _probeConfigKey;
+    private readonly RenderGraphBufferKey _environmentShKey;
+    private readonly RenderGraphBufferKey _probesKey, _traceKey, _traceGeometryKey, _traceInstancesKey, _probeConfigKey;
     private readonly RenderGraphBufferKey _probeHeaderKey;
+    private readonly RenderGraphBufferKey _referenceConfigKey, _referenceSurfacesKey, _referenceInstancesKey;
     private readonly RenderGraphTextureKey _probeTextureKey;
-    private readonly RenderGraphTextureKey _probeDifferenceKey;
-    private readonly RenderGraphBufferKey _probeReferenceKey;
     private readonly RenderGraphTextureKey _idKey, _hdrKey, _shadowKey, _snapshotKey;
     private Entity _id, _depth, _hdr, _snapshot;
     private Entity _tiles;
@@ -68,11 +65,6 @@ internal sealed unsafe partial class PbrView : IDisposable
     private bool _hasVisibilityTargets;
     private Entity _backgroundGroup;
     private Entity _normalRoughness, _baseMetallic;
-    private Entity _reflectionInputs, _reflectionGroup;
-    private Entity _reflectionRadiance, _reflectionCompositeGroup;
-    private readonly RenderGraphTextureKey _reflectionRadianceKey;
-    private readonly RenderGraphTextureKey _reflectionInputsKey;
-    private readonly RenderGraphBufferKey _reflectionSettingsKey;
     private readonly RenderGraphTextureKey _normalRoughnessKey, _baseMetallicKey;
     private PbrFrame _data;
     private RenderFrameContext _frame;
@@ -100,6 +92,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     {
         _owner = owner;
         _sortTransparent = CompareTransparent;
+        _sortInstanceBatches = CompareInstanceBatches;
         _materialPixels = new float[owner.Materials.MaterialBatches.Length];
         View = view;
         _gpuFrame = frame;
@@ -116,17 +109,21 @@ internal sealed unsafe partial class PbrView : IDisposable
         _snapshotKey = new(_prefix + "opaque-snapshot");
         _normalRoughnessKey = new(_prefix + "normal-roughness");
         _baseMetallicKey = new(_prefix + "base-metallic");
-        _reflectionInputsKey = new(_prefix + "reflection-inputs");
-        _reflectionRadianceKey = new(_prefix + "reflection-radiance");
-        _reflectionSettingsKey = new(_prefix + "reflection-settings");
+        _environmentShKey = new(_prefix + "environment-sh");
+        _opaqueHdrKey = new(_prefix + "opaque-hdr"); _reflectionSpecularKey = new(_prefix + "reflection-specular");
+        _reflectionSignalKey = new(_prefix + "reflection-signal"); _reflectionMetadataKey = new(_prefix + "reflection-metadata");
+        _reflectionConfigKey = new(_prefix + "reflection-config");
+        _reflectionPosesKey = new(_prefix + "reflection-poses"); _reflectionReceiverMapKey = new(_prefix + "reflection-receiver-map");
         _probesKey = new(_prefix + "probes");
         _traceKey = new(_prefix + "tracing");
-        _dynamicTraceKey = new(_prefix + "dynamic-tracing");
+        _traceGeometryKey = new(_prefix + "trace-geometry");
+        _traceInstancesKey = new(_prefix + "trace-instances");
         _probeConfigKey = new(_prefix + "probe-config");
         _probeHeaderKey = new(_prefix + "probe-header");
+        _referenceConfigKey = new(_prefix + "probe-reference-config");
+        _referenceSurfacesKey = new(_prefix + "probe-reference-surfaces");
+        _referenceInstancesKey = new(_prefix + "probe-reference-instances");
         _probeTextureKey = new(_prefix + "probe-texture");
-        _probeDifferenceKey = new(_prefix + "probe-difference");
-        _probeReferenceKey = new(_prefix + "probe-reference");
         void Buffer(Entity entity, RenderGraphBufferUsage usage) => _sceneBuffers.Add((new(_prefix + "scene-buffer/" + _sceneBuffers.Count), entity, usage));
         void Texture(Entity entity) => _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), entity));
         Buffer(owner.Materials.Table, RenderGraphBufferUsage.Storage);
@@ -135,13 +132,15 @@ internal sealed unsafe partial class PbrView : IDisposable
         if (owner.Scene.Instances != default) Buffer(owner.Scene.Instances, RenderGraphBufferUsage.Storage);
         foreach (var entity in owner.Materials.Uniforms)
             Buffer(entity, RenderGraphBufferUsage.Uniform);
-        Buffer(owner.Environment.Sh, RenderGraphBufferUsage.Uniform);
+        _sceneBuffers.Add((_environmentShKey, owner.Environment.Sh, RenderGraphBufferUsage.Uniform));
         foreach (var entity in owner.Materials.Textures)
             Texture(entity);
         Texture(owner.Environment.Cube);
-        if (owner.Environment.CapturedCube.IsValid) Texture(owner.Environment.CapturedCube);
         Texture(owner.Environment.Lut);
-        if (owner.Lightmaps is { } lightmaps) Texture(lightmaps.Texture);
+        if (owner.Captures is { } captureResources) {
+            Buffer(captureResources.Regions, RenderGraphBufferUsage.Uniform); Texture(captureResources.Texture);
+        }
+        if (owner.Lightmaps is { } lightmapTextures) foreach (var entity in lightmapTextures.Textures) Texture(entity);
         _collectCaster = e => _casters.Add(e);
         _collectDirectional = e => {
             if (_directional.Count == 4)
@@ -151,16 +150,16 @@ internal sealed unsafe partial class PbrView : IDisposable
         _collectPoint = CollectPoint;
         _collectSpot = CollectSpot;
         try {
+            if (owner.Scene.Streaming is null) {
+                var references = checked((ulong)(owner.Scene.Opaque.Length + owner.Scene.Transparent.Length) * (k_ShadowLayers + 1));
+                _instanceIds = _gpu.Buffer(System.Math.Max(1, references) * (ulong)System.Runtime.CompilerServices.Unsafe.SizeOf<PbrDrawInstance>(),
+                    WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
+                Buffer(_instanceIds, RenderGraphBufferUsage.Vertex);
+            }
             _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
-            _rasterShadowData = _gpu.Buffer(k_ShadowLayers * 64, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
-            Buffer(_rasterShadowData, RenderGraphBufferUsage.Uniform);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);
             _outputUniform = _gpu.Upload<float4>([new(1, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform);
-            if (owner.Settings.SceneReflections)
-                _reflectionUniform = _gpu.Upload<float4>([new(owner.Settings.ReflectionMaximumDistance,
-                    owner.Settings.ReflectionMaximumVisits, .6f, .3f)], WGPUBufferUsage.Uniform);
-            InitializeReflectionHistory();
             var sampler = WGPUSamplerDescriptor.Default;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;
@@ -186,7 +185,7 @@ internal sealed unsafe partial class PbrView : IDisposable
                 layer.ArrayLayerCount = 1;
                 _shadowViews[i] = _gpu.Own(Wgpu.CreateTextureView(_shadowAtlas.GetWgpu<WGPUTexture>(), layer));
             }
-            _rasterGroup = GpuBinding.Group(_gpu, owner.Pipelines.RasterFrameLayout, [GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _rasterShadowData)]);
+            _rasterGroup = GpuBinding.Group(_gpu, owner.Pipelines.RasterFrameLayout, [GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _lightData)]);
             _clusterGroup = GpuBinding.Group(_gpu, owner.Pipelines.ClusterLayout, [GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _lightData), GpuBinding.Buffer(2, _clusters)]);
             var frameEntries = new List<WGPUBindGroupEntry> {
                 GpuBinding.Buffer(0, _uniform),
@@ -203,33 +202,17 @@ internal sealed unsafe partial class PbrView : IDisposable
             if (owner.Probes is { } probes) {
                 frameEntries.Add(GpuBinding.Texture(9, probes.TextureView.GetWgpu<WGPUTextureView>()));
                 frameEntries.Add(GpuBinding.Buffer(10, probes.Header));
-                if (probes.DifferenceTexture.IsValid)
-                    frameEntries.Add(GpuBinding.Texture(13, probes.DifferenceTextureView.GetWgpu<WGPUTextureView>()));
             }
-            if (owner.Lightmaps is { } lightmap) frameEntries.Add(GpuBinding.Texture(12, lightmap.View.GetWgpu<WGPUTextureView>()));
-            if (owner.Settings.BakedReflections is { } capture) {
-                _captureBox = _gpu.Upload<float4>([new(capture.Position, 0), new(capture.Bounds.Min, 0), new(capture.Bounds.Max, 0)], WGPUBufferUsage.Uniform);
-                Buffer(_captureBox, RenderGraphBufferUsage.Uniform);
-                frameEntries.Add(GpuBinding.Texture(14, owner.Environment.CapturedCubeView.GetWgpu<WGPUTextureView>()));
-                frameEntries.Add(GpuBinding.Buffer(15, _captureBox));
+            if (owner.Lightmaps is { } lightmaps) {
+                frameEntries.Add(GpuBinding.Texture(12, lightmaps.MetadataView.GetWgpu<WGPUTextureView>()));
+                frameEntries.Add(GpuBinding.Texture(13, lightmaps.MappingView.GetWgpu<WGPUTextureView>()));
+                frameEntries.Add(GpuBinding.Texture(14, lightmaps.PageView.GetWgpu<WGPUTextureView>()));
+            }
+            if (owner.Captures is { } captures) {
+                frameEntries.Add(GpuBinding.Texture(15, captures.View.GetWgpu<WGPUTextureView>()));
+                frameEntries.Add(GpuBinding.Buffer(16, captures.Regions));
             }
             _frameGroup = GpuBinding.Group(_gpu, owner.Pipelines.FrameLayout, CollectionsMarshal.AsSpan(frameEntries));
-            if (owner.Settings.SceneReflections) {
-                var reflectionFrameEntries = new List<WGPUBindGroupEntry> {
-                    GpuBinding.Buffer(0, _uniform),
-                    GpuBinding.Buffer(1, _lightData),
-                    GpuBinding.Texture(4, owner.Environment.CubeView.GetWgpu<WGPUTextureView>()),
-                    GpuBinding.Sampler(6, owner.Environment.Sampler),
-                    GpuBinding.Buffer(8, owner.Environment.Sh),
-                    GpuBinding.Texture(9, owner.Probes!.TextureView.GetWgpu<WGPUTextureView>()),
-                    GpuBinding.Buffer(10, owner.Probes.Header)
-                };
-                if (_captureBox.IsValid) {
-                    reflectionFrameEntries.Add(GpuBinding.Texture(14, owner.Environment.CapturedCubeView.GetWgpu<WGPUTextureView>()));
-                    reflectionFrameEntries.Add(GpuBinding.Buffer(15, _captureBox));
-                }
-                _reflectionFrameGroup = GpuBinding.Group(_gpu, owner.Pipelines.ReflectionFrameLayout, CollectionsMarshal.AsSpan(reflectionFrameEntries));
-            }
             if (owner.Settings.GpuTiming) {
                 var count = (uint)PbrRenderer.GpuTimingStages.Length;
                 _queries = _gpu.Own(Wgpu.CreateQuerySet(_gpu.Device, WGPUQueryType.Timestamp, count * 2, "pbr-frame"));
@@ -237,6 +220,16 @@ internal sealed unsafe partial class PbrView : IDisposable
                 _timing = _gpu.Buffer(count * 16, WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
             }
             InitializeGpuSelection();
+            if (owner.Settings.Reflections is { } reflectionSettings) {
+                _reflectionConfig = _gpu.Upload<Sia.Math.float4>(reflectionSettings.Pack(), WGPUBufferUsage.Uniform);
+                _reflectionCurrentPoses = new PbrReflectionInstancePose[owner.ReflectionTrace.Scene.Instances.Length];
+                owner.ReflectionTrace.CopyPoses(_reflectionCurrentPoses);
+                _reflectionPoseRows = new uint4[_reflectionCurrentPoses.Length * PbrReflectionPoseData.RowsPerPose];
+                _reflectionPoses = _gpu.Buffer((ulong)_reflectionPoseRows.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
+                _reflectionReceiverMap = _gpu.Upload<uint>(owner.Scene.ReflectionReceiverMap(_reflectionCurrentPoses));
+                PrepareReflectionPoses();
+            }
+            InitializeHistory();
         }
         catch {
             _selection?.Dispose();
@@ -248,10 +241,9 @@ internal sealed unsafe partial class PbrView : IDisposable
     public void Dispose()
     {
         if (IsDisposed) return;
+        // No background callback mutates this resource World; renderer Collect/Dispose owns destruction.
+        _owner.RetireTargets(this, _sizeResources, _gpu, _selection, _selection?.Bytes ?? 0);
         IsDisposed = true;
-        _selection?.Dispose();
-        _sizeResources?.Dispose();
-        _gpu.Dispose();
         _owner.Forget(this);
     }
 }

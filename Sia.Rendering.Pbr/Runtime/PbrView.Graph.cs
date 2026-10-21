@@ -40,15 +40,18 @@ internal sealed unsafe partial class PbrView
             Import(ref graph, _probesKey, probes.Buffer, RenderGraphBufferUsage.Storage);
             Import(ref graph, _probeTextureKey, probes.Texture);
             Import(ref graph, _probeHeaderKey, probes.Header, RenderGraphBufferUsage.Uniform);
-            if (probes.DifferenceTexture.IsValid) {
-                Import(ref graph, _probeDifferenceKey, probes.DifferenceTexture);
-                Import(ref graph, _probeReferenceKey, probes.ReferenceConfiguration, RenderGraphBufferUsage.Uniform);
-            }
             if (probes.Dynamic) {
                 Import(ref graph, _traceKey, probes.Tracing, RenderGraphBufferUsage.Storage);
-                if (probes.DynamicTracing.IsValid)
-                    Import(ref graph, _dynamicTraceKey, probes.DynamicTracing, RenderGraphBufferUsage.Storage);
+                if (probes.TracingGeometry.IsValid) {
+                    Import(ref graph, _traceGeometryKey, probes.TracingGeometry, RenderGraphBufferUsage.Storage);
+                    Import(ref graph, _traceInstancesKey, probes.TracingInstances, RenderGraphBufferUsage.Storage);
+                }
                 Import(ref graph, _probeConfigKey, probes.Configuration, RenderGraphBufferUsage.Uniform);
+                if (probes.SignedCorrection) {
+                    Import(ref graph, _referenceConfigKey, probes.ReferenceConfiguration, RenderGraphBufferUsage.Uniform);
+                    Import(ref graph, _referenceSurfacesKey, probes.ReferenceSurfaces, RenderGraphBufferUsage.Storage);
+                    Import(ref graph, _referenceInstancesKey, probes.ReferenceInstances, RenderGraphBufferUsage.Storage);
+                }
             }
         }
         if (!UseForward) {
@@ -57,22 +60,10 @@ internal sealed unsafe partial class PbrView
         }
         Import(ref graph, _frame.DepthTarget, _depth);
         Import(ref graph, _hdrKey, _hdr);
-        if (_owner.HasSurfaceData) {
+        ImportReflectionTargets(ref graph);
+        if (_owner.Settings.ExportSurfaceData) {
             Import(ref graph, _normalRoughnessKey, _normalRoughness);
             Import(ref graph, _baseMetallicKey, _baseMetallic);
-        }
-        if (_owner.Settings.SceneReflections) {
-            Import(ref graph, _reflectionInputsKey, _reflectionInputs);
-            Import(ref graph, _reflectionRadianceKey, _reflectionRadiance);
-            Import(ref graph, _reflectionSettingsKey, _reflectionUniform, RenderGraphBufferUsage.Uniform);
-            if (_owner.Settings.TemporalReflections) {
-                Import(ref graph, ReflectionFilteredKey, _reflectionFiltered);
-                Import(ref graph, ReflectionHistoryKey, _reflectionHistory);
-                Import(ref graph, ReflectionPreviousWorldKey, _reflectionPreviousWorld);
-                Import(ref graph, ReflectionPreviousNormalKey, _reflectionPreviousNormal);
-                Import(ref graph, ReflectionHistoryFrameKey, _reflectionHistoryUniform, RenderGraphBufferUsage.Uniform);
-                Import(ref graph, ReflectionPreviousInstancesKey, _reflectionPreviousInstances, RenderGraphBufferUsage.Storage);
-            }
         }
         Import(ref graph, _shadowKey, _shadowAtlas);
         Import(ref graph, _snapshotKey, _snapshot);
@@ -115,17 +106,10 @@ internal sealed unsafe partial class PbrView
             // Measure transport separately from material reconstruction and lighting.
             if (_owner.Probes is { Dynamic: true })
                 graph.UsePass(new(_prefix + "probe-update"), "scene-probe-update", dependency,
-                    static (in d, p) => {
-                        if (d.View._owner.Probes!.DynamicTracing.IsValid)
-                            p.Read(d.View._dynamicTraceKey, RenderGraphBufferUsage.Storage);
-                        if (d.View._owner.Probes.DifferenceTexture.IsValid)
-                            p.Read(d.View._probeReferenceKey, RenderGraphBufferUsage.Uniform)
-                                .Write(d.View._probeDifferenceKey, RenderGraphTextureUsage.StorageBinding);
-                        p.Read(d.View._traceKey, RenderGraphBufferUsage.Storage)
+                    static (in d, p) => d.View.ReadProbeTrace(p)
                         .Read(d.View._probeConfigKey, RenderGraphBufferUsage.Uniform)
                         .Write(d.View._probesKey, RenderGraphBufferUsage.Storage)
-                        .Write(d.View._probeTextureKey, RenderGraphTextureUsage.StorageBinding);
-                    },
+                        .Write(d.View._probeTextureKey, RenderGraphTextureUsage.StorageBinding),
                     context => _owner.Probes.Integrate(context.CommandEncoder), RenderGraphPassKind.Compute);
             TimingMarker(ref graph, dependency, 6);
             graph.UsePass(new(_prefix + "tiles"), "pbr-material-tiles", dependency, static (in d, p) =>
@@ -133,51 +117,10 @@ internal sealed unsafe partial class PbrView
                     .Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Write(d.View._tilesKey, RenderGraphBufferUsage.Storage), Tiles, RenderGraphPassKind.Compute);
             graph.UsePass(new(_prefix + "shade"), "pbr-fused-shading", dependency, static (in d, p) =>
                 d.View.WriteSurface(d.View.ReadStreamWork(d.View.ReadLighting(p)).Read(d.View._idKey, RenderGraphTextureUsage.TextureBinding).Read(d.Depth, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._tilesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect).Write(d.View._hdrKey, RenderGraphTextureUsage.StorageBinding)), Shade, RenderGraphPassKind.Compute);
+                    .Read(d.View._tilesKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect).Write(d.View.OpaqueTargetKey, RenderGraphTextureUsage.StorageBinding)), Shade, RenderGraphPassKind.Compute);
         }
         TimingMarker(ref graph, dependency, 7);
-        if (_owner.Settings.SceneReflections) {
-            graph.UsePass(new(_prefix + "reflections"), "pbr-scene-reflections", dependency, static (in d, p) => {
-                d.View.ReadLighting(p)
-                    .Read(d.View._normalRoughnessKey, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._reflectionInputsKey, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._reflectionSettingsKey, RenderGraphBufferUsage.Uniform)
-                    .Read(d.View._traceKey, RenderGraphBufferUsage.Storage)
-                    .Write(d.View._reflectionRadianceKey, RenderGraphTextureUsage.RenderAttachment);
-                if (d.View._owner.Probes!.DynamicTracing.IsValid)
-                    p.Read(d.View._dynamicTraceKey, RenderGraphBufferUsage.Storage);
-            }, Reflections);
-            if (_owner.Settings.TemporalReflections)
-                graph.UsePass(new(_prefix + "reflection-temporal"), "pbr-reflection-temporal", dependency, static (in d, p) =>
-                    d.View.ReadFrame(p)
-                        .Read(d.View._normalRoughnessKey, RenderGraphTextureUsage.TextureBinding)
-                        .Read(d.View._reflectionInputsKey, RenderGraphTextureUsage.TextureBinding)
-                        .Read(d.View._reflectionRadianceKey, RenderGraphTextureUsage.TextureBinding)
-                        .Read(d.View.ReflectionHistoryKey, RenderGraphTextureUsage.TextureBinding)
-                        .Read(d.View.ReflectionPreviousWorldKey, RenderGraphTextureUsage.TextureBinding)
-                        .Read(d.View.ReflectionPreviousNormalKey, RenderGraphTextureUsage.TextureBinding)
-                        .Read(d.View.ReflectionHistoryFrameKey, RenderGraphBufferUsage.Uniform)
-                        .Read(d.View.ReflectionPreviousInstancesKey, RenderGraphBufferUsage.Storage)
-                        .Write(d.View.ReflectionFilteredKey, RenderGraphTextureUsage.RenderAttachment), FilterReflections);
-            graph.UsePass(new(_prefix + "reflection-composite"), "pbr-reflection-composite", dependency, static (in d, p) =>
-                d.View.ReadLighting(p)
-                    .Read(d.View._normalRoughnessKey, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._reflectionInputsKey, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._owner.Settings.TemporalReflections ? d.View.ReflectionFilteredKey : d.View._reflectionRadianceKey, RenderGraphTextureUsage.TextureBinding)
-                    .Read(d.View._reflectionSettingsKey, RenderGraphBufferUsage.Uniform)
-                    .ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), CompositeReflections);
-            if (_owner.Settings.TemporalReflections)
-                graph.UsePass(new(_prefix + "reflection-history-commit"), "pbr-reflection-history-commit", dependency, static (in d, p) =>
-                    p.DependsOn(new(d.View._prefix + "reflection-composite"))
-                        .Read(d.View.ReflectionFilteredKey, RenderGraphTextureUsage.CopySource)
-                        .Read(d.View._reflectionInputsKey, RenderGraphTextureUsage.CopySource)
-                        .Read(d.View._normalRoughnessKey, RenderGraphTextureUsage.CopySource)
-                        .Write(d.View.ReflectionHistoryKey, RenderGraphTextureUsage.CopyDestination)
-                        .Write(d.View.ReflectionPreviousWorldKey, RenderGraphTextureUsage.CopyDestination)
-                        .Write(d.View.ReflectionPreviousNormalKey, RenderGraphTextureUsage.CopyDestination), CommitReflectionHistory,
-                    RenderGraphPassKind.Compute);
-        }
-        TimingMarker(ref graph, dependency, 8);
+        BuildReflections(ref graph, dependency);
         if (_owner.Materials.HasTransmission)
             graph.UsePass(new(_prefix + "snapshot"), "pbr-opaque-snapshot", dependency, static (in d, p) =>
             d.View.ReadTiming(p).Read(d.View._hdrKey, RenderGraphTextureUsage.CopySource).Write(d.View._snapshotKey, RenderGraphTextureUsage.CopyDestination), Snapshot, RenderGraphPassKind.Compute);
@@ -185,20 +128,19 @@ internal sealed unsafe partial class PbrView
             graph.UsePass(new(_prefix + "transparent"), "pbr-transparent", dependency, static (in d, p) =>
             d.View.ReadLighting(p).Read(d.Depth, RenderGraphTextureUsage.RenderAttachment | RenderGraphTextureUsage.TextureBinding)
                 .Read(d.View._snapshotKey, RenderGraphTextureUsage.TextureBinding).ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Transparency);
-        TimingMarker(ref graph, dependency, 9);
+        TimingMarker(ref graph, dependency, 10);
         graph.UsePass(new(_prefix + "output"), "pbr-output", dependency, static (in d, p) =>
             d.View.ReadTiming(p).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
-        TimingMarker(ref graph, dependency, 10);
+        TimingMarker(ref graph, dependency, 11);
     }
 
     private RenderGraphPassDeclarationBuilder WriteSurface(RenderGraphPassDeclarationBuilder pass)
     {
-        if (_owner.HasSurfaceData) {
+        if (_owner.Settings.ExportSurfaceData) {
             pass.Write(_normalRoughnessKey, RenderGraphTextureUsage.StorageBinding);
             pass.Write(_baseMetallicKey, RenderGraphTextureUsage.StorageBinding);
         }
-        if (_owner.Settings.SceneReflections)
-            pass.Write(_reflectionInputsKey, RenderGraphTextureUsage.StorageBinding);
+        if (HasReflections) pass.Write(_reflectionSpecularKey, RenderGraphTextureUsage.StorageBinding);
         return pass;
     }
 
@@ -209,7 +151,7 @@ internal sealed unsafe partial class PbrView
             static (in d, p) => p
                 .ReadWrite(d.View._timingsKey, RenderGraphBufferUsage.CopyDestination)
                 .ReadWrite(new RenderGraphBufferKey(d.View._prefix + "query-scratch"), RenderGraphBufferUsage.QueryResolve | RenderGraphBufferUsage.CopySource),
-            context => Timestamp(context, (uint)point), RenderGraphPassKind.Compute);
+            Timestamp, RenderGraphPassKind.Compute);
     }
 
     private RenderGraphPassDeclarationBuilder ReadTiming(RenderGraphPassDeclarationBuilder p)
@@ -234,9 +176,18 @@ internal sealed unsafe partial class PbrView
         ReadFrame(p).Read(_clustersKey, RenderGraphBufferUsage.Storage).Read(_shadowKey, RenderGraphTextureUsage.TextureBinding);
         if (_owner.Probes is not null)
             p.Read(_probeTextureKey, RenderGraphTextureUsage.TextureBinding).Read(_probeHeaderKey, RenderGraphBufferUsage.Uniform);
-        if (_owner.Probes is { DifferenceTexture.IsValid: true })
-            p.Read(_probeDifferenceKey, RenderGraphTextureUsage.TextureBinding);
         return p;
+    }
+
+    private RenderGraphPassDeclarationBuilder ReadProbeTrace(RenderGraphPassDeclarationBuilder pass)
+    {
+        pass.Read(_traceKey, RenderGraphBufferUsage.Storage);
+        if (_owner.Probes!.TracingGeometry.IsValid)
+            pass.Read(_traceGeometryKey, RenderGraphBufferUsage.Storage).Read(_traceInstancesKey, RenderGraphBufferUsage.Storage);
+        if (_owner.Probes.SignedCorrection)
+            pass.Read(_referenceConfigKey, RenderGraphBufferUsage.Uniform)
+                .Read(_referenceSurfacesKey, RenderGraphBufferUsage.Storage).Read(_referenceInstancesKey, RenderGraphBufferUsage.Storage);
+        return pass;
     }
 
     private static void Import(ref RenderGraphBuildContext graph, RenderGraphBufferKey key, Entity entity, RenderGraphBufferUsage usage)

@@ -1,95 +1,131 @@
-using System.Runtime.InteropServices;
 using Sia;
+using Sia.Engine.Camera;
 using Sia.Graphics.Reactive;
 using Sia.Math;
+using Sia.RenderGraph;
 using Sia.WebGPU;
 
 namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe partial class PbrView
 {
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ReflectionHistoryFrame
+    private readonly PbrReflectionHistoryState _historyState = new();
+    private Entity _historyConfig, _filteredSignal, _previousSignal, _previousReceiver, _previousNormal, _previousMetadata, _previousHit;
+    private Entity _historyGroup, _historyCommitGroup, _historyCommitHitGroup;
+    private RenderGraphBufferKey _historyConfigKey;
+    private RenderGraphTextureKey _filteredSignalKey, _previousSignalKey, _previousReceiverKey, _previousNormalKey, _previousMetadataKey, _previousHitKey;
+    private PbrReflectionInstancePose[]? _previousPoses;
+    private uint4[]? _uploadedPoseRows;
+    private readonly float4[] _historyUniform = new float4[7];
+    private bool _historySurfaceEncoded, _historyHitEncoded, _historyEncoded, _historyPrepared;
+    private ulong _historyFrame;
+    private Entity _historyCamera;
+    private float4x4 _historyProjection;
+    private float3 _historyForward;
+    private float4x4 _pendingHistoryProjection;
+    private float3 _pendingHistoryForward;
+    private bool HasHistory => _owner.Settings.Reflections?.History is not null;
+    private RenderGraphTextureKey CompositionSignalKey => HasHistory ? _filteredSignalKey : _reflectionSignalKey;
+
+    private void InitializeHistory()
     {
-        public float4x4 PreviousViewProjection;
-        public float4 PreviousEye;
-        public float4 Parameters;
-        public uint4 State;
+        _historyConfigKey = new(_prefix + "history-config"); _filteredSignalKey = new(_prefix + "reflection-filtered");
+        _previousSignalKey = new(_prefix + "history-radiance"); _previousReceiverKey = new(_prefix + "history-receiver");
+        _previousNormalKey = new(_prefix + "history-normal"); _previousMetadataKey = new(_prefix + "history-identities"); _previousHitKey = new(_prefix + "history-hit");
+        if (!HasHistory) return;
+        _previousPoses = new PbrReflectionInstancePose[_reflectionCurrentPoses!.Length];
+        for (var at = 0; at < _previousPoses.Length; at++) _previousPoses[at] = _reflectionCurrentPoses[at] with { Enabled = false };
+        _uploadedPoseRows = new uint4[_reflectionPoseRows!.Length];
+        _historyConfig = _gpu.Buffer(112, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
     }
 
-    private Entity _reflectionHistoryUniform, _reflectionPreviousInstances;
-    private Entity _reflectionFiltered, _reflectionHistory, _reflectionPreviousWorld, _reflectionPreviousNormal, _reflectionTemporalGroup;
-    private PbrInstanceGpu[] _reflectionInstanceSnapshot = [];
-    private float4x4 _reflectionPreviousVp, _reflectionPreviousProjection, _reflectionCurrentProjection;
-    private float4 _reflectionPreviousEye;
-    private Entity _reflectionPreviousCamera;
-    private ulong _reflectionPreviousFrame, _reflectionCurrentFrame;
-    private bool _reflectionHistoryReady;
-
-    private RenderGraphTextureKey ReflectionFilteredKey => new(_prefix + "reflection-filtered");
-    private RenderGraphTextureKey ReflectionHistoryKey => new(_prefix + "reflection-history");
-    private RenderGraphTextureKey ReflectionPreviousWorldKey => new(_prefix + "reflection-previous-world");
-    private RenderGraphTextureKey ReflectionPreviousNormalKey => new(_prefix + "reflection-previous-normal");
-    private RenderGraphBufferKey ReflectionHistoryFrameKey => new(_prefix + "reflection-history-frame");
-    private RenderGraphBufferKey ReflectionPreviousInstancesKey => new(_prefix + "reflection-previous-instances");
-
-    private void InitializeReflectionHistory()
+    private void PrepareHistory()
     {
-        if (!_owner.Settings.TemporalReflections) return;
-        _reflectionInstanceSnapshot = _owner.Scene.InstanceData.ToArray();
-        _reflectionHistoryUniform = _gpu.Buffer(112, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
-        _reflectionPreviousInstances = _gpu.Buffer(checked((ulong)_reflectionInstanceSnapshot.Length * 144),
-            WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
-    }
-
-    private void PrepareReflectionHistory(float4x4 projection, ulong frame)
-    {
-        if (!_owner.Settings.TemporalReflections) return;
-        var valid = _reflectionHistoryReady && !_frame.CameraCut && _reflectionPreviousCamera == _frame.Camera
-            && _reflectionPreviousFrame + 1 == frame && _reflectionPreviousProjection.Equals(projection)
-            && _owner.DebugMode == VisibilityDebugMode.Shaded;
-        var header = new ReflectionHistoryFrame {
-            PreviousViewProjection = _reflectionPreviousVp, PreviousEye = _reflectionPreviousEye,
-            Parameters = new(.8f, 0, 0, 0), State = new(valid ? 1u : 0u, 0, 0, 0)
-        };
-        Wgpu.WriteBuffer<ReflectionHistoryFrame>(_gpu.Queue, _reflectionHistoryUniform.GetWgpu<WGPUBuffer>(), 0, [header]);
-        Wgpu.WriteBuffer<PbrInstanceGpu>(_gpu.Queue, _reflectionPreviousInstances.GetWgpu<WGPUBuffer>(), 0, _reflectionInstanceSnapshot);
-        _reflectionCurrentFrame = frame;
-        _reflectionCurrentProjection = projection;
-    }
-
-    private void FilterReflections(WgpuReactiveRenderGraphPassContext context)
-    {
-        var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(ReflectionFilteredKey, WGPULoadOp.Clear));
-        if (_owner.DebugMode != VisibilityDebugMode.Shaded) return;
-        Wgpu.SetRenderPipeline(pass, _owner.Pipelines.ReflectionTemporal.GetWgpu<WGPURenderPipeline>());
-        Wgpu.SetBindGroup(pass, 0, _reflectionFrameGroup.GetWgpu<WGPUBindGroup>());
-        Wgpu.SetBindGroup(pass, 1, _reflectionTemporalGroup.GetWgpu<WGPUBindGroup>());
-        Wgpu.Draw(pass, 3);
-    }
-
-    private void CommitReflectionHistory(WgpuReactiveRenderGraphPassContext context)
-    {
-        _reflectionHistoryReady = false;
-        if (_owner.DebugMode != VisibilityDebugMode.Shaded) return;
-        Copy(_reflectionFiltered, _reflectionHistory);
-        Copy(_reflectionInputs, _reflectionPreviousWorld, _width);
-        Copy(_normalRoughness, _reflectionPreviousNormal);
-        _owner.Scene.InstanceData.CopyTo(_reflectionInstanceSnapshot);
-        _reflectionPreviousVp = _data.ViewProjection;
-        _reflectionPreviousEye = _data.Eye;
-        _reflectionPreviousProjection = _reflectionCurrentProjection;
-        _reflectionPreviousCamera = _frame.Camera;
-        _reflectionPreviousFrame = _reflectionCurrentFrame;
-        _reflectionHistoryReady = true;
-
-        void Copy(Entity input, Entity output, uint x = 0)
-        {
-            var source = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)input.GetWgpu<WGPUTexture>().DangerousGetHandle(),
-                Aspect = WGPUTextureAspect.All, Origin = new() { X = x } };
-            var target = new WGPUTexelCopyTextureInfo { Texture = (WGPUTexture*)output.GetWgpu<WGPUTexture>().DangerousGetHandle(), Aspect = WGPUTextureAspect.All };
-            var size = new WGPUExtent3D { Width = _width, Height = _height, DepthOrArrayLayers = 1 };
-            WgpuUnsafe.wgpuCommandEncoderCopyTextureToTexture((WGPUCommandEncoder*)context.CommandEncoder.DangerousGetHandle(), &source, &target, &size);
+        if (!HasHistory) { PrepareReflectionPoses(); return; }
+        var settings = _owner.Settings.Reflections!.History!; var camera = _frame.Camera.Get<CameraMatrices>();
+        var forward = math.inverse(camera.View).c2.xyz;
+        var cameraCut = _frame.Camera != _historyCamera || !_historyProjection.Equals(camera.Proj) || math.dot(forward, _historyForward) < .8f;
+        _pendingHistoryProjection = camera.Proj; _pendingHistoryForward = forward;
+        _historyFrame = _owner.PreparedFrameIndex;
+        var reusable = _historyState.Prepare(_historyFrame, _width, _height, _data.ViewProjection, _data.Eye.xyz, settings.CameraCutDistance, cameraCut);
+        _historyPrepared = true; _historySurfaceEncoded = _historyHitEncoded = _historyEncoded = false;
+        var matrix = _historyState.PreviousViewProjection;
+        _historyUniform[0] = matrix.c0; _historyUniform[1] = matrix.c1; _historyUniform[2] = matrix.c2; _historyUniform[3] = matrix.c3;
+        _historyUniform[4] = new(_historyState.PreviousEye, 0);
+        _historyUniform[5] = new(settings.Weight, settings.NormalCosine, settings.RoughnessTolerance, _owner.Settings.Reflections.RayBias);
+        _historyUniform[6] = new(settings.PositionTolerance, settings.HitTolerance, reusable ? 1 : 0, 0);
+        Wgpu.WriteBuffer<float4>(_gpu.Queue, _historyConfig.GetWgpu<WGPUBuffer>(), 0, _historyUniform);
+        _owner.ReflectionTrace.CopyPoses(_reflectionCurrentPoses!);
+        PbrReflectionPoseData.Pack(_reflectionCurrentPoses!, _previousPoses!, _reflectionPoseRows!);
+        for (var first = 0; first < _reflectionPoseRows!.Length;) {
+            if (_reflectionPoseRows[first].Equals(_uploadedPoseRows![first])) { first++; continue; }
+            var end = first + 1;
+            while (end < _reflectionPoseRows.Length && !_reflectionPoseRows[end].Equals(_uploadedPoseRows![end])) end++;
+            Wgpu.WriteBuffer<uint4>(_gpu.Queue, _reflectionPoses.GetWgpu<WGPUBuffer>(), (ulong)first * 16, _reflectionPoseRows.AsSpan(first, end - first));
+            _reflectionPoseRows.AsSpan(first, end - first).CopyTo(_uploadedPoseRows!.AsSpan(first, end - first)); first = end;
         }
+    }
+
+    internal void SubmitReflectionHistory(ulong frame)
+    {
+        if (!HasHistory || !_historyPrepared || frame != _historyFrame || !_historyEncoded) return;
+        _historyState.Submitted(frame); _reflectionCurrentPoses!.CopyTo(_previousPoses!, 0);
+        _historyCamera = _frame.Camera; _historyProjection = _pendingHistoryProjection;
+        _historyForward = _pendingHistoryForward; _historyPrepared = false;
+    }
+
+    internal void InvalidateReflectionHistory() { _historyState.Invalidate(); _historyPrepared = false; }
+
+    private void FilterHistory(WgpuReactiveRenderGraphPassContext context)
+        => DispatchReflection(context, _owner.Pipelines.ReflectionHistory, _historyGroup);
+
+    private void CommitHistory(WgpuReactiveRenderGraphPassContext context)
+    {
+        DispatchReflection(context, _owner.Pipelines.ReflectionCommit, _historyCommitGroup); _historySurfaceEncoded = true; MarkHistoryEncoded();
+    }
+    private void CommitHistoryHit(WgpuReactiveRenderGraphPassContext context)
+    {
+        DispatchReflection(context, _owner.Pipelines.ReflectionCommitHit, _historyCommitHitGroup); _historyHitEncoded = true; MarkHistoryEncoded();
+    }
+    private void MarkHistoryEncoded()
+    {
+        if (_historySurfaceEncoded && _historyHitEncoded && !_historyEncoded) { _historyState.Encoded(_historyFrame); _historyEncoded = true; }
+    }
+
+    private void ImportHistory(ref RenderGraphBuildContext graph)
+    {
+        if (!HasHistory) return;
+        Import(ref graph, _historyConfigKey, _historyConfig, RenderGraphBufferUsage.Uniform);
+        Import(ref graph, _filteredSignalKey, _filteredSignal); Import(ref graph, _previousSignalKey, _previousSignal);
+        Import(ref graph, _previousReceiverKey, _previousReceiver); Import(ref graph, _previousNormalKey, _previousNormal);
+        Import(ref graph, _previousMetadataKey, _previousMetadata); Import(ref graph, _previousHitKey, _previousHit);
+    }
+
+    private RenderGraphPassDeclarationBuilder ReadHistoryCurrent(RenderGraphPassDeclarationBuilder p)
+        => p.Read(_frameKey, RenderGraphBufferUsage.Uniform).Read(_historyConfigKey, RenderGraphBufferUsage.Uniform)
+            .Read(_reflectionMetadataKey, RenderGraphTextureUsage.TextureBinding).Read(_reflectionSpecularKey, RenderGraphTextureUsage.TextureBinding)
+            .Read(_normalRoughnessKey, RenderGraphTextureUsage.TextureBinding).Read(_frame.DepthTarget, RenderGraphTextureUsage.TextureBinding);
+
+    private void BuildHistoryFilter(ref RenderGraphBuildContext graph, Dependencies dependency)
+    {
+        if (!HasHistory) return;
+        graph.UsePass(new(_prefix + "reflection-history"), "pbr-reflection-history", dependency, static (in d, p) => d.View.ReadHistoryCurrent(p)
+            .Read(d.View._reflectionPosesKey, RenderGraphBufferUsage.Storage).Read(d.View._reflectionReceiverMapKey, RenderGraphBufferUsage.Storage)
+            .Read(d.View._reflectionSignalKey, RenderGraphTextureUsage.TextureBinding).Read(d.View._previousSignalKey, RenderGraphTextureUsage.TextureBinding)
+            .Read(d.View._previousReceiverKey, RenderGraphTextureUsage.TextureBinding).Read(d.View._previousNormalKey, RenderGraphTextureUsage.TextureBinding)
+            .Read(d.View._previousMetadataKey, RenderGraphTextureUsage.TextureBinding).Read(d.View._previousHitKey, RenderGraphTextureUsage.TextureBinding)
+            .Write(d.View._filteredSignalKey, RenderGraphTextureUsage.StorageBinding), FilterHistory, RenderGraphPassKind.Compute);
+    }
+
+    private void BuildHistoryCommit(ref RenderGraphBuildContext graph, Dependencies dependency)
+    {
+        if (!HasHistory) return;
+        graph.UsePass(new(_prefix + "history-commit"), "pbr-reflection-history-commit", dependency, static (in d, p) => d.View.ReadHistoryCurrent(p)
+            .Read(d.View._filteredSignalKey, RenderGraphTextureUsage.TextureBinding)
+            .Write(d.View._previousSignalKey, RenderGraphTextureUsage.StorageBinding).Write(d.View._previousReceiverKey, RenderGraphTextureUsage.StorageBinding)
+            .Write(d.View._previousNormalKey, RenderGraphTextureUsage.StorageBinding).Write(d.View._previousMetadataKey, RenderGraphTextureUsage.StorageBinding), CommitHistory, RenderGraphPassKind.Compute);
+        graph.UsePass(new(_prefix + "history-hit-commit"), "pbr-reflection-history-hit-commit", dependency, static (in d, p) => d.View.ReadHistoryCurrent(p)
+            .Read(d.View._filteredSignalKey, RenderGraphTextureUsage.TextureBinding).Write(d.View._previousHitKey, RenderGraphTextureUsage.StorageBinding),
+            CommitHistoryHit, RenderGraphPassKind.Compute);
     }
 }

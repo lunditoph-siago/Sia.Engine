@@ -1,43 +1,27 @@
 using System.Buffers;
-using System.Runtime.InteropServices;
 
 namespace Sia.Engine.Example;
 
 internal static class AssetInput
 {
-    internal static async Task<T> LoadExactAsync<T>(string path, HttpClient client, int size,
-        Func<Stream, T> decode, CancellationToken cancellationToken = default)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegative(size);
-        ArgumentNullException.ThrowIfNull(decode);
-        using var input = await OpenAsync(path, client, cancellationToken);
-        var bytes = await ReadExactAsync(input, size, cancellationToken);
-        return Decode(bytes, decode);
-    }
-
-    internal static async Task<T> LoadBoundedAsync<T>(string path, HttpClient client, int maximumBytes,
-        Func<ReadOnlyMemory<byte>, T> decode, CancellationToken cancellationToken = default)
+#if !BROWSER
+    internal static T ReadJson<T>(string path, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type,
+        int maximumBytes) where T : class
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
-        ArgumentNullException.ThrowIfNull(decode);
-        using var input = await OpenAsync(path, client, cancellationToken);
-        var bytes = await ReadBoundedAsync(input, maximumBytes, cancellationToken);
-        return decode(bytes);
+        using var input = File.OpenRead(path);
+        if (input.Length > maximumBytes) throw new InvalidDataException($"JSON input exceeds {maximumBytes} bytes.");
+        var bytes = new byte[(int)input.Length];
+        input.ReadExactly(bytes);
+        if (input.ReadByte() != -1) throw new InvalidDataException("JSON input changed while reading.");
+        return System.Text.Json.JsonSerializer.Deserialize(bytes, type)
+            ?? throw new InvalidDataException("JSON input must be an object.");
     }
-
-    // The payload readers above return array-backed memory; adapt stream codecs without copying it.
-    internal static T Decode<T>(ReadOnlyMemory<byte> bytes, Func<Stream, T> decode)
-    {
-        if (!MemoryMarshal.TryGetArray(bytes, out var segment))
-            throw new InvalidOperationException("Asset input must return an array-backed payload.");
-        using var payload = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
-        return decode(payload);
-    }
+#endif
 
     internal static bool TryGetHttpUri(string path, out Uri? uri)
         => Uri.TryCreate(path, UriKind.Absolute, out uri) && uri.Scheme is "http" or "https";
 
-    // The caller owns the returned stream; the shared client remains alive for scene chunks.
     internal static async Task<Stream> OpenAsync(string path, HttpClient client,
         CancellationToken cancellationToken = default)
         => TryGetHttpUri(path, out var uri)

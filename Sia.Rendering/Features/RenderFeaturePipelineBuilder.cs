@@ -3,13 +3,15 @@ namespace Sia.Engine.Rendering;
 public sealed class RenderFeaturePipelineBuilder<TContext>
 {
     private sealed record Entry(
-        IRenderFeature Feature,
         RenderFeatureKey Key,
+        IRenderFeature Feature,
         HashSet<RenderFeatureKey> RunsAfter,
-        HashSet<RenderFeatureKey> RunsBefore);
+        HashSet<RenderFeatureKey> RunsBefore,
+        long InsertionIndex);
 
     private readonly List<Entry> _entries = [];
     private readonly Dictionary<RenderFeatureKey, Entry> _entriesByKey = [];
+    private long _nextInsertionIndex;
 
     public RenderFeaturePipelineBuilder<TContext> Add(
         IRenderFeature feature,
@@ -18,18 +20,22 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
     {
         ArgumentNullException.ThrowIfNull(feature);
         var key = feature.Key;
+        ArgumentException.ThrowIfNullOrWhiteSpace(key.Value, nameof(feature));
         if (_entriesByKey.ContainsKey(key)) {
             throw new InvalidOperationException(
                 $"Render feature '{key}' is already registered.");
         }
 
         var entry = new Entry(
-            feature,
             key,
+            feature,
             runsAfter?.ToHashSet() ?? [],
-            runsBefore?.ToHashSet() ?? []);
+            runsBefore?.ToHashSet() ?? [],
+            _nextInsertionIndex);
+        var nextInsertionIndex = checked(_nextInsertionIndex + 1);
         _entries.Add(entry);
         _entriesByKey.Add(key, entry);
+        _nextInsertionIndex = nextInsertionIndex;
         return this;
     }
 
@@ -42,56 +48,66 @@ public sealed class RenderFeaturePipelineBuilder<TContext>
 
     public RenderFeaturePipeline<TContext> Build()
     {
-        // Current list positions remain unique after removal and re-registration.
-        var indices = _entries.Select((entry, index) => (entry.Key, Index: index))
-            .ToDictionary(static pair => pair.Key, static pair => pair.Index);
-        var outgoing = new HashSet<int>[_entries.Count];
-        var incoming = new int[_entries.Count];
-        for (var i = 0; i < outgoing.Length; i++) outgoing[i] = [];
+        var outgoing = _entries.ToDictionary(static entry => entry, static _ => new HashSet<Entry>());
+        var incomingCounts = _entries.ToDictionary(static entry => entry, static _ => 0);
 
-        for (var i = 0; i < _entries.Count; i++) {
-            var entry = _entries[i];
+        foreach (var entry in _entries) {
             foreach (var dependency in entry.RunsAfter) {
-                AddEdge(GetRequired(dependency), i);
+                AddEdge(GetRequired(dependency), entry, outgoing, incomingCounts);
             }
             foreach (var successor in entry.RunsBefore) {
-                AddEdge(i, GetRequired(successor));
+                AddEdge(entry, GetRequired(successor), outgoing, incomingCounts);
             }
         }
 
-        var ready = new PriorityQueue<int, int>();
-        for (var i = 0; i < incoming.Length; i++) {
-            if (incoming[i] == 0) ready.Enqueue(i, i);
+        var ready = new PriorityQueue<Entry, long>();
+        foreach (var entry in _entries) {
+            if (incomingCounts[entry] == 0) {
+                ready.Enqueue(entry, entry.InsertionIndex);
+            }
         }
 
         var ordered = new List<IRenderFeature>(_entries.Count);
-        while (ready.TryDequeue(out var index, out _)) {
-            ordered.Add(_entries[index].Feature);
-            foreach (var successor in outgoing[index]) {
-                if (--incoming[successor] == 0) {
-                    ready.Enqueue(successor, successor);
+        while (ready.TryDequeue(out var entry, out _)) {
+            ordered.Add(entry.Feature);
+            foreach (var successor in outgoing[entry]) {
+                incomingCounts[successor]--;
+                if (incomingCounts[successor] == 0) {
+                    ready.Enqueue(successor, successor.InsertionIndex);
                 }
             }
         }
 
         if (ordered.Count != _entries.Count) {
-            var cyclicKeys = Enumerable.Range(0, incoming.Length)
-                .Where(i => incoming[i] != 0).Select(i => _entries[i].Key);
+            var cyclicKeys = incomingCounts
+                .Where(static pair => pair.Value != 0)
+                .OrderBy(static pair => pair.Key.InsertionIndex)
+                .Select(static pair => pair.Key.Key);
             throw new InvalidOperationException(
                 $"Render feature ordering contains a cycle: {string.Join(", ", cyclicKeys)}.");
         }
 
         return new([.. ordered]);
+    }
 
-        int GetRequired(RenderFeatureKey key) => indices.TryGetValue(key, out var index)
-            ? index : throw new InvalidOperationException(
+    private Entry GetRequired(RenderFeatureKey key) =>
+        _entriesByKey.TryGetValue(key, out var entry)
+            ? entry
+            : throw new InvalidOperationException(
                 $"Render feature ordering references unregistered feature '{key}'.");
 
-        void AddEdge(int from, int to)
-        {
-            if (from == to) throw new InvalidOperationException(
-                $"Render feature '{_entries[from].Key}' cannot be ordered relative to itself.");
-            if (outgoing[from].Add(to)) incoming[to]++;
+    private static void AddEdge(
+        Entry from,
+        Entry to,
+        Dictionary<Entry, HashSet<Entry>> outgoing,
+        Dictionary<Entry, int> incomingCounts)
+    {
+        if (from == to) {
+            throw new InvalidOperationException(
+                $"Render feature '{from.Key}' cannot be ordered relative to itself.");
+        }
+        if (outgoing[from].Add(to)) {
+            incomingCounts[to]++;
         }
     }
 }

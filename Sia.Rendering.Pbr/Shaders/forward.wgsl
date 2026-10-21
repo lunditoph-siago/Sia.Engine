@@ -9,63 +9,56 @@ struct ForwardVertex {
     @location(2) tangent: vec4<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) @interpolate(flat, either) material: u32,
-    @location(5) lightmap: vec3<f32>,
+    @location(5) bake_uv: vec2<f32>,
+    @location(6) @interpolate(flat, either) bake: vec2<u32>,
 }
 
 @vertex
 fn prepass_vertex(
-#if COMPACT_VERTICES
-    @location(0) packed: vec4<u32>,
-#else
     @location(0) p: vec4<f32>,
-#endif
+#if RESIDENT_INSTANCES
+    @location(3) draw_instance: vec2<u32>,
+#else
     @builtin(instance_index) instance_id: u32,
+#endif
 ) -> @builtin(position) @invariant vec4<f32> {
-#if COMPACT_VERTICES
-    let p = bitcast<vec4<f32>>(packed);
-#endif
-    var world = vec4<f32>(p.xyz, 1.0);
-#if LOCAL_INSTANCES
-    world = instances[instance_id].transform * world;
-#endif
+    let world = vec4<f32>(p.xyz, 1.0);
+#if RESIDENT_INSTANCES
+    let position = instances[draw_instance.x].transform * world;
+    return frame.vp * position;
+#else
     return frame.vp * world;
+#endif
 }
 
 @vertex
 fn forward_vertex(
-#if COMPACT_VERTICES
-    @location(0) packed_p: vec4<u32>,
-    @location(1) packed_n: vec4<u32>,
-#else
     @location(0) p: vec4<f32>,
+#if RESIDENT_INSTANCES
+    @location(1) n: vec4<u32>,
+    @location(2) words: vec2<u32>,
+    @location(3) draw_instance: vec2<u32>,
+#else
     @location(1) n: vec4<f32>,
     @location(2) t: vec4<f32>,
+    @location(3) b: vec4<f32>,
 #endif
     @builtin(instance_index) instance_id: u32,
-    @builtin(vertex_index) vertex_id: u32,
 ) -> ForwardVertex {
-#if COMPACT_VERTICES
-    let vertex = compact_vertex(packed_p, packed_n, vertex_lightmap(vertex_id));
-    let p = vec4<f32>(vertex.position, vertex.normal.x);
-    let n = vec4<f32>(vertex.normal.yz, vertex.uv);
-    let t = vertex.tangent;
-#endif
-    var world = vec4<f32>(p.xyz, 1.0);
-#if LOCAL_INSTANCES
-    let instance = instances[instance_id];
-    world = instance.transform * world;
-    return ForwardVertex(frame.vp * world, world.xyz,
-        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
-        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, sign(t.w)), n.zw, instance.material.x, vertex_lightmap(vertex_id));
+    let world = vec4<f32>(p.xyz, 1.0);
+#if RESIDENT_INSTANCES
+    let instance = instances[draw_instance.x];
+    let t = resident_tangent(words);
+    let b = bitcast<vec2<f32>>(n.zw);
+    let position = instance.transform * world;
+    return ForwardVertex(frame.vp * position, position.xyz,
+        (instance.normal_transform * vec4<f32>(resident_normal(n.y), 0.0)).xyz,
+        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, t.w), vec2<f32>(p.w, bitcast<f32>(n.x)),
+        instance.material.x, b, vec2<u32>(select(0u, 1u, (words.y & 2u) != 0u), instance.material.y));
 #else
-#if COMPACT_VERTICES
-    let material = vertex_owner(packed_n.w);
-#else
-    let material = u32(abs(t.w)) - 1u;
-#endif
     return ForwardVertex(frame.vp * world, world.xyz,
         vec3<f32>(p.w, n.xy),
-        t, n.zw, material, vertex_lightmap(vertex_id));
+        t, n.zw, u32(abs(t.w)) - 1u, b.xy, vec2<u32>(u32(b.z), u32(b.w)));
 #endif
 }
 
@@ -76,8 +69,8 @@ fn forward_fragment(
 ) -> @location(0) vec4<f32> {
     var surface = sample_material(materials[input.material], input.world, input.normal,
         input.tangent, input.uv, dpdx(input.uv), dpdy(input.uv), front);
-    surface.lightmap = input.lightmap;
-    surface.lightmap_dx = dpdx(input.lightmap.xy);
-    surface.lightmap_dy = dpdy(input.lightmap.xy);
+    surface.bake_uv = input.bake_uv;
+    surface.bake_uv_dx = dpdx(input.bake_uv); surface.bake_uv_dy = dpdy(input.bake_uv);
+    surface.bake_present = input.bake.x != 0u; surface.source_instance = input.bake.y;
     return vec4<f32>(min(shade(surface, input.position.xy), vec3<f32>(65504)), 1.0);
 }

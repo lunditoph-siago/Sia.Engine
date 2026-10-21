@@ -6,91 +6,57 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public static partial class PbrSceneTransport
 {
-    public static SceneTraceData Build(PbrSceneAsset scene, ulong maximumBytes = 128ul * 1024 * 1024, bool finest = false)
-        => BuildCore(scene, maximumBytes, finest, Identity(scene, finest));
-
-    /// <summary>Builds offline transport from static instances only, with a canonical static-domain identity.</summary>
-    public static SceneTraceData BuildStatic(PbrSceneAsset scene, ulong maximumBytes = 128ul * 1024 * 1024, bool finest = false)
-        => BuildCore(StaticSource(scene), maximumBytes, finest, StaticIdentity(scene, finest));
-
-    private static SceneTraceData BuildCore(PbrSceneAsset scene, ulong maximumBytes, bool finest, byte[] identity)
-        => BuildCore(scene, scene.Instances.Span, maximumBytes, finest, identity);
-
-    private static SceneTraceData BuildCore(PbrSceneAsset scene, ReadOnlySpan<PbrSceneInstance> instances,
-        ulong maximumBytes, bool finest, ReadOnlySpan<byte> identity)
+    internal static (float4 Albedo, float4 Emission) Surface(PbrMaterialAsset material)
     {
-        ArgumentNullException.ThrowIfNull(scene);
-        long capacity = 0;
-        foreach (var instance in instances) {
-            if (scene.Materials.Span[instance.Material].AlphaBlend) continue;
-            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
-            foreach (var node in tree.Nodes.Span[..(finest ? tree.Nodes.Length : tree.RootCount)]) {
-                if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
-                capacity = checked(capacity + node.TriangleCount);
-            }
-        }
-        if (capacity == 0 || capacity > 4_000_000 || ((ulong)capacity * 16) + 32 > maximumBytes)
-            throw new InvalidOperationException("Scene transport exceeds its configured build budget or triangle limit.");
-        var triangles = GC.AllocateUninitializedArray<SceneTraceTriangle>((int)capacity);
-        var count = 0;
-        foreach (var instance in instances) {
-            var material = scene.Materials.Span[instance.Material];
-            if (material.AlphaBlend) continue; // no alpha-mask representation exists yet
-            var tree = scene.Geometry.Span[instance.Geometry].Build.Tree;
-            var surface = Surface(material);
-            foreach (var node in tree.Nodes.Span[..(finest ? tree.Nodes.Length : tree.RootCount)]) {
-                if (finest ? node.ChildCount != 0 : node.Parent >= 0) continue;
-                var indices = tree.Indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3);
-                foreach (var triangle in Triangles(tree.Vertices, indices, instance.Transform, surface))
-                    triangles[count++] = triangle;
-            }
-        }
-        return new(triangles.AsSpan(0, count), maximumBytes, identity);
+        var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
+        return (new(material.Parameters.BaseColor * Average(material.BaseColor) * (1 - MathF.Min(1, MathF.Max(0, metal))), material.DoubleSided ? 1 : 0),
+            new(material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive), material.AlphaBlend ? 1 : 0));
     }
 
-    public static byte[] Identity(PbrSceneAsset scene, bool finest = false)
+    internal static byte[] ReferenceIdentity(PbrSceneData scene, Func<PbrMeshBinding, MeshManifest> mesh,
+        Func<PbrMaterialSlot, PbrMaterialAsset> material, CancellationToken token)
     {
-        ArgumentNullException.ThrowIfNull(scene);
-        var hash = new SceneIdentityHash();
-        void Record(float4 v)
-        {
-            Span<float4> one = [v];
-            hash.AppendData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(one));
-        }
-        Record(new(scene.Geometry.Length, scene.Materials.Length, scene.Instances.Length, finest ? 1 : 0));
-        Span<float4> positions = stackalloc float4[256];
-        foreach (var mesh in scene.Geometry.Span) {
-            var tree = mesh.Build.Tree;
-            if (finest) {
-                AppendFinestIdentity(hash, tree, positions);
-                continue;
+        // Source revisions are deliberately conservative: authored normal/UV changes may invalidate a bake.
+        // Per-binding cache avoids repeatedly averaging texture pixels for repeated instances.
+        var bindings = new byte[scene.Bindings.Length][];
+        return ReferenceIdentity(scene.Instances, at => {
+            if (bindings[at] is not { } source) {
+                var binding = scene.Bindings[at];
+                source = ReferenceBindingIdentity(mesh(binding).SourceHash, binding.Materials.Length,
+                    index => (binding.Materials[index].Slot, material(binding.Materials[index])), token);
+                bindings[at] = source;
             }
-            var vertices = tree.Vertices;
-            var indices = tree.Indices;
-            Record(new(vertices.Length, indices.Length, tree.RootCount, 0));
-            for (var offset = 0; offset < vertices.Length; offset += positions.Length) {
-                var count = System.Math.Min(positions.Length, vertices.Length - offset);
-                for (var i = 0; i < count; i++)
-                    positions[i] = new(vertices[offset + i].Position, 0);
-                hash.AppendData(MemoryMarshal.AsBytes(positions[..count]));
-            }
-            foreach (var node in tree.Nodes.Span[..tree.RootCount])
-                hash.AppendData(MemoryMarshal.AsBytes(indices.Slice(node.TriangleOffset * 3, node.TriangleCount * 3)));
+            return source;
+        }, token);
+    }
+
+    internal static byte[] ReferenceBindingIdentity(string sourceHash, int count,
+        Func<int, (int Slot, PbrMaterialAsset Material)> material, CancellationToken token)
+    {
+        var revision = new SceneIdentityHash(); revision.AppendData(Convert.FromHexString(sourceHash)); Count(revision, count);
+        for (var at = 0; at < count; at++) {
+            token.ThrowIfCancellationRequested(); var slot = material(at); Count(revision, slot.Slot);
+            var surface = Surface(slot.Material); Record(revision, surface.Albedo); Record(revision, surface.Emission);
         }
-        foreach (var material in scene.Materials.Span) {
-            var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
-            Record(new(material.Parameters.BaseColor * Average(material.BaseColor) * (1 - MathF.Min(1, MathF.Max(0, metal))), material.DoubleSided ? 1 : 0));
-            Record(new(material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive), material.AlphaBlend ? 1 : 0));
-        }
-        foreach (var instance in scene.Instances.Span) {
-            Record(new(instance.Geometry, instance.Material, instance.Dynamic ? 1 : 0, 0));
-            Record(instance.Transform.c0);
-            Record(instance.Transform.c1);
-            Record(instance.Transform.c2);
-            Record(instance.Transform.c3);
+        return revision.Finish();
+    }
+
+    internal static byte[] ReferenceIdentity(ReadOnlySpan<PbrMeshInstance> instances, Func<int, byte[]> binding, CancellationToken token)
+    {
+        var hash = new SceneIdentityHash(); hash.AppendData("SIAPBRREFERENCETRACE1"u8);
+        Span<byte> id = stackalloc byte[16]; Count(hash, instances.Length);
+        foreach (var instance in instances) {
+            token.ThrowIfCancellationRequested();
+            instance.Id.TryWriteBytes(id, bigEndian: true, out _); hash.AppendData(id); hash.AppendData(binding(instance.Binding));
+            Record(hash, instance.Transform.c0); Record(hash, instance.Transform.c1); Record(hash, instance.Transform.c2); Record(hash, instance.Transform.c3);
         }
         return hash.Finish();
     }
+
+    private static void Record(SceneIdentityHash target, float4 value)
+    { Span<float4> row = [value]; target.AppendData(MemoryMarshal.AsBytes(row)); }
+    private static void Count(SceneIdentityHash target, int value)
+    { Span<byte> bytes = stackalloc byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes, value); target.AppendData(bytes); }
 
     private static float3 Average(PbrTextureData? texture)
     {
