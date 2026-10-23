@@ -3,7 +3,7 @@ using Sia.Math;
 
 namespace Sia.Engine.Rendering;
 
-public sealed class IblEnvironmentAsset
+public sealed partial class IblEnvironmentAsset
 {
     public const int CubeSize = 128;
     public const int MipCount = 8;

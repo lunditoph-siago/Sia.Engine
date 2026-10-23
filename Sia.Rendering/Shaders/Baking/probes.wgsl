@@ -23,7 +23,17 @@ struct ProbeConfig {
 @group(0) @binding(10) var probe_environment_sampler: sampler;
 #endif
 
+#ifdef PROBE_REFERENCE_ENVIRONMENT
+@group(0) @binding(11) var probe_reference_environment: texture_cube<f32>;
+@group(0) @binding(12) var probe_reference_sampler: sampler;
+#endif
+
 fn probe_sky(direction: vec3<f32>, sky: Sky, reference: bool) -> vec3<f32> {
+#ifdef PROBE_REFERENCE_ENVIRONMENT
+    if (reference) {
+        return textureSampleLevel(probe_reference_environment, probe_reference_sampler, direction, 0.0).rgb * reference_config.shape.z;
+    }
+#endif
 #ifdef PROBE_ENVIRONMENT
     if (!reference) {
         return textureSampleLevel(probe_environment, probe_environment_sampler, direction, 0.0).rgb * config.shape.z;

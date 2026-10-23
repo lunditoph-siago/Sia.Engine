@@ -57,7 +57,7 @@ public sealed class DiffuseProbeGpu : IDisposable
 
     internal static string ShaderSourcePaired(World world) => CompileProbe(world, true, true);
 
-    private static string CompileProbe(World world, bool instanced, bool paired = false, bool environment = false)
+    private static string CompileProbe(World world, bool instanced, bool paired = false, bool environment = false, bool referenceEnvironment = false)
     {
         ArgumentNullException.ThrowIfNull(world);
         string? Read(string module) => RenderingShaderSource.AcquireModule(world, module) is { } entity
@@ -66,6 +66,7 @@ public sealed class DiffuseProbeGpu : IDisposable
         if (instanced) { defines["INSTANCE_PROBE_TRACE"] = "1"; defines["INSTANCE_TRACE_FILTER"] = "1"; }
         if (paired) { defines["PAIRED_PROBE_TRACE"] = "1"; defines["INSTANCE_TRACE_REFERENCE"] = "1"; }
         if (environment) defines["PROBE_ENVIRONMENT"] = "1";
+        if (referenceEnvironment) defines["PROBE_REFERENCE_ENVIRONMENT"] = "1";
         return RenderingShaderSource.CompileResolved(Read("rendering/Baking/probes")
             ?? throw new InvalidOperationException("Missing probe bake source."), (module, _) => Read(module),
             defines);
@@ -90,11 +91,23 @@ public sealed class DiffuseProbeGpu : IDisposable
                 + (ulong)dimensions.x * dimensions.y * dimensions.z * k_TextureBands * 8));
     }
 
+    public DiffuseProbeGpu(in GpuFrame frame, DiffuseProbeAsset asset, SceneTraceData? tracing,
+        ulong maximumBytes, DiffuseProbeReference? reference)
+        : this(frame, asset, tracing, maximumBytes, reference, null, null) { }
+
     /// <param name="environment">Optional borrowed live miss source; its owner must outlive this field.</param>
     public DiffuseProbeGpu(in GpuFrame frame, DiffuseProbeAsset asset,
         SceneTraceData? tracing = null, ulong maximumBytes = 160ul * 1024 * 1024,
         DiffuseProbeReference? reference = null, IblEnvironmentGpu? environment = null)
+        : this(frame, asset, tracing, maximumBytes, reference, environment, null) { }
+
+    /// <param name="referenceEnvironment">Borrowed frozen cube for paired transport; retain its owner and do not update it.</param>
+    public DiffuseProbeGpu(in GpuFrame frame, DiffuseProbeAsset asset, SceneTraceData? tracing,
+        ulong maximumBytes, DiffuseProbeReference? reference, IblEnvironmentGpu? environment,
+        IblEnvironmentGpu? referenceEnvironment)
     {
+        if (referenceEnvironment is not null && reference is null)
+            throw new ArgumentException("A frozen HDR environment requires paired reference transport.", nameof(referenceEnvironment));
         if (RequiredBytes(asset.Dimensions, tracing, reference) > maximumBytes)
             throw new ArgumentException("Probe field and complete transport exceed the GPU budget.", nameof(maximumBytes));
         _gpu = new(frame, maximumBytes);
@@ -107,7 +120,7 @@ public sealed class DiffuseProbeGpu : IDisposable
             if (tracing is not null) (_diffuseBound, _emissionBound) = SurfaceBounds(tracing);
             if (reference is not null) {
                 var bounds = SurfaceBounds(reference.Scene);
-                _referenceBound = IncidentBound(SkyBound(reference.Sky), bounds.Emission, bounds.Diffuse, reference.LightRadiance);
+                _referenceBound = IncidentBound(referenceEnvironment?.MaximumRadiance ?? SkyBound(reference.Sky), bounds.Emission, bounds.Diffuse, reference.LightRadiance);
             }
             if (asset.Dimensions.x > _gpu.Limits.MaxTextureDimension3D
                 || asset.Dimensions.y > _gpu.Limits.MaxTextureDimension3D
@@ -169,7 +182,7 @@ public sealed class DiffuseProbeGpu : IDisposable
                 ReferenceInstances = _gpu.Upload<uint4>(reference.Scene.Instances.Span, WGPUBufferUsage.Storage);
                 Span<float4> referenceValues = stackalloc float4[11];
                 LightingValues(referenceValues, reference.Sky, reference.TowardLight, reference.LightRadiance,
-                    reference.MaximumDistance, reference.RayBias);
+                    reference.MaximumDistance, reference.RayBias, referenceEnvironment);
                 Wgpu.WriteBuffer<float4>(_gpu.Queue, ReferenceConfiguration.GetWgpu<WGPUBuffer>(), 0, referenceValues);
                 layoutEntries.Add(GpuBinding.Buffer(6, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 176));
                 layoutEntries.Add(GpuBinding.Buffer(7, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute));
@@ -183,10 +196,16 @@ public sealed class DiffuseProbeGpu : IDisposable
                 groupEntries.Add(GpuBinding.Texture(9, environment.CubeView.GetWgpu<WGPUTextureView>()));
                 groupEntries.Add(GpuBinding.Sampler(10, environment.Sampler));
             }
+            if (referenceEnvironment is not null) {
+                layoutEntries.Add(GpuBinding.Texture(11, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension.Cube));
+                layoutEntries.Add(GpuBinding.Sampler(12, WGPUShaderStage.Compute));
+                groupEntries.Add(GpuBinding.Texture(11, referenceEnvironment.CubeView.GetWgpu<WGPUTextureView>()));
+                groupEntries.Add(GpuBinding.Sampler(12, referenceEnvironment.Sampler));
+            }
             var layout = GpuBinding.Layout(_gpu, [.. layoutEntries]);
             _group = GpuBinding.Group(_gpu, layout, [.. groupEntries]);
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, layout);
-            var source = CompileProbe(frame.ResourceWorld, tracing.IsInstanced, SignedCorrection, environment is not null);
+            var source = CompileProbe(frame.ResourceWorld, tracing.IsInstanced, SignedCorrection, environment is not null, referenceEnvironment is not null);
             var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, source, "scene-probe-transport"));
             _pipeline = CreatePipeline(_gpu, pipelineLayout, shader);
         }
@@ -220,7 +239,7 @@ public sealed class DiffuseProbeGpu : IDisposable
         if (SignedCorrection && (_lastSky is not null && (!_lastSky.Equals(sky)
             || !_lastTowardLight.Equals(towardLight) || !_lastRadiance.Equals(lightRadiance)))) InvalidateCorrection();
         Span<float4> values = stackalloc float4[11];
-        LightingValues(values, sky, towardLight, lightRadiance, maximumDistance, _reference?.RayBias ?? .01f);
+        LightingValues(values, sky, towardLight, lightRadiance, maximumDistance, _reference?.RayBias ?? .01f, _environment);
         values[10] = new(_cursor, updates, samples, 0);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _config.GetWgpu<WGPUBuffer>(), 0, values);
         _cursor = (_cursor + updates) % (uint)Count;
@@ -229,12 +248,12 @@ public sealed class DiffuseProbeGpu : IDisposable
     }
 
     private void LightingValues(Span<float4> values, ProceduralSky sky, float3 towardLight, float3 lightRadiance,
-        float maximumDistance, float bias)
+        float maximumDistance, float bias, IblEnvironmentGpu? environment)
     {
         values[0] = new(sky.Horizon, sky.Intensity); values[1] = new(sky.Zenith, sky.SunExponent); values[2] = new(sky.Ground, 0);
         values[3] = new(math.normalize(sky.SunDirection), 0); values[4] = new(sky.SunRadiance, 0);
         values[5] = new(_shape.Origin, _shape.Dimensions.x); values[6] = new(_shape.Step, _shape.Dimensions.y);
-        values[7] = new(_shape.Dimensions.z, Count, _environment?.CubeRadianceScale ?? 0, _radianceScale);
+        values[7] = new(_shape.Dimensions.z, Count, environment?.CubeRadianceScale ?? 0, _radianceScale);
         values[8] = new(math.normalize(towardLight), maximumDistance);
         values[9] = new(lightRadiance, bias); values[10] = default;
     }

@@ -68,7 +68,7 @@ internal static partial class LightmapFiles
         {
             token.ThrowIfCancellationRequested(); var at = FindProduct(reference); var expected = Set.Products[at];
             var counts = Set.ProductCounts(at);
-            if (PbrLightmapData.RequiredBytes(counts.Receivers, counts.Charts, counts.Pages) > _maximumProductBytes)
+            if (PbrLightmapData.RequiredBytes(counts.Receivers, counts.Charts, counts.Pages, Set.BakeSettings) > _maximumProductBytes)
                 throw new InvalidDataException("Lighting member exceeds the decoded metadata admission.");
             Register(expected.ContentHash, expected.Id, expected.EncodedBytes);
             try {

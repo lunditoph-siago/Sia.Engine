@@ -233,6 +233,8 @@ public sealed class PbrRenderer :
             ArgumentNullException.ThrowIfNull(input.Set); ArgumentNullException.ThrowIfNull(input.PrepareProduct); ArgumentNullException.ThrowIfNull(input.AcquireProduct);
             ArgumentNullException.ThrowIfNull(input.PreparePage); ArgumentNullException.ThrowIfNull(input.AcquirePage);
             ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
+            if (input.Set.BakeSettings.Environment is not null)
+                input.Set.BakeSettings.ValidateEnvironment(Settings.BakedEnvironment);
             lightmapRows = raster is not null ? input.Set.BindReceivers(raster.Instances.Span)
                 : input.Set.BindReceivers(stream!);
             _staticInstanceIds ??= [];
@@ -294,7 +296,8 @@ public sealed class PbrRenderer :
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))
                     throw new ArgumentOutOfRangeException(nameof(settings), "Invalid dynamic probe update budget.");
                 Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference,
-                    Settings.BakedEnvironment is null ? null : Environment);
+                    Settings.BakedEnvironment is null ? null : Environment,
+                    Settings.DynamicSceneGi && Settings.Lightmaps?.Set.BakeSettings.Environment is not null ? Environment : null);
             }
         }
         catch {
