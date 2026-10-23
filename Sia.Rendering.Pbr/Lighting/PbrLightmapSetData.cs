@@ -32,9 +32,9 @@ public sealed partial class PbrLightmapSetData
     public PbrLightmapBakeSettings BakeSettings { get; }
     public ReadOnlySpan<PbrLightmapProductReference> Products => _products;
     public ReadOnlySpan<PbrLightmapReceiverReference> Receivers => _receivers;
-    public ulong EncodedBytes => 232ul + (ulong)_products.Length * 84 + (ulong)_receivers.Length * 152;
+    public ulong EncodedBytes => 232ul + (ulong)BakeSettings.EnvironmentBytes + (ulong)_products.Length * 84 + (ulong)_receivers.Length * 152;
     /// <summary>Owned array values, hash characters and settings; excludes object headers and validation scratch.</summary>
-    public ulong PayloadBytes => OwnedBytes(_products.Length, _receivers.Length);
+    public ulong PayloadBytes => OwnedBytes(_products.Length, _receivers.Length) + BakeSettings.EnvironmentPayloadBytes;
 
     private PbrLightmapSetData(AssetId id, string scene, PbrLightmapBakeSettings settings,
         PbrLightmapProductReference[] products, PbrLightmapReceiverReference[] receivers, CancellationToken token)
@@ -49,7 +49,7 @@ public sealed partial class PbrLightmapSetData
         ulong maximumBytes=MaximumPayloadBytes, CancellationToken cancellationToken=default)
     {
         ArgumentNullException.ThrowIfNull(settings); settings.Validate(); cancellationToken.ThrowIfCancellationRequested();
-        Admit(products.Length,receivers.Length,maximumBytes);
+        Admit(products.Length,receivers.Length,maximumBytes,settings.Environment is not null);
         var copied=receivers.ToArray();
         for (var at=0;at<copied.Length;at++) {
             cancellationToken.ThrowIfCancellationRequested(); var entry=copied[at]; entry.Receiver.Quantization.Validate();
@@ -59,21 +59,27 @@ public sealed partial class PbrLightmapSetData
     }
 
     public static ulong RequiredBytes(int products,int receivers)
+        => RequiredBytes(products,receivers,false);
+
+    public static ulong RequiredBytes(int products,int receivers,PbrLightmapBakeSettings? settings)
+        => RequiredBytes(products,receivers,settings?.Environment is not null);
+
+    private static ulong RequiredBytes(int products,int receivers,bool environment)
     {
         if (products is <1 or >MaximumProducts || receivers is <1 or >MaximumReceivers)
             throw new ArgumentException("Lighting set product/receiver counts exceed their admission.");
-        var encoded=232ul+(ulong)products*84+(ulong)receivers*152;
+        var encoded=232ul+(environment?48ul:0)+(ulong)products*84+(ulong)receivers*152;
         if (encoded>MaximumEncodedBytes) throw new ArgumentException("Lighting set exceeds its encoded admission.");
-        return System.Math.Max(encoded,OwnedBytes(products,receivers));
+        return System.Math.Max(encoded,OwnedBytes(products,receivers)+(environment?256ul:0));
     }
 
     private static ulong OwnedBytes(int products,int receivers)
         => 360ul+(ulong)products*((ulong)Unsafe.SizeOf<PbrLightmapProductReference>()+256+(ulong)Unsafe.SizeOf<(int,int,int)>())
             +(ulong)receivers*((ulong)Unsafe.SizeOf<PbrLightmapReceiverReference>()+128);
 
-    private static void Admit(int products,int receivers,ulong maximumBytes)
+    private static void Admit(int products,int receivers,ulong maximumBytes,bool environment=false)
     {
-        if (RequiredBytes(products,receivers)>maximumBytes)
+        if (RequiredBytes(products,receivers,environment)>maximumBytes)
             throw new ArgumentException("Lighting set exceeds its encoded/owned payload budget.");
     }
 
@@ -94,9 +100,11 @@ public sealed partial class PbrLightmapSetData
     {
         if (!ProductId.IsValid || !ValidHash(SceneIdentity)) throw new ArgumentException("Invalid lighting set identity.");
         BakeSettings.Validate(); var productIds=new HashSet<AssetId>();
+        if (BakeSettings.Environment is { } environment && environment.Id==ProductId)
+            throw new ArgumentException("Lighting environment aliases its set identity.");
         foreach (var product in _products) {
             token.ThrowIfCancellationRequested();
-            if (!product.Id.IsValid || product.Id==ProductId || !productIds.Add(product.Id)
+            if (!product.Id.IsValid || product.Id==ProductId || product.Id==BakeSettings.Environment?.Id || !productIds.Add(product.Id)
                 || !ValidHash(product.ContentHash) || !ValidHash(product.BakeIdentity)
                 || product.EncodedBytes is <236 or >PbrLightmapData.MaximumEncodedBytes)
                 throw new ArgumentException("Invalid or aliased independent lighting product.");
@@ -121,14 +129,14 @@ public sealed partial class PbrLightmapSetData
         }
         for (var at=0;at<_counts.Length;at++) {
             token.ThrowIfCancellationRequested(); var counts=_counts[at];
-            _=PbrLightmapData.RequiredBytes(counts.Receivers,counts.Charts,counts.Pages);
+            _=PbrLightmapData.RequiredBytes(counts.Receivers,counts.Charts,counts.Pages,BakeSettings);
             var firstChart=0;
             for (var row=0;row<counts.Receivers;row++) {
                 if (!rows.TryGetValue((at,row),out var receiver) || receiver.FirstChart!=firstChart)
                     throw new ArgumentException("Lighting member receiver rows and chart ranges must be complete and ordered.");
                 firstChart+=receiver.ChartCount;
             }
-            var encoded=236ul+(ulong)counts.Receivers*120+(ulong)counts.Charts*48+(ulong)counts.Pages*68;
+            var encoded=236ul+(ulong)BakeSettings.EnvironmentBytes+(ulong)counts.Receivers*120+(ulong)counts.Charts*48+(ulong)counts.Pages*68;
             if (encoded!=(ulong)_products[at].EncodedBytes)
                 throw new ArgumentException("Lighting member encoded size differs from its declared receiver shape.");
         }
@@ -167,17 +175,15 @@ public sealed partial class PbrLightmapSetData
     }
 
     private static bool SettingsEqual(PbrLightmapBakeSettings a,PbrLightmapBakeSettings b)
-    {
-        Span<byte> first=stackalloc byte[104]; Span<byte> second=stackalloc byte[104]; a.Encode(first); b.Encode(second);
-        return first.SequenceEqual(second);
-    }
+        => a.SameInputs(b);
 
     private string ComputeBakeIdentity(CancellationToken token)
     {
         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIALIGHTMAP-SET-INPUT1"u8); Span<byte> bytes=stackalloc byte[104];
+        hash.AppendData(BakeSettings.Environment is null ? "SIALIGHTMAP-SET-INPUT1"u8 : "SIALIGHTMAP-SET-INPUT-HDR1"u8);
+        Span<byte> bytes=stackalloc byte[152];
         _=Convert.FromHexString(SceneIdentity,bytes[..32],out _,out _); hash.AppendData(bytes[..32]);
-        BakeSettings.Encode(bytes); hash.AppendData(bytes);
+        BakeSettings.Encode(bytes); hash.AppendData(bytes[..BakeSettings.InputBytes]);
         var order=Enumerable.Range(0,_receivers.Length).OrderBy(at=>_receivers[at].Receiver.InstanceId)
             .ThenBy(at=>_receivers[at].Receiver.MaterialSlot);
         foreach (var at in order) {
