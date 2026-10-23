@@ -9,7 +9,10 @@ namespace Sia.Engine.Example;
 // Application IO and acquisition composition; Rendering owns the record/value codecs.
 internal static class LightingFiles
 {
-    internal sealed record Prepared(IblEnvironmentRecord? Environment, DiffuseProbeRecord? Probes);
+    internal sealed record Prepared(IblEnvironmentRecord? Environment, DiffuseProbeRecord? Probes)
+    {
+        internal AssetContent<IblEnvironmentRecord>? EnvironmentContent { get; init; }
+    }
 
     internal static async Task<Prepared> PrepareAsync(string? environment, string? probes, HttpClient http,
         CancellationToken cancellationToken = default)
@@ -57,7 +60,21 @@ internal static class LightingFiles
         _ = world.GetAddon<AssetLibrary>();
         AssetLibrary.RegisterAsset<IblEnvironmentResource, IblEnvironmentRecord>();
         AssetLibrary.RegisterAsset<DiffuseProbeResource, DiffuseProbeRecord>();
-        var environment = prepared.Environment is { } e ? world.AcquireAsset(e, owner) : default;
+        Entity environment = default;
+        if (prepared.EnvironmentContent is { } content) {
+            var record = prepared.Environment ?? throw new InvalidAssetException("Declared environment has no prepared record.");
+            if (record.Data.Write(Stream.Null) != content.Chunks[0].Id)
+                throw new InvalidAssetException("Prepared environment differs from its declared content.");
+            var library = world.GetAddon<AssetLibrary>();
+            var previous = library.Entities.Values.FirstOrDefault(item => item.Get<AssetMetadata>().Id == content.Id);
+            if (previous.IsValid && (Unsafe.IsNullRef(ref previous.GetOrNullRef<IblEnvironmentResource>())
+                || previous.Get<IblEnvironmentResource>().Data.Write(Stream.Null) != content.Chunks[0].Id))
+                throw new InvalidAssetException("Environment identity already has another kind or content revision.");
+            // A capture may use this same immutable payload in another logical slot.
+            // Each slot needs a distinct record identity; the payload arrays remain shared.
+            environment = world.AcquireAsset(content.Id, () => record with { }, owner);
+        }
+        else if (prepared.Environment is { } e) environment = world.AcquireAsset(e, owner);
         var probes = prepared.Probes is { } p ? world.AcquireAsset(p, owner) : default;
         return (environment, probes);
     }

@@ -2,6 +2,7 @@
 using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Math;
+using Sia.Asset;
 
 namespace Sia.Engine.Example;
 
@@ -12,6 +13,7 @@ internal static partial class LightmapCook
     {
         public required Guid Product { get; init; }
         public required Guid[] StaticInstances { get; init; }
+        public ScenePack.Entry? Environment { get; init; }
         public float[] Horizon { get; init; } = [.55f, .6f, .68f];
         public float[] Zenith { get; init; } = [.12f, .24f, .55f];
         public float[] Ground { get; init; } = [.08f, .08f, .07f];
@@ -28,8 +30,12 @@ internal static partial class LightmapCook
         public ulong MaximumStagingBytes { get; init; } = 512ul * 1024 * 1024;
         public int MaximumPageResolution { get; init; } = 64;
 
-        internal PbrLightmapBakeSettings Settings()
+        internal PbrLightmapBakeSettings Settings(IblEnvironmentRecord? environment = null)
         {
+            if (Environment is { } source && (source.Id == Guid.Empty || string.IsNullOrWhiteSpace(source.Input)))
+                throw new InvalidDataException("Lightmap environment requires a nonempty logical ID and input path.");
+            if (environment is not null && Environment is null)
+                throw new InvalidDataException("Undeclared lightmap environment input.");
             if (MaximumPageResolution is < 2 or > 8192 || (MaximumPageResolution & (MaximumPageResolution - 1)) != 0)
                 throw new InvalidDataException("Lightmap page resolution must be a power of two from 2 to 8192.");
             if (Product == Guid.Empty || StaticInstances is null || StaticInstances.Length is < 1 or > PbrLightmapData.MaximumReceivers
@@ -38,6 +44,8 @@ internal static partial class LightmapCook
             static float3 Vector(float[] values) => values is { Length: 3 } && values.All(float.IsFinite)
                 ? new(values[0], values[1], values[2]) : throw new InvalidDataException("Bake vectors require three finite components.");
             return new() {
+                Environment = environment is null ? null : new AssetContent<IblEnvironmentRecord>(new(Environment!.Id),
+                    [new AssetChunk(environment.Data.Write(Stream.Null), IblEnvironmentAsset.EncodedBytes)]),
                 Sky = new ProceduralSky { Horizon = Vector(Horizon), Zenith = Vector(Zenith), Ground = Vector(Ground),
                     SunDirection = Vector(SunDirection), SunRadiance = Vector(SunRadiance), SunExponent = SunExponent, Intensity = SkyIntensity },
                 TowardLight = Vector(TowardLight), LightRadiance = Vector(LightRadiance), Samples = Samples, MaximumDistance = MaximumDistance, RayBias = RayBias
