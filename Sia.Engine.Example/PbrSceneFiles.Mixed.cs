@@ -32,8 +32,6 @@ internal static partial class PbrSceneFiles
         ArgumentOutOfRangeException.ThrowIfNegative(maximumRequiredBytes);
         var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
         var prepared = await reader.References(); var choices = new Dictionary<Guid, PbrMeshPresentation>();
-        var rasters = new Dictionary<AssetId, MeshRasterRecord>(); var virtuals = new Dictionary<AssetId, MeshVirtualRecord>();
-        var bvhs = new Dictionary<AssetId, MeshBvhRecord>();
         foreach (var instance in prepared.Scene.Data.Instances) {
             cancellationToken.ThrowIfCancellationRequested();
             var binding = prepared.Scene.Data.Bindings[instance.Binding]; var mesh = prepared.Meshes[binding.Mesh.Value].Data;
@@ -48,23 +46,28 @@ internal static partial class PbrSceneFiles
         if (rasterInstances is not null)
             foreach (var id in rasterInstances)
                 if (!choices.ContainsKey(id)) throw new ArgumentException("Requested conventional instance is absent from the scene.", nameof(rasterInstances));
+        var rasterIds = new List<AssetId>(); var virtualIds = new List<AssetId>(); var bvhIds = new List<AssetId>();
+        var uniqueRasters = new HashSet<AssetId>(); var uniqueVirtuals = new HashSet<AssetId>(); var uniqueBvhs = new HashSet<AssetId>();
         for (var i = 0; i < prepared.Scene.Data.Instances.Length; i++) {
             var instance = prepared.Scene.Data.Instances[i];
             cancellationToken.ThrowIfCancellationRequested();
             var mesh = prepared.Meshes[prepared.Scene.Data.Bindings[instance.Binding].Mesh.Value].Data;
             if (choices[instance.Id] == PbrMeshPresentation.Raster) {
                 var product = mesh.Raster ?? throw new InvalidAssetException("Selected Mesh has no Raster product.");
-                if (!rasters.ContainsKey(product.Id)) rasters.Add(product.Id, await reader.Read<MeshRasterRecord>(product.Id, MeshRasterRecord.Load));
+                if (uniqueRasters.Add(product.Id)) rasterIds.Add(product.Id);
             }
             else {
                 var product = mesh.Virtual ?? throw new InvalidAssetException("Selected Mesh has no Virtual product.");
-                if (!virtuals.ContainsKey(product.Id)) virtuals.Add(product.Id, await reader.Read<MeshVirtualRecord>(product.Id, MeshVirtualRecord.Load));
+                if (uniqueVirtuals.Add(product.Id)) virtualIds.Add(product.Id);
             }
             if (tracing) {
                 var product = mesh.Bvh ?? throw new InvalidAssetException("Selected trace Mesh has no independent BVH product.");
-                if (!bvhs.ContainsKey(product.Id)) bvhs.Add(product.Id, await reader.Read<MeshBvhRecord>(product.Id, MeshBvhRecord.Load));
+                if (uniqueBvhs.Add(product.Id)) bvhIds.Add(product.Id);
             }
         }
+        var rasters = await reader.ReadMany<MeshRasterRecord>(rasterIds, MeshRasterRecord.Load);
+        var virtuals = await reader.ReadMany<MeshVirtualRecord>(virtualIds, MeshVirtualRecord.Load);
+        var bvhs = await reader.ReadMany<MeshBvhRecord>(bvhIds, MeshBvhRecord.Load);
         var mixed = PbrSceneComposition.ResolveMixed(prepared.Scene.Data, i => choices[i.Id], r => prepared.Meshes[r.Value].Data,
             r => rasters[r.Value].Data, r => virtuals[r.Value].Data, r => prepared.Materials[r.Value].Data, r => prepared.Textures[r.Value].Data,
             cancellationToken: cancellationToken);

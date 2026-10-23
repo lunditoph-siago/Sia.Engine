@@ -6,7 +6,7 @@ namespace Sia.Engine.Rendering.Pbr;
 // Rendering owns the root, bounded member metadata slab, coefficient layers and queue lifetime.
 internal sealed unsafe class PbrLightmapGpu : IDisposable
 {
-    private const int MetadataWidth = 256;
+    private const int MetadataWidth = 512;
     private readonly GpuResources _gpu;
     private readonly Entity _pages, _mapping, _metadata;
     private readonly int _mapWidth;

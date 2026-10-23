@@ -3,6 +3,9 @@
 #import pbr/lighting
 #import pbr/Common/reconstruction
 #import pbr/Common/triangle_debug
+#if LIVE_REFLECTIONS
+#import pbr/Common/reflection_storage
+#endif
 #if SURFACE_DATA
 #import rendering/Visibility/surface_data
 #endif
@@ -11,14 +14,32 @@
 @group(3) @binding(1) var depth: texture_depth_2d;
 @group(3) @binding(2) var<storage, read> tile_data: array<u32>;
 #if LIVE_REFLECTIONS
-@group(3) @binding(3) var hdr: texture_storage_2d<rgba32float, write>;
-@group(3) @binding(7) var reflection_specular: texture_storage_2d_array<rgba32float, write>;
+@group(3) @binding(3) var hdr: texture_storage_2d_array<rgba8unorm, write>;
+@group(3) @binding(7) var reflection_specular: texture_storage_2d_array<rgba8unorm, write>;
 #else
 @group(3) @binding(3) var hdr: texture_storage_2d<rgba16float, write>;
 #endif
 #if SURFACE_DATA
 @group(3) @binding(4) var normal_roughness: texture_storage_2d<rgba16float, write>;
 @group(3) @binding(5) var base_metallic: texture_storage_2d<rgba8unorm, write>;
+#endif
+
+fn resolve_store_opaque(pixel: vec2<i32>, value: vec4<f32>) {
+#if LIVE_REFLECTIONS
+    for (var plane = 0u; plane < 4u; plane++) {
+        textureStore(hdr, pixel, i32(plane), reflection_pack_float(value, plane));
+    }
+#else
+    textureStore(hdr, pixel, value);
+#endif
+}
+
+#if LIVE_REFLECTIONS
+fn resolve_store_specular(pixel: vec2<i32>, layer: i32, value: vec4<f32>) {
+    for (var plane = 0u; plane < 4u; plane++) {
+        textureStore(reflection_specular, pixel, layer * 4 + i32(plane), reflection_pack_float(value, plane));
+    }
+}
 #endif
 
 @compute @workgroup_size(8, 8)
@@ -29,8 +50,8 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
     let visible = textureLoad(ids, vec2<i32>(id.xy), 0).x;
 #if LIVE_REFLECTIONS
     // Initialize every receiver lane, including debug, discarded and background pixels.
-    textureStore(reflection_specular, vec2<i32>(id.xy), 0, vec4<f32>(0));
-    textureStore(reflection_specular, vec2<i32>(id.xy), 1, vec4<f32>(0));
+    resolve_store_specular(vec2<i32>(id.xy), 0, vec4<f32>(0));
+    resolve_store_specular(vec2<i32>(id.xy), 1, vec4<f32>(0));
 #endif
     if (frame.size.w == 4u) {
         var color = vec3<f32>(0.02);
@@ -40,7 +61,7 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
                 color = triangle_debug_color(visible - 1u);
             }
         }
-        textureStore(hdr, vec2<i32>(id.xy), vec4<f32>(color, 1.0));
+        resolve_store_opaque(vec2<i32>(id.xy), vec4<f32>(color, 1.0));
         return;
     }
     if (visible != 0u) {
@@ -50,7 +71,7 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
     let world = frame.inv_vp * vec4<f32>(ndc, 1, 1);
     let direction = unit(world.xyz / world.w - frame.eye.xyz);
     let color = textureSampleLevel(environment, environment_sampler, direction, 0).rgb;
-    textureStore(hdr, vec2<i32>(id.xy), vec4<f32>(color, 1));
+    resolve_store_opaque(vec2<i32>(id.xy), vec4<f32>(color, 1));
 #if SURFACE_DATA
     textureStore(normal_roughness, vec2<i32>(id.xy), vec4<f32>(0.0));
     textureStore(base_metallic, vec2<i32>(id.xy), vec4<f32>(0.0));
@@ -74,8 +95,8 @@ fn resolve_pixel(pixel: vec2<u32>) {
         let view = unit(frame.eye.xyz - surface.position);
         let weight = indirect_specular_weight(surface.normal, view, surface.base, surface.metal, surface.rough, brdf_lut, brdf_sampler) * surface.ao;
         let baseline = get_environment_specular(surface.position, reflect(-view, surface.normal), surface.rough) * weight;
-        textureStore(reflection_specular, vec2<i32>(pixel), 0, vec4<f32>(weight, f32(surface.source_instance + 1u)));
-        textureStore(reflection_specular, vec2<i32>(pixel), 1, vec4<f32>(baseline, surface.rough));
+        resolve_store_specular(vec2<i32>(pixel), 0, vec4<f32>(weight, f32(surface.source_instance + 1u)));
+        resolve_store_specular(vec2<i32>(pixel), 1, vec4<f32>(baseline, surface.rough));
     }
 #endif
 #if SURFACE_DATA
@@ -98,9 +119,9 @@ fn resolve_pixel(pixel: vec2<u32>) {
         }
     }
 #if LIVE_REFLECTIONS
-    textureStore(hdr, vec2<i32>(pixel), vec4<f32>(color, 1));
+    resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(color, 1));
 #else
-    textureStore(hdr, vec2<i32>(pixel), vec4<f32>(min(color, vec3<f32>(65504)), 1));
+    resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(min(color, vec3<f32>(65504)), 1));
 #endif
 }
 

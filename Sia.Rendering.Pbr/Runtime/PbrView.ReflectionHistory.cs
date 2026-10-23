@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Sia;
 using Sia.Engine.Camera;
 using Sia.Graphics.Reactive;
@@ -24,6 +25,11 @@ internal sealed unsafe partial class PbrView
     private float3 _historyForward;
     private float4x4 _pendingHistoryProjection;
     private float3 _pendingHistoryForward;
+    private PbrFrame _historyLighting;
+    private float4[]? _historyLights;
+    private ProceduralSky? _historySky, _pendingHistorySky;
+    private ulong _historyMaterialRevision, _pendingHistoryMaterialRevision;
+    private ulong _historyTransportRevision, _pendingHistoryTransportRevision;
     private bool HasHistory => _owner.Settings.Reflections?.History is not null;
     private RenderGraphTextureKey CompositionSignalKey => HasHistory ? _filteredSignalKey : _reflectionSignalKey;
 
@@ -36,6 +42,7 @@ internal sealed unsafe partial class PbrView
         _previousPoses = new PbrReflectionInstancePose[_reflectionCurrentPoses!.Length];
         for (var at = 0; at < _previousPoses.Length; at++) _previousPoses[at] = _reflectionCurrentPoses[at] with { Enabled = false };
         _uploadedPoseRows = new uint4[_reflectionPoseRows!.Length];
+        _historyLights = new float4[ShadowMatrixBase];
         _historyConfig = _gpu.Buffer(112, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
     }
 
@@ -45,9 +52,20 @@ internal sealed unsafe partial class PbrView
         var settings = _owner.Settings.Reflections!.History!; var camera = _frame.Camera.Get<CameraMatrices>();
         var forward = math.inverse(camera.View).c2.xyz;
         var cameraCut = _frame.Camera != _historyCamera || !_historyProjection.Equals(camera.Proj) || math.dot(forward, _historyForward) < .8f;
+        _pendingHistorySky = _frame.Frame.MainWorld.AcquireAddon<EnvironmentLighting>().Sky;
+        _pendingHistoryMaterialRevision = _owner.ResourceRevision;
+        _pendingHistoryTransportRevision = _owner.ReflectionTransportRevision;
+        // Light or transport changes can alter radiance without changing either surface's identity.
+        var changed = _historyMaterialRevision != _pendingHistoryMaterialRevision
+            || _historyTransportRevision != _pendingHistoryTransportRevision || _historySky != _pendingHistorySky
+            || _historyLighting.Counts.x != _data.Counts.x || _historyLighting.Counts.y != _data.Counts.y
+            || _historyLighting.Size.w != _data.Size.w
+            || !MemoryMarshal.CreateReadOnlySpan(ref _historyLighting.Direction0, 8)
+                .SequenceEqual(MemoryMarshal.CreateReadOnlySpan(ref _data.Direction0, 8))
+            || !_historyLights.AsSpan(0, (int)_data.Counts.x * 4).SequenceEqual(_sceneData.AsSpan(0, (int)_data.Counts.x * 4));
         _pendingHistoryProjection = camera.Proj; _pendingHistoryForward = forward;
         _historyFrame = _owner.PreparedFrameIndex;
-        var reusable = _historyState.Prepare(_historyFrame, _width, _height, _data.ViewProjection, _data.Eye.xyz, settings.CameraCutDistance, cameraCut);
+        var reusable = _historyState.Prepare(_historyFrame, _width, _height, _data.ViewProjection, _data.Eye.xyz, settings.CameraCutDistance, cameraCut || changed);
         _historyPrepared = true; _historySurfaceEncoded = _historyHitEncoded = _historyEncoded = false;
         var matrix = _historyState.PreviousViewProjection;
         _historyUniform[0] = matrix.c0; _historyUniform[1] = matrix.c1; _historyUniform[2] = matrix.c2; _historyUniform[3] = matrix.c3;
@@ -71,6 +89,9 @@ internal sealed unsafe partial class PbrView
         if (!HasHistory || !_historyPrepared || frame != _historyFrame || !_historyEncoded) return;
         _historyState.Submitted(frame); _reflectionCurrentPoses!.CopyTo(_previousPoses!, 0);
         _historyCamera = _frame.Camera; _historyProjection = _pendingHistoryProjection;
+        _historySky = _pendingHistorySky; _historyMaterialRevision = _pendingHistoryMaterialRevision;
+        _historyTransportRevision = _pendingHistoryTransportRevision; _historyLighting = _data;
+        _sceneData.AsSpan(0, (int)_data.Counts.x * 4).CopyTo(_historyLights);
         _historyForward = _pendingHistoryForward; _historyPrepared = false;
     }
 

@@ -75,7 +75,12 @@ internal sealed class PbrLightmapProductStreaming : IDisposable
     internal void EndFrame()
     {
         RequireRunning(); if (!_inFrame) throw new InvalidOperationException("No product frame is open."); _inFrame = false;
-        try { Update(); }
+        var completed = _requests.Statistics.Completed;
+        try {
+            Update();
+            // Ready results occupy request slots until owner admission acknowledges them.
+            if (_requests.Statistics.Completed != completed) UpdateRequests();
+        }
         catch (Exception error) { _failure = error; throw; }
     }
 
@@ -85,10 +90,7 @@ internal sealed class PbrLightmapProductStreaming : IDisposable
         if (_pool.ActiveProduct is >= 0 and var active && !_wanted.ContainsKey(active)) Evict(active);
         for (var at = 0; at < _ids.Length; at++)
             if (_pool.Resident(at) is not null && !_wanted.ContainsKey(at) && _clock - _lastUsed[at] >= _idleFrames) Evict(at);
-        _demands.Clear();
-        foreach (var (product, priority) in _wanted)
-            if (_eligible[product] && !_pool.HasAllocation(product) && !_evicting[product]) _demands.Add(new(_ids[product], _bytes[product], priority));
-        _requests.Update(_demands);
+        UpdateRequests();
         _uploaded += _pool.Advance(_uploadBytesPerFrame - _uploaded);
         if (_pool.ActiveProduct >= 0) return;
         _ready.Clear();
@@ -107,6 +109,14 @@ internal sealed class PbrLightmapProductStreaming : IDisposable
             _uploaded += _pool.Advance(_uploadBytesPerFrame - _uploaded);
             if (_pool.ActiveProduct >= 0) return;
         }
+    }
+
+    private void UpdateRequests()
+    {
+        _demands.Clear();
+        foreach (var (product, priority) in _wanted)
+            if (_eligible[product] && !_pool.HasAllocation(product) && !_evicting[product]) _demands.Add(new(_ids[product], _bytes[product], priority));
+        _requests.Update(_demands);
     }
 
     private int Victim(int desired)
