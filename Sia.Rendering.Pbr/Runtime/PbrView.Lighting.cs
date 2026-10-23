@@ -19,9 +19,12 @@ internal sealed unsafe partial class PbrView
         var at = NextLight();
         if (!float.IsFinite(light.Range) || light.Range <= 0)
             throw new ArgumentException("Point light range must be positive and finite.");
-        _sceneData[at] = new(e.Get<GlobalTransform>().Affine.Translation, light.Range);
+        var position = e.Get<GlobalTransform>().Affine.Translation;
+        var radiance = LightRadiance(color);
+        _localRadianceBound += LocalRadianceBound(position, light.Range, radiance);
+        _sceneData[at] = new(position, light.Range);
         _sceneData[at + 1] = default;
-        _sceneData[at + 2] = new(LightRadiance(color), 0);
+        _sceneData[at + 2] = new(radiance, 0);
         _sceneData[at + 3] = new(0, 0, -1, 0);
     }
 
@@ -34,14 +37,17 @@ internal sealed unsafe partial class PbrView
         if (!float.IsFinite(light.Range) || light.Range <= .05f || !float.IsFinite(light.InnerAngle) || !float.IsFinite(light.OuterAngle)
             || light.InnerAngle < 0 || light.OuterAngle <= light.InnerAngle || light.OuterAngle >= MathF.PI / 2)
             throw new ArgumentException("Spot light requires range > .05 and 0 <= inner < outer < pi/2.");
+        var direction = LightDirection(transform.RotationScale.c2);
+        var radiance = LightRadiance(color);
+        _localRadianceBound += LocalRadianceBound(transform.Translation, light.Range, radiance);
         var layer = -1;
         if (_casters.Contains(e) && _spotCount < (uint)_frame.Frame.MainWorld.AcquireAddon<ShadowAtlasConfig>().MaxShadowedSpotLights) {
             layer = 3 + (int)_spotCount++;
             SetShadow(layer, CascadeSplitting.ComputeSpotViewProj(transform, light.OuterAngle, light.Range));
         }
         _sceneData[at] = new(transform.Translation, light.Range);
-        _sceneData[at + 1] = new(-math.normalize(transform.RotationScale.c2), 1);
-        _sceneData[at + 2] = new(LightRadiance(color), 0);
+        _sceneData[at + 1] = new(-direction, 1);
+        _sceneData[at + 2] = new(radiance, 0);
         _sceneData[at + 3] = new(MathF.Cos(light.InnerAngle), MathF.Cos(light.OuterAngle), layer, 0);
     }
 
@@ -55,9 +61,36 @@ internal sealed unsafe partial class PbrView
     private float3 LightRadiance(LightColor color)
     {
         var value = color.Color * color.Intensity;
+        if (!math.all(math.isfinite(value))) throw new ArgumentException("Live light radiance must be finite.");
         if (HasReflections && (!math.all(math.isfinite(value)) || math.any(value < 0) || math.any(value > 1e18f)))
             throw new ArgumentException("Live reflection lights require finite nonnegative radiance within transport admission.");
         return value;
+    }
+
+    private static float3 LightDirection(float3 direction)
+    {
+        var length = math.lengthsq(direction);
+        if (!math.all(math.isfinite(direction)) || !float.IsFinite(length) || length < 1e-12f)
+            throw new ArgumentException("Live light direction must be finite and nonzero.");
+        return math.normalize(direction);
+    }
+
+    private double LocalRadianceBound(float3 position, float range, float3 radiance)
+    {
+        if (!math.all(math.isfinite(position))) throw new ArgumentException("Live light position must be finite.");
+        var bounds = _owner.LightingBounds;
+        double squared = 0;
+        for (var c = 0; c < 3; c++) {
+            // Enclose CPU/GPU transform rounding before using the scene AABB.
+            var padding = 32d * 1.1920928955078125e-7 * System.Math.Max(1, System.Math.Max(System.Math.Abs(position[c]), System.Math.Max(System.Math.Abs(bounds.Min[c]), System.Math.Abs(bounds.Max[c]))));
+            var distance = System.Math.Max(0, System.Math.Max((double)bounds.Min[c] - position[c], (double)position[c] - bounds.Max[c]) - padding);
+            squared += distance * distance;
+        }
+        var rangeSquared = (double)range * range;
+        if (squared >= rangeSquared) return 0;
+        var peak = math.cmax(math.abs(radiance)); _owner.ValidateDirectRadiance(peak);
+        var cutoff = 1 - System.Math.Pow(squared / rangeSquared, 2);
+        return peak * cutoff * cutoff / System.Math.Max(squared, 1e-4);
     }
 
     private void Cull(WgpuReactiveRenderGraphPassContext context)
