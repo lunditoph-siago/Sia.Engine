@@ -169,7 +169,8 @@ public sealed class PbrRenderer :
 
     public PbrRenderer(in GpuFrame frame, PbrSceneStream scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
-        : this(frame, scene, null, outputFormat, settings) { }
+        : this(frame, scene, scene?.Raster, outputFormat,
+            settings ?? (scene?.Raster is null ? null : PbrRendererSettings.ForQuality(RenderQuality.Low))) { }
 
     private PbrRenderer(in GpuFrame frame, PbrSceneStream? stream, PbrRasterScene? raster,
         WGPUTextureFormat outputFormat, PbrRendererSettings? settings)
@@ -217,8 +218,8 @@ public sealed class PbrRenderer :
             ArgumentNullException.ThrowIfNull(input.Set); ArgumentNullException.ThrowIfNull(input.PrepareProduct); ArgumentNullException.ThrowIfNull(input.AcquireProduct);
             ArgumentNullException.ThrowIfNull(input.PreparePage); ArgumentNullException.ThrowIfNull(input.AcquirePage);
             ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
-            lightmapRows = stream is not null ? input.Set.BindReceivers(stream)
-                : input.Set.BindReceivers(raster!.Instances.Span);
+            lightmapRows = raster is not null ? input.Set.BindReceivers(raster.Instances.Span)
+                : input.Set.BindReceivers(stream!);
             _staticInstanceIds ??= [];
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
             if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
@@ -228,12 +229,12 @@ public sealed class PbrRenderer :
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
             if (stream?.RequiresInstancing == true && !Settings.Streaming.GpuTraversal)
                 throw new NotSupportedException("Mixed scene input requires local shared GPU instance storage.");
-            if (stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
+            if (raster is null && stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
-                stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
+                raster is null && stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
                 Settings.Reflections is not null, Settings.Reflections?.History is not null);
-            Materials = new(frame, (raster?.Materials ?? stream!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
+            Materials = new(frame, (stream?.Materials ?? raster!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches)
                 : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             Environment = new(frame, Settings.BakedEnvironment);
@@ -399,7 +400,7 @@ public sealed class PbrRenderer :
                 throw new ArgumentException("A PBR batch must share scene world, resource world, device and queue.", nameof(contexts));
         }
         _preparedViews.Clear();
-        if (Scene.Streaming is not null || Lightmaps is not null) {
+        if (Scene.Streaming is not null || Materials.IsStreaming || Lightmaps is not null) {
             if (_streamWorld is not null && !ReferenceEquals(_streamWorld, world))
                 throw new InvalidOperationException("A streaming renderer belongs to one render world.");
             if (_streamWorld is not null && _streamFrame == world.FrameIndex)
@@ -411,7 +412,7 @@ public sealed class PbrRenderer :
                 throw new NotSupportedException("Atmosphere migration is not part of the resident PBR core.");
             Environment.Update(environment.Sky);
         }
-        if (Scene.Streaming is not null || Lightmaps is not null) {
+        if (Scene.Streaming is not null || Materials.IsStreaming || Lightmaps is not null) {
             _streamWorld = world;
             _streamFrame = world.FrameIndex;
         }
