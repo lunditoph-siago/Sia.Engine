@@ -6,12 +6,6 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe partial class PbrView
 {
-    private void Prepass(WgpuReactiveRenderGraphPassContext context)
-    {
-        var pass = context.GetOrBeginRenderPass(null, new WgpuReactiveRenderGraphDepthStencilAttachment(_frame.DepthTarget, WGPULoadOp.Clear));
-        DrawIndexedOpaque(pass, true);
-    }
-
     private void AlphaCoverage(WgpuReactiveRenderGraphPassContext context)
     {
         // A refraction snapshot must retain opaque color even behind foliage.
@@ -32,17 +26,19 @@ internal sealed unsafe partial class PbrView
 
     private void Forward(WgpuReactiveRenderGraphPassContext context)
     {
-        var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(_hdrKey, WGPULoadOp.Load),
-            new WgpuReactiveRenderGraphDepthStencilAttachment(_frame.DepthTarget, WGPULoadOp.Undefined, WGPUStoreOp.Undefined, DepthReadOnly: true));
-        DrawIndexedOpaque(pass, false);
+        // Select depth and shade together: Equal against a separate prepass does
+        // not identify the winning surface when distinct primitives share depth.
+        var pass = context.GetOrBeginRenderPass(new WgpuReactiveRenderGraphColorAttachment(_hdrKey, WGPULoadOp.Clear),
+            new WgpuReactiveRenderGraphDepthStencilAttachment(_frame.DepthTarget, WGPULoadOp.Clear));
+        DrawIndexedOpaque(pass);
     }
 
-    private void DrawIndexedOpaque(WgpuHandle<WGPURenderPassEncoder> pass, bool depthOnly)
+    private void DrawIndexedOpaque(WgpuHandle<WGPURenderPassEncoder> pass)
     {
-        Wgpu.SetBindGroup(pass, 0, (depthOnly ? _rasterGroup : _frameGroup).GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(pass, 0, _frameGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
         Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-        var planes=_owner.Scene.VertexPackingMode!=0?0u:depthOnly?1u:_owner.Scene.VertexPlanes;
+        var planes=_owner.Scene.VertexPackingMode!=0?0u:_owner.Scene.VertexPlanes;
         for (uint plane = 0; plane < planes; plane++)
             Wgpu.SetVertexBuffer(pass, plane, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * _owner.Scene.VertexCount * 16);
         BindDrawInstances(pass, planes);
@@ -50,13 +46,12 @@ internal sealed unsafe partial class PbrView
         var batch = -1;
         foreach (var draw in _opaque) {
             if (sided != draw.DoubleSided) {
-                var pipeline = depthOnly ? (draw.DoubleSided ? _owner.Pipelines.PrepassDouble : _owner.Pipelines.Prepass)
-                    : (draw.DoubleSided ? _owner.Pipelines.ForwardDouble : _owner.Pipelines.Forward);
+                var pipeline = draw.DoubleSided ? _owner.Pipelines.ForwardDouble : _owner.Pipelines.Forward;
                 Wgpu.SetRenderPipeline(pass, pipeline.GetWgpu<WGPURenderPipeline>());
                 sided = draw.DoubleSided;
             }
             var nextBatch = _owner.Materials.MaterialBatches[draw.Material];
-            if (!depthOnly && nextBatch != batch) {
+            if (nextBatch != batch) {
                 Wgpu.SetBindGroup(pass, 2, _owner.Materials.Groups[nextBatch].GetWgpu<WGPUBindGroup>());
                 batch = nextBatch;
             }
