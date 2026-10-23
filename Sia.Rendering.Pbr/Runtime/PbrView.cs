@@ -36,6 +36,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly Entity _shadowAtlas, _shadowArray;
     private readonly Entity _frameGroup, _rasterGroup, _clusterGroup;
     private readonly Entity _outputUniform;
+    private float _outputExposure;
     private readonly Entity _sampler;
     private readonly Entity _depthSampler;
     private readonly Entity[] _shadowViews = new Entity[k_ShadowLayers];
@@ -161,7 +162,8 @@ internal sealed unsafe partial class PbrView : IDisposable
             _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);
-            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 1 / owner.HdrRadianceScale, 0)], WGPUBufferUsage.Uniform);
+            _outputExposure = owner.DebugMode == VisibilityDebugMode.Shaded ? owner.ExposureCompensation : 0;
+            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale * MathF.Pow(2, _outputExposure), owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 1 / owner.HdrRadianceScale, 0)], WGPUBufferUsage.Uniform);
             var sampler = WGPUSamplerDescriptor.Default;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;

@@ -98,6 +98,12 @@ internal sealed unsafe partial class PbrView
         frame.Frame.MainWorld.Query(s_Points, _collectPoint);
         frame.Frame.MainWorld.Query(s_Spots, _collectSpot);
         PrepareHistory();
+        var exposure = _owner.DebugMode == VisibilityDebugMode.Shaded ? _owner.ExposureCompensation : 0;
+        if (exposure != _outputExposure) {
+            // The shared composition scale stays immutable; only the output multiplier changes.
+            Wgpu.WriteBuffer<float>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [_owner.HdrRadianceScale * MathF.Pow(2, exposure)]);
+            _outputExposure = exposure;
+        }
         Wgpu.WriteBuffer<PbrFrame>(_gpu.Queue, _uniform.GetWgpu<WGPUBuffer>(), 0, [_data]);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
         var culler = new FrustumCuller(camera.Frustum);
