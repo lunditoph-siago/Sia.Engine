@@ -7,7 +7,9 @@ namespace Sia.Engine.Rendering;
 public sealed class StreamGeometryPage
 {
     public const int VertexPlanes = 4;
-    public const int VertexBytes = VertexPlanes * 16;
+    public const int VertexBytes = StreamVertexEncoding.Words * sizeof(uint);
+    public static uint PlaneStride(uint plane) => plane < VertexPlanes
+        ? plane == 3 ? 4u : 16u : throw new ArgumentOutOfRangeException(nameof(plane));
     public const int MaximumBytes = MeshVirtualPageData.MaximumTriangles * 3 * (VertexBytes + sizeof(uint));
     public MeshVirtualPageData? Data { get; }
     private readonly MeshRasterData? _raster;

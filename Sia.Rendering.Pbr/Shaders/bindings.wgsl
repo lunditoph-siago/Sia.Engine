@@ -40,11 +40,7 @@ struct Material {
 @group(0) @binding(13) var lightmap_mapping: texture_2d<u32>;
 @group(0) @binding(14) var lightmap_pages: texture_2d_array<u32>;
 #endif
-#if RESIDENT_INSTANCES
 @group(1) @binding(0) var<storage, read> vertices: array<u32>;
-#else
-@group(1) @binding(0) var<storage, read> vertices: array<vec4<f32>>;
-#endif
 @group(1) @binding(1) var<storage, read> topology: array<u32>;
 #if RASTER_POSITION_TABLES
 @group(1) @binding(3) var<storage, read> vertex_attributes: array<u32>;
@@ -94,27 +90,31 @@ fn unit(v: vec3<f32>) -> vec3<f32> {
     return v * inverseSqrt(max(dot(v, v), 1e-20));
 }
 
-#if RESIDENT_INSTANCES
 fn resident_vec4(offset: u32) -> vec4<u32> {
     return vec4<u32>(vertices[offset], vertices[offset+1u], vertices[offset+2u], vertices[offset+3u]);
 }
-#endif
 
 fn vertex_plane(index: u32) -> vec4<f32> {
-#if RESIDENT_INSTANCES
     return bitcast<vec4<f32>>(resident_vec4(index * 4u));
-#else
-    return vertices[index];
-#endif
 }
 
-#if RESIDENT_INSTANCES
-fn resident_direction(word: u32) -> vec3<f32> {
+fn packed_direction(word: u32) -> vec3<f32> {
     let oct = unpack2x16snorm(word);
     var direction = vec3<f32>(oct, 1.0 - abs(oct.x) - abs(oct.y));
     let fold = clamp(-direction.z, 0.0, 1.0);
     direction = vec3<f32>(direction.xy + select(vec2<f32>(fold), vec2<f32>(-fold), direction.xy >= vec2<f32>(0.0)), direction.z);
-    return unit(direction);
+    return direction;
+}
+
+fn resident_direction(word: u32) -> vec3<f32> {
+    return unit(packed_direction(word));
+}
+
+fn stream_direction(word: u32, scale: u32) -> vec3<f32> {
+    let direction = packed_direction(word);
+    if ((scale & 0x80000000u) == 0u) { return direction * bitcast<f32>(scale); }
+    let scaled = clamp(direction / max(max(abs(direction.x), abs(direction.y)), abs(direction.z)), vec3<f32>(-1.0), vec3<f32>(1.0));
+    return scaled * bitcast<f32>(scale & 0x7fffffffu);
 }
 
 fn resident_normal(word: u32) -> vec3<f32> {
@@ -125,7 +125,6 @@ fn resident_tangent(words: vec2<u32>) -> vec4<f32> {
     let magnitude = bitcast<f32>(words.y & 0xfffffffcu);
     return vec4<f32>(resident_direction(words.x) * magnitude, select(1.0, -1.0, (words.y & 1u) != 0u));
 }
-#endif
 
 fn shadow_matrix(layer: u32) -> mat4x4<f32> {
     let i = #{SHADOW_MATRIX_BASE}u + layer * 4u;
@@ -151,6 +150,16 @@ struct Vertex {
     bake_uv: vec2<f32>,
     bake_present: bool,
     source_instance: u32,
+}
+
+fn stream_vertex_value(index: u32) -> Vertex {
+    let p = vertex_plane(index);
+    let n = resident_vec4(frame.geometry.x * 4u + index * 4u);
+    let t = resident_vec4(frame.geometry.x * 8u + index * 4u);
+    let metadata = vertices[frame.geometry.x * 12u + index];
+    return Vertex(p.xyz, stream_direction(n.x, n.y), vec2<f32>(p.w, bitcast<f32>(n.z)),
+        vec4<f32>(stream_direction(t.x, t.y), bitcast<f32>(t.z)), bitcast<vec2<f32>>(vec2<u32>(n.w, t.w)),
+        (metadata & 0x80000000u) != 0u, metadata & 0x7fffffffu);
 }
 
 #if RASTER_POSITION_TABLES
@@ -201,20 +210,17 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
         vec4<f32>((instance.transform * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w),
         bitcast<vec2<f32>>(n.zw), (words.y & 2u) != 0u, instance.material.y);
 #else
-    let n = vertex_plane(frame.geometry.x + index);
-    let bake = vertices[frame.geometry.x * 3u + index];
+    let value = stream_vertex_value(index);
 #if SHADING_WORK
     let instance = instances[stream_triangle(triangle).y];
-    let tangent = vertices[frame.geometry.x * 2u + index];
     return Vertex(
-        (instance.transform * vec4<f32>(p.xyz, 1.0)).xyz,
-        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
-        n.zw,
-        vec4<f32>((instance.transform * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w),
-        bake.xy, bake.z != 0.0, stream_triangle(triangle).y);
+        (instance.transform * vec4<f32>(value.position, 1.0)).xyz,
+        (instance.normal_transform * vec4<f32>(value.normal, 0.0)).xyz,
+        value.uv,
+        vec4<f32>((instance.transform * vec4<f32>(value.tangent.xyz, 0.0)).xyz, value.tangent.w),
+        value.bake_uv, value.bake_present, stream_triangle(triangle).y);
 #else
-    return Vertex(p.xyz, vec3<f32>(p.w, n.xy), n.zw, vertices[frame.geometry.x * 2u + index],
-        bake.xy, bake.z != 0.0, u32(bake.w));
+    return value;
 #endif
 #endif
 #endif
@@ -228,7 +234,7 @@ fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
     return instances[resident_instance(triangle)].transform * vec4<f32>(vertex_plane(vertex_index(triangle, corner)).xyz, 1.0);
 #endif
 #else
-    return vec4<f32>(vertices[vertex_index(triangle, corner)].xyz, 1.0);
+    return vec4<f32>(vertex_plane(vertex_index(triangle, corner)).xyz, 1.0);
 #endif
 }
 
@@ -238,6 +244,6 @@ fn triangle_material(triangle: u32) -> u32 {
 #elif RESIDENT_INSTANCES
     return instances[resident_instance(triangle)].material.x;
 #else
-    return u32(abs(vertices[frame.geometry.x * 2u + vertex_index(triangle, 0u)].w)) - 1u;
+    return u32(abs(bitcast<f32>(vertices[frame.geometry.x * 8u + vertex_index(triangle, 0u) * 4u + 2u]))) - 1u;
 #endif
 }
