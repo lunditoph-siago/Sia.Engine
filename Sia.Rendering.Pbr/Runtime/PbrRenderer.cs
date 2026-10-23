@@ -100,7 +100,7 @@ public readonly record struct PbrFrameStatistics(
 public readonly record struct PbrReflectionTargets(RenderGraphTextureKey Radiance, RenderGraphTextureKey HitMetadata,
     RenderGraphTextureKey CurrentSpecular, RenderGraphTextureKey OpaqueColor);
 
-public sealed class PbrRenderer :
+public sealed partial class PbrRenderer :
     IPrepareRenderFeature<RenderFrameContext>,
     IRenderGraphContributor<RenderFrameContext>,
     IDisposable
@@ -241,6 +241,7 @@ public sealed class PbrRenderer :
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
             if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
         }
+        HdrRadianceScale = StaticRadianceScale(HdrRadianceScale, (stream?.Materials ?? raster!.Materials).Span);
         try {
             _queue = frame.Queue.GetWgpu<WGPUQueue>();
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
