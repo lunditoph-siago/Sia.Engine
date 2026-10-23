@@ -287,7 +287,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
                     GpuBinding.Texture(1, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
                     GpuBinding.Texture(2, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
                     GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float),
-                    GpuBinding.Buffer(4, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 512)
+                    GpuBinding.Buffer(4, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 16)
                 ]);
                 ReflectionTrace = Compute(Module("reflection_trace.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionTraceLayout), "trace_reflections");
                 ReflectionCompose = Compute(Module("reflection_compose.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionComposeLayout), "compose_reflections");

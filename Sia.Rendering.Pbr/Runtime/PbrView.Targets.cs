@@ -179,7 +179,7 @@ internal sealed unsafe partial class PbrView
                 composeGroup = GpuBinding.Group(next, _owner.Pipelines.ReflectionComposeLayout, [
                     GpuBinding.Texture(0, ViewOf(opaqueHdr, array: true).GetWgpu<WGPUTextureView>()), GpuBinding.Texture(1, specularView.GetWgpu<WGPUTextureView>()),
                     GpuBinding.Texture(2, compositionView.GetWgpu<WGPUTextureView>()), GpuBinding.Texture(3, hdrView.GetWgpu<WGPUTextureView>()),
-                    GpuBinding.Buffer(4, _uniform)
+                    GpuBinding.Buffer(4, _outputUniform)
                 ]);
             }
             _owner.RetireTargets(this, _sizeResources);

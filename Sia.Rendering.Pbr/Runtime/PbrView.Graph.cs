@@ -34,6 +34,7 @@ internal sealed unsafe partial class PbrView
             Import(ref graph, _streamDispatchKey, _selection.DispatchArguments,
                 RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination);
         Import(ref graph, _frameKey, _uniform, RenderGraphBufferUsage.Uniform);
+        Import(ref graph, _outputUniformKey, _outputUniform, RenderGraphBufferUsage.Uniform);
         Import(ref graph, _lightsKey, _lightData, RenderGraphBufferUsage.Storage);
         Import(ref graph, _clustersKey, _clusters, RenderGraphBufferUsage.Storage);
         if (_owner.Probes is { } probes) {
@@ -130,7 +131,7 @@ internal sealed unsafe partial class PbrView
                 .Read(d.View._snapshotKey, RenderGraphTextureUsage.TextureBinding).ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Transparency);
         TimingMarker(ref graph, dependency, 10);
         graph.UsePass(new(_prefix + "output"), "pbr-output", dependency, static (in d, p) =>
-            d.View.ReadTiming(p).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
+            d.View.ReadTiming(p).Read(d.View._outputUniformKey, RenderGraphBufferUsage.Uniform).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
         TimingMarker(ref graph, dependency, 11);
     }
 
