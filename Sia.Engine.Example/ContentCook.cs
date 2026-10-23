@@ -95,7 +95,8 @@ internal static partial class ContentCook
             await using (var file = new FileStream(sceneRecipePath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 65536, FileOptions.Asynchronous)) await file.WriteAsync(preparedRecipe, cancellationToken);
             var published = await ScenePack.PackAsync(sceneRecipePath, output, maximumFileBytes, maximumTotalBytes, cancellationToken,
-                recipe.Lightmap, layouts);
+                recipe.Lightmap is { Environment: { } environment } hdr
+                    ? hdr with { Environment = environment with { Input = Locate(environment.Input) } } : recipe.Lightmap, layouts);
             if (published != sceneId) throw new InvalidDataException("Unexpected published scene identity.");
             return published;
         }

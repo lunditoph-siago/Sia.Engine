@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Sia;
 using Sia.Asset;
 using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
@@ -81,6 +82,17 @@ internal static partial class ScenePack
         var meshInputs = Entries(recipe.Meshes, typeof(MeshManifestRecord));
         var materialInputs = Entries(recipe.Materials, typeof(PbrMaterialRecord));
         var textureInputs = Entries(recipe.Textures, typeof(PbrTextureRecord));
+        IblEnvironmentRecord? environment = null;
+        if (lightmap?.Environment is { } environmentInput) {
+            Claim(new(environmentInput.Id), typeof(IblEnvironmentRecord));
+            if (IblEnvironmentAsset.EncodedBytes > maximumFileBytes || IblEnvironmentAsset.EncodedBytes > maximumTotalBytes
+                || 4ul * IblEnvironmentAsset.EncodedBytes + 8192 > lightmap.MaximumWorkingBytes)
+                throw new InvalidDataException("Lightmap environment exceeds encoded or preparation working admission.");
+            using var http = new HttpClient();
+            environment = (await LightingFiles.PrepareAsync(Path.GetFullPath(environmentInput.Input, Path.GetDirectoryName(recipePath)!),
+                null, http, cancellationToken)).Environment;
+            bakeSettings = lightmap.Settings(environment);
+        }
         var stage = Path.Combine(parent, ".scene-pack-" + Guid.NewGuid().ToString("N"));
         if (Path.Exists(stage)) throw new IOException("Scene staging path already exists.");
         Directory.CreateDirectory(stage);
@@ -235,12 +247,14 @@ internal static partial class ScenePack
                     maximumMetadataBytes: System.Math.Min((ulong)maximumFileBytes, PbrLightmapData.MaximumEncodedBytes),
                     maximumWorkingBytes: lightmap.MaximumWorkingBytes, maximumStagingBytes: lightmap.MaximumStagingBytes,
                     cancellationToken: cancellationToken, maximumEncodedBytes: (ulong)(maximumTotalBytes - total),
-                    maximumFileBytes: (ulong)maximumFileBytes, maximumPageResolution: lightmap.MaximumPageResolution);
+                    maximumFileBytes: (ulong)maximumFileBytes, maximumPageResolution: lightmap.MaximumPageResolution,
+                    environment: environment);
                 lightingFiles = lighting.Files;
                 foreach (var filename in lightingFiles) {
                     cancellationToken.ThrowIfCancellationRequested(); var path = Path.Combine(lightingDirectory, filename);
                     var id = new AssetId(Guid.ParseExact(Path.GetFileNameWithoutExtension(filename), "N"));
-                    if (ids.ContainsKey(id)) throw new InvalidDataException("Lighting output aliases a scene input identity.");
+                    if (ids.ContainsKey(id) && (bakeSettings?.Environment?.Id != id || ids[id] != typeof(IblEnvironmentRecord)))
+                        throw new InvalidDataException("Lighting output aliases a scene input identity.");
                     var length = new FileInfo(path).Length;
                     if (length > maximumFileBytes || length > maximumTotalBytes - total)
                         throw new InvalidDataException("Lighting files exceed selected scene publication admission.");
