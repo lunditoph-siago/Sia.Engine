@@ -44,7 +44,7 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
         let spot = scene_data[index * 4u + 3u];
         let delta = p.xyz - position;
         let distance = length(delta);
-        if (distance >= p.w) {
+        if (p.w > 0.0 && distance >= p.w) {
             continue;
         }
         let direction = delta / max(distance, 1e-4);

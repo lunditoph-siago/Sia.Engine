@@ -16,12 +16,13 @@ internal sealed unsafe partial class PbrView
     {
         var light = e.Get<PointLight>();
         var color = e.Get<LightColor>();
-        var at = NextLight();
-        if (!float.IsFinite(light.Range) || light.Range <= 0)
-            throw new ArgumentException("Point light range must be positive and finite.");
+        if (!float.IsFinite(light.Range) || light.Range < 0)
+            throw new ArgumentException("Point light range must be finite and nonnegative; zero has no distance cutoff.");
         var position = e.Get<GlobalTransform>().Affine.Translation;
         var radiance = LightRadiance(color);
         _localRadianceBound += LocalRadianceBound(position, light.Range, radiance);
+        if (math.all(radiance == 0)) return;
+        var at = NextLight();
         _sceneData[at] = new(position, light.Range);
         _sceneData[at + 1] = default;
         _sceneData[at + 2] = new(radiance, 0);
@@ -33,17 +34,21 @@ internal sealed unsafe partial class PbrView
         var light = e.Get<SpotLight>();
         var color = e.Get<LightColor>();
         var transform = e.Get<GlobalTransform>().Affine;
-        var at = NextLight();
-        if (!float.IsFinite(light.Range) || light.Range <= .05f || !float.IsFinite(light.InnerAngle) || !float.IsFinite(light.OuterAngle)
+        if (!float.IsFinite(light.Range) || light.Range < 0 || (light.Range > 0 && light.Range <= .05f) || !float.IsFinite(light.InnerAngle) || !float.IsFinite(light.OuterAngle)
             || light.InnerAngle < 0 || light.OuterAngle <= light.InnerAngle || light.OuterAngle >= MathF.PI / 2)
-            throw new ArgumentException("Spot light requires range > .05 and 0 <= inner < outer < pi/2.");
+            throw new ArgumentException("Spot light requires range zero or > .05 and 0 <= inner < outer < pi/2.");
         var direction = LightDirection(transform.RotationScale.c2);
         var radiance = LightRadiance(color);
         _localRadianceBound += LocalRadianceBound(transform.Translation, light.Range, radiance);
+        if (math.all(radiance == 0)) return;
+        var at = NextLight();
         var layer = -1;
         if (_casters.Contains(e) && _spotCount < (uint)_frame.Frame.MainWorld.AcquireAddon<ShadowAtlasConfig>().MaxShadowedSpotLights) {
+            var shadowRange = light.Range == 0 ? _frame.Frame.MainWorld.AcquireAddon<ShadowAtlasConfig>().ShadowDistance : light.Range;
+            if (!float.IsFinite(shadowRange) || shadowRange <= .05f)
+                throw new ArgumentException("Unbounded spot shadows require a finite ShadowDistance > .05.");
             layer = 3 + (int)_spotCount++;
-            SetShadow(layer, CascadeSplitting.ComputeSpotViewProj(transform, light.OuterAngle, light.Range));
+            SetShadow(layer, CascadeSplitting.ComputeSpotViewProj(transform, light.OuterAngle, shadowRange));
         }
         _sceneData[at] = new(transform.Translation, light.Range);
         _sceneData[at + 1] = new(-direction, 1);
@@ -87,9 +92,9 @@ internal sealed unsafe partial class PbrView
             squared += distance * distance;
         }
         var rangeSquared = (double)range * range;
-        if (squared >= rangeSquared) return 0;
+        if (range > 0 && squared >= rangeSquared) return 0;
         var peak = math.cmax(math.abs(radiance)); _owner.ValidateDirectRadiance(peak);
-        var cutoff = 1 - System.Math.Pow(squared / rangeSquared, 2);
+        var cutoff = range == 0 ? 1 : 1 - System.Math.Pow(squared / rangeSquared, 2);
         return peak * cutoff * cutoff / System.Math.Max(squared, 1e-4);
     }
 
