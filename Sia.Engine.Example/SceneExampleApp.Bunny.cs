@@ -196,6 +196,7 @@ internal sealed partial class SceneExampleApp
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var preset = _qualitySettings;
         var settings = preset with {
+            ExposureCompensation = _options.ExposureCompensation,
             BakedEnvironment = _bakedEnvironment,
             ReflectionCaptures = _captureInputs ?? [],
             Lightmaps = _lightmapInput,

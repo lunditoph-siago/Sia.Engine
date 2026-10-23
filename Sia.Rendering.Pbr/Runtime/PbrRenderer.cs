@@ -26,6 +26,8 @@ public sealed record PbrRendererSettings
     public PbrOpaquePath OpaquePath { get; init; } = PbrOpaquePath.Visibility;
     public bool ExportSurfaceData { get; init; }
     public bool GpuTiming { get; init; }
+    /// <summary>Display-only exposure in stops, -16..16. Does not change physical lighting or transport.</summary>
+    public float ExposureCompensation { get; init; }
 
     public float TargetPixelError { get; init; }
     public float ShadowTexelError { get; init; }
@@ -127,6 +129,15 @@ public sealed class PbrRenderer :
     public RenderFeatureKey Key { get; } = new("pbr");
     public VisibilityDebugMode DebugMode { get; set; }
     public bool SampleGpuTiming { get; set; } = true;
+    private float _exposureCompensation;
+    /// <summary>Display-only exposure in stops, -16..16. Applied on the next prepared shaded frame.</summary>
+    public float ExposureCompensation {
+        get => _exposureCompensation;
+        set {
+            if (!float.IsFinite(value) || value is < -16 or > 16) throw new ArgumentOutOfRangeException(nameof(value));
+            _exposureCompensation = value;
+        }
+    }
 
     public PbrFrameStatistics FrameStatistics { get; private set; }
     public Aabb Bounds => Scene.Bounds;
@@ -178,6 +189,7 @@ public sealed class PbrRenderer :
     {
         if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
+        ExposureCompensation = Settings.ExposureCompensation;
         if (Settings.Reflections is { } reflectionSettings) {
             reflectionSettings.Validate();
             if (!Settings.DynamicSceneGi || Settings.OpaquePath != PbrOpaquePath.Visibility)
