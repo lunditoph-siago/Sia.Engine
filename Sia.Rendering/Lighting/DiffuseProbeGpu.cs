@@ -39,6 +39,15 @@ public sealed class DiffuseProbeGpu : IDisposable
     public Entity ReferenceInstances { get; }
     public uint? ReferenceSamples => _reference?.Samples;
     public bool SignedCorrection => _reference is not null;
+    /// <summary>Conservative physical irradiance magnitude of current/mixed-age field contents, excluding the caller's outside-volume SH.</summary>
+    public double MaximumIrradiance { get; private set; }
+    /// <summary>Bounds coarse hit shading using the current transport surfaces and physical incident lighting. No GPU work.</summary>
+    public double SurfaceRadianceBound(double irradiance, double directRadiance)
+    {
+        if (!double.IsFinite(irradiance) || !double.IsFinite(directRadiance) || irradiance < 0 || directRadiance < 0)
+            throw new ArgumentOutOfRangeException(nameof(irradiance));
+        return _emissionBound + _diffuseBound * (irradiance + directRadiance) / System.Math.PI;
+    }
     private uint TextureBands => k_TextureBands * (SignedCorrection ? 2u : 1u);
 
     public Entity Configuration => _config;
@@ -116,6 +125,7 @@ public sealed class DiffuseProbeGpu : IDisposable
         _reference = reference;
         _environment = environment;
         _radianceScale = TextureScale(asset);
+        MaximumIrradiance = reference is null ? InitialIrradianceBound(asset) : 0;
         try {
             if (tracing is not null) (_diffuseBound, _emissionBound) = SurfaceBounds(tracing);
             if (reference is not null) {
@@ -226,6 +236,10 @@ public sealed class DiffuseProbeGpu : IDisposable
             throw new ArgumentException("Invalid probe integration budget or lighting.");
         var bound = IncidentBound(_environment?.MaximumRadiance ?? SkyBound(sky), _emissionBound, _diffuseBound, lightRadiance);
         var peak = 8 * (bound + _referenceBound);
+        // The projected cosine kernel has absolute maximum 17/16; four-pi
+        // quadrature therefore encloses absolute and signed L1/L2 estimates in14*R.
+        // Retain the previous bound while older texels can still contribute.
+        MaximumIrradiance = System.Math.Max(MaximumIrradiance, 14 * (bound + _referenceBound));
         _updates = 0;
         if (peak > 65504d * _radianceScale) {
             var scale = ScaleFor(peak);
@@ -321,6 +335,28 @@ public sealed class DiffuseProbeGpu : IDisposable
         foreach (var c in asset.Coefficients.Span)
             peak = System.Math.Max(peak, (double)math.cmax(math.abs(c.xyz)) * c.w);
         return ScaleFor(peak);
+    }
+
+    /// <summary>Bounds this GPU encoding's weighted Half seed, including nonuniform coefficient validity and normalization. Pure, no allocation or GPU work.</summary>
+    public static double InitialIrradianceBound(DiffuseProbeAsset asset)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        var scale = TextureScale(asset); double peak = 0; var sparseNumerator = false;
+        Span<float4> values = stackalloc float4[9];
+        for (var probe = 0; probe < asset.Count; probe++) {
+            var source = asset.Coefficients.Span.Slice(probe * 9, 9);
+            for (var c = 0; c < 9; c++) {
+                var value = source[c].xyz * source[c].w / scale;
+                values[c] = new((float)(Half)value.x, (float)(Half)value.y, (float)(Half)value.z, 0);
+            }
+            var validity = (float)(Half)source[8].w;
+            var bound = IrradianceSh.Bound(values) * scale / System.Math.Max(validity, 1e-5);
+            peak = System.Math.Max(peak, bound);
+            sparseNumerator |= validity < 1e-5 && bound > 0;
+        }
+        // Above the shader's validity threshold, mixed positive weights normalize
+        // convexly. A nonzero numerator below it adds at most one more such bound.
+        return peak * (sparseNumerator ? 2 : 1);
     }
 
     private static float ScaleFor(double peak)
