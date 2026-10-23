@@ -160,7 +160,7 @@ internal sealed unsafe partial class PbrView : IDisposable
             _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);
-            _outputUniform = _gpu.Upload<float4>([new(1, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform);
+            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform);
             var sampler = WGPUSamplerDescriptor.Default;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;

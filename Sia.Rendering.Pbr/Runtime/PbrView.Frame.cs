@@ -49,7 +49,9 @@ internal sealed unsafe partial class PbrView
             Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, 0)
         };
         var scale = 24 / MathF.Log(parameters.Far / parameters.Near);
-        _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1, 0);
+        // Lighting and reflection history use physical units; only the final Half HDR attachment is scaled.
+        _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1 / _owner.HdrRadianceScale,
+            _owner.Environment.CubeRadianceScale);
         _directional.Clear();
         _casters.Clear();
         Array.Clear(_shadowActive);

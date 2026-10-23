@@ -101,5 +101,5 @@ fn forward_fragment(
     surface.bake_uv = input.bake_uv;
     surface.bake_uv_dx = dpdx(input.bake_uv); surface.bake_uv_dy = dpdy(input.bake_uv);
     surface.bake_present = input.bake.x != 0u; surface.source_instance = input.bake.y;
-    return vec4<f32>(min(shade(surface, input.position.xy), vec3<f32>(65504)), 1.0);
+    return vec4<f32>(min(shade(surface, input.position.xy) * frame.depth.z, vec3<f32>(65504)), 1.0);
 }

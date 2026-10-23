@@ -15,7 +15,7 @@ public static class PbrReflectionCaptureBaker
         ArgumentNullException.ThrowIfNull(staticScene); ArgumentNullException.ThrowIfNull(source);
         var inputs = settings ?? new(); inputs.Validate(); PbrReflectionCaptureData.ValidateRegion(position, bounds);
         cancellationToken.ThrowIfCancellationRequested();
-        const ulong filterBytes = 6ul * IblEnvironmentAsset.CubeSize * IblEnvironmentAsset.CubeSize * 12 + IblEnvironmentAsset.CubeTexels * 16ul;
+        var filterBytes = IblEnvironmentBaker.RadianceWorkingBytes;
         var materialBytes = (ulong)staticScene.Materials.Length * ((ulong)Unsafe.SizeOf<Surface>() + 1);
         if (filterBytes + materialBytes >= maximumWorkingBytes)
             throw new ArgumentException("Capture working budget cannot hold filtering and material scratch.", nameof(maximumWorkingBytes));

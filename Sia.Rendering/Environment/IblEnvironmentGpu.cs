@@ -24,6 +24,7 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
     public Entity LutView { get; }
     public Entity Sampler { get; }
     public Entity Sh { get; }
+    public float CubeRadianceScale => _baked?.CubeRadianceScale ?? 1;
 
     public ulong Bytes => _gpu.Bytes;
 
