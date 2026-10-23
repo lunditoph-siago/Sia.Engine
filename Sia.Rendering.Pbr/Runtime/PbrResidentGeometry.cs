@@ -18,15 +18,18 @@ internal sealed class PbrResidentGeometry : IDisposable
     public uint TriangleCount { get; }
     public Aabb Bounds { get; }
 
-    public PbrResidentGeometry(PbrRasterGeometry geometry)
+    public PbrResidentGeometry(PbrRasterGeometry geometry, int maximumVertices = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(geometry);
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumVertices);
         _raster = geometry; Bounds = geometry.Bounds; TriangleCount = (uint)(geometry.Indices.Length / 3);
         // Compact only vertices referenced by this section; never allocate a remap for the whole product per section.
         var capacity = System.Math.Min(geometry.Product.Vertices.Length, geometry.Indices.Length);
-        _rasterRemap = new(System.Math.Min(capacity, 4096));
+        _rasterRemap = new(System.Math.Min(System.Math.Min(capacity, 4096), maximumVertices));
         try {
             foreach (var index in geometry.Indices) {
+                if (VertexCount == maximumVertices && !_rasterRemap.ContainsKey(index))
+                    throw new ArgumentException("Raster section vertices exceed the remaining geometry budget.", nameof(maximumVertices));
                 if (!_rasterRemap.TryAdd(index, (uint)VertexCount)) continue;
                 VertexCount++;
             }
