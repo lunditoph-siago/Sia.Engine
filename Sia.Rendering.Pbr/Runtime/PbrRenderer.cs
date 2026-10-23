@@ -116,6 +116,7 @@ public sealed class PbrRenderer :
     private readonly Sia.WebGPU.WgpuHandle<Sia.WebGPU.WGPUQueue> _queue;
     private bool _queueDrained;
     internal ulong PreparedFrameIndex { get; private set; }
+    internal ulong ReflectionTransportRevision { get; private set; }
     private bool _disposed;
     private RenderWorld? _streamWorld;
     private ulong _streamFrame;
@@ -360,7 +361,13 @@ public sealed class PbrRenderer :
             new(prefix + "normal-roughness"), new(prefix + "base-metallic"));
     }
 
-    /// <summary>View-owned raw radiance/distance and hit metadata, separate from material weight/baseline and final HDR.</summary>
+    /// <summary>
+    /// View-owned reflection payloads, separate from final HDR. All four targets are RGBA8Unorm 2D arrays:
+    /// Radiance/OpaqueColor have four layers, CurrentSpecular eight, and HitMetadata twelve.
+    /// Logical vec4 float32 or uint32 values occupy byte planes layer*4..layer*4+3, least-significant byte first.
+    /// Use unfiltered textureLoad, round each channel*255 to bytes, then combine their 0/8/16/24-bit shifts;
+    /// bitcast float payloads after decoding. Filtering or sampling these targets as ordinary color is invalid.
+    /// </summary>
     public PbrReflectionTargets GetReflectionTargets(RenderViewKey view)
     {
         if (Settings.Reflections is null) throw new InvalidOperationException("Live reflections must be enabled before requesting their targets.");
@@ -413,6 +420,7 @@ public sealed class PbrRenderer :
         if (_pendingTrace is { } pendingTrace) {
             _trace = pendingTrace; _traceData = _pendingTraceData;
             _pendingTrace = null; _pendingTraceData = null;
+            ReflectionTransportRevision++;
         }
         Scene.Streaming?.BeginFrame();
         Materials.BeginFrame();

@@ -50,7 +50,6 @@ internal sealed unsafe partial class PbrView
         };
         var scale = 24 / MathF.Log(parameters.Far / parameters.Near);
         _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1, 0);
-        PrepareHistory();
         _directional.Clear();
         _casters.Clear();
         Array.Clear(_shadowActive);
@@ -96,6 +95,7 @@ internal sealed unsafe partial class PbrView
         }
         frame.Frame.MainWorld.Query(s_Points, _collectPoint);
         frame.Frame.MainWorld.Query(s_Spots, _collectSpot);
+        PrepareHistory();
         Wgpu.WriteBuffer<PbrFrame>(_gpu.Queue, _uniform.GetWgpu<WGPUBuffer>(), 0, [_data]);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
         var culler = new FrustumCuller(camera.Frustum);

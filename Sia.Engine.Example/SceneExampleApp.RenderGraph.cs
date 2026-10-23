@@ -63,7 +63,12 @@ internal sealed unsafe partial class SceneExampleApp
         _renderGraph!.PrepareBindings();
     }
 
-    private void ExecuteRenderGraph() => _renderGraphWorld!.ExecuteWgpuRenderGraph();
+    private void ExecuteRenderGraph()
+    {
+        _renderGraphWorld!.ExecuteWgpuRenderGraph();
+        ThrowGpuError();
+        _sceneRenderer?.NotifySubmittedFrame(_renderWorld!.FrameIndex);
+    }
 
     private static ReactiveNode RenderGraph(in RenderGraphProps props, ref Hooks hooks)
     {

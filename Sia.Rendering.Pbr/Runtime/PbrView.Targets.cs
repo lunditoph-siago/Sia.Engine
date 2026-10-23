@@ -42,23 +42,26 @@ internal sealed unsafe partial class PbrView
                 return next.Own(Wgpu.CreateTextureView(texture.GetWgpu<WGPUTexture>(), descriptor));
             }
 
+            Entity Packed(WGPUTextureUsage usage, uint logicalLayers = 1)
+                => Target(PbrReflectionStorage.Format, PbrReflectionStorage.BytesPerTexel, usage, PbrReflectionStorage.Layers(logicalLayers));
+
             var id = UseForward ? default : Target(WGPUTextureFormat.R32Uint, 4, WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding);
             var depth = Target(WGPUTextureFormat.Depth32Float, 4, WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding);
             var hdr = Target(WGPUTextureFormat.RGBA16Float, 8, WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.CopySrc);
-            var opaqueHdr = HasReflections ? Target(WGPUTextureFormat.RGBA32Float, 16, WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding) : hdr;
-            var reflectionSpecular = HasReflections ? Target(WGPUTextureFormat.RGBA32Float, 16,
+            var opaqueHdr = HasReflections ? Packed(WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding) : hdr;
+            var reflectionSpecular = HasReflections ? Packed(
                 WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc, 2) : default;
-            var reflectionSignal = HasReflections ? Target(WGPUTextureFormat.RGBA32Float, 16,
+            var reflectionSignal = HasReflections ? Packed(
                 WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc) : default;
-            var reflectionMetadata = HasReflections ? Target(WGPUTextureFormat.RGBA32Uint, 16,
+            var reflectionMetadata = HasReflections ? Packed(
                 WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc, 3) : default;
             const WGPUTextureUsage historyUsage = WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding;
-            var filteredSignal = HasHistory ? Target(WGPUTextureFormat.RGBA32Float, 16, historyUsage) : default;
-            var previousSignal = HasHistory ? Target(WGPUTextureFormat.RGBA32Float, 16, historyUsage) : default;
-            var previousReceiver = HasHistory ? Target(WGPUTextureFormat.RGBA32Float, 16, historyUsage) : default;
+            var filteredSignal = HasHistory ? Packed(historyUsage) : default;
+            var previousSignal = HasHistory ? Packed(historyUsage) : default;
+            var previousReceiver = HasHistory ? Packed(historyUsage) : default;
             var previousNormal = HasHistory ? Target(WGPUTextureFormat.RGBA16Float, 8, historyUsage) : default;
-            var previousMetadata = HasHistory ? Target(WGPUTextureFormat.RGBA32Uint, 16, historyUsage, 3) : default;
-            var previousHit = HasHistory ? Target(WGPUTextureFormat.RGBA32Float, 16, historyUsage) : default;
+            var previousMetadata = HasHistory ? Packed(historyUsage, 3) : default;
+            var previousHit = HasHistory ? Packed(historyUsage) : default;
             Entity snapshot;
             if (_owner.Materials.HasTransmission)
                 snapshot = Target(WGPUTextureFormat.RGBA16Float, 8, WGPUTextureUsage.CopyDst | WGPUTextureUsage.TextureBinding);
@@ -92,7 +95,7 @@ internal sealed unsafe partial class PbrView
                     GpuBinding.Texture(0, idView.GetWgpu<WGPUTextureView>()),
                     GpuBinding.Texture(1, depthView.GetWgpu<WGPUTextureView>()),
                     GpuBinding.Buffer(2, tiles),
-                    GpuBinding.Texture(3, ViewOf(opaqueHdr).GetWgpu<WGPUTextureView>())
+                    GpuBinding.Texture(3, ViewOf(opaqueHdr, array: HasReflections).GetWgpu<WGPUTextureView>())
                 };
                 if (_owner.Settings.ExportSurfaceData) {
                     entries.Add(GpuBinding.Texture(4, ViewOf(normalRoughness).GetWgpu<WGPUTextureView>()));
@@ -132,7 +135,7 @@ internal sealed unsafe partial class PbrView
             Entity historyGroup = default, historyCommitGroup = default, historyCommitHitGroup = default;
             if (HasReflections) {
                 var probes = _owner.Probes!;
-                var specularView = ViewOf(reflectionSpecular, array: true); var signalView = ViewOf(reflectionSignal);
+                var specularView = ViewOf(reflectionSpecular, array: true); var signalView = ViewOf(reflectionSignal, array: true);
                 var metadataView = ViewOf(reflectionMetadata, array: true); var normalView = ViewOf(normalRoughness);
                 traceGroup = GpuBinding.Group(next, _owner.Pipelines.ReflectionTraceLayout, [
                     GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _lightData), GpuBinding.Buffer(2, probes.Tracing),
@@ -146,10 +149,10 @@ internal sealed unsafe partial class PbrView
                 ]);
                 var compositionView = signalView;
                 if (HasHistory) {
-                    compositionView = ViewOf(filteredSignal);
-                    var previousSignalView = ViewOf(previousSignal); var previousReceiverView = ViewOf(previousReceiver);
+                    compositionView = ViewOf(filteredSignal, array: true);
+                    var previousSignalView = ViewOf(previousSignal, array: true); var previousReceiverView = ViewOf(previousReceiver, array: true);
                     var previousNormalView = ViewOf(previousNormal); var previousMetadataView = ViewOf(previousMetadata, array: true);
-                    var previousHitView = ViewOf(previousHit);
+                    var previousHitView = ViewOf(previousHit, array: true);
                     historyGroup = GpuBinding.Group(next, _owner.Pipelines.ReflectionHistoryLayout, [
                         GpuBinding.Buffer(0, _uniform), GpuBinding.Buffer(1, _historyConfig), GpuBinding.Buffer(2, _reflectionPoses), GpuBinding.Buffer(3, _reflectionReceiverMap),
                         GpuBinding.Texture(4, signalView.GetWgpu<WGPUTextureView>()), GpuBinding.Texture(5, metadataView.GetWgpu<WGPUTextureView>()),
@@ -174,7 +177,7 @@ internal sealed unsafe partial class PbrView
                     historyCommitGroup = GpuBinding.Group(next, _owner.Pipelines.ReflectionCommitLayout, CollectionsMarshal.AsSpan(commitEntries));
                 }
                 composeGroup = GpuBinding.Group(next, _owner.Pipelines.ReflectionComposeLayout, [
-                    GpuBinding.Texture(0, ViewOf(opaqueHdr).GetWgpu<WGPUTextureView>()), GpuBinding.Texture(1, specularView.GetWgpu<WGPUTextureView>()),
+                    GpuBinding.Texture(0, ViewOf(opaqueHdr, array: true).GetWgpu<WGPUTextureView>()), GpuBinding.Texture(1, specularView.GetWgpu<WGPUTextureView>()),
                     GpuBinding.Texture(2, compositionView.GetWgpu<WGPUTextureView>()), GpuBinding.Texture(3, hdrView.GetWgpu<WGPUTextureView>())
                 ]);
             }

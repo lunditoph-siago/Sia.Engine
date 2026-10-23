@@ -12,6 +12,7 @@ internal static partial class PbrShaderSource
         ["pbr/Common/reconstruction"] = new(new Guid("4da31a5a-a5ab-4b36-aabf-e21ffd978888")),
         ["pbr/Common/surface"] = new(new Guid("335e7358-4250-47e7-9a4f-bc0e5f112895")),
         ["pbr/Common/reflection_history"] = new(new Guid("8af9268e-48f8-4d78-a586-e6be93c6b0a1")),
+        ["pbr/Common/reflection_storage"] = new(new Guid("489b2b0c-16a8-4d10-aeb9-216b186e26b3")),
         ["pbr/Common/triangle_debug"] = new(new Guid("b8741f75-bc35-4e3c-a04d-4676cea2ece8")),
         ["pbr/forward_background"] = new(new Guid("1ec9337d-cb88-4d1a-8c89-3e52c203efcc")),
         ["pbr/forward"] = new(new Guid("4582d499-cb95-4cf2-ad84-e0d48fe4b891")),

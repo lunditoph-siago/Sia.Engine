@@ -46,24 +46,30 @@ internal static partial class PbrSceneFiles
     {
         var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
         var prepared = await reader.References(); var scene = prepared.Scene;
-        var meshes = prepared.Meshes; var products = new Dictionary<AssetId, TProduct>();
+        var meshes = prepared.Meshes;
         var uses = new int[scene.Data.Bindings.Length];
         for (var i = 0; i < scene.Data.Instances.Length; i++) uses[scene.Data.Instances[i].Binding]++;
-        long expanded = 0; var geometryCount = 0;
+        var selectedIds = new List<AssetId>(); var unique = new HashSet<AssetId>();
+        var productUses = new Dictionary<AssetId, long>();
         for (var i = 0; i < uses.Length; i++) {
             if (uses[i] == 0) continue;
-            var binding = scene.Data.Bindings[i];
-            var mesh = meshes[binding.Mesh.Value];
-            var selected = selectProduct(mesh.Data);
-            if (!products.TryGetValue(selected, out var product)) {
-                product = await reader.Read(selected, decodeProduct);
-                products.Add(selected, product);
-                geometryCount += partCount(product);
-                if (geometryCount > 4096) throw new InvalidDataException("Resolved geometry table limit exceeded.");
-            }
-            expanded += (long)uses[i] * partCount(product);
-            if (expanded > PbrSceneData.MaximumInstances) throw new InvalidDataException("Expanded scene instance limit exceeded.");
+            var id = selectProduct(meshes[scene.Data.Bindings[i].Mesh.Value].Data);
+            if (unique.Add(id)) selectedIds.Add(id);
+            productUses[id] = productUses.GetValueOrDefault(id) + uses[i];
         }
+        long expanded = 0; var geometryCount = 0; var decoded = 0;
+        TProduct DecodeProduct(Stream stream, ulong maximumBytes, string? name)
+        {
+            var product = decodeProduct(stream, maximumBytes, name);
+            var parts = partCount(product);
+            geometryCount += parts;
+            if (geometryCount > 4096) throw new InvalidDataException("Resolved geometry table limit exceeded.");
+            // ReadMany decodes in selected-ID order, before publishing each result.
+            expanded += productUses[selectedIds[decoded++]] * parts;
+            if (expanded > PbrSceneData.MaximumInstances) throw new InvalidDataException("Expanded scene instance limit exceeded.");
+            return product;
+        }
+        var products = await reader.ReadMany(selectedIds, DecodeProduct);
         cancellationToken.ThrowIfCancellationRequested();
         return new(prepared.Id, scene, meshes, products, prepared.Materials, prepared.Textures) { EncodedBytes = reader.EncodedBytes };
     }
