@@ -162,6 +162,7 @@ public sealed class PbrRenderer :
     internal PbrRendererSettings Settings { get; }
     internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
+    internal float HdrRadianceScale { get; }
 
     public PbrRenderer(in GpuFrame frame, PbrRasterScene scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
@@ -209,6 +210,8 @@ public sealed class PbrRenderer :
         var captures = PbrReflectionCaptureGpu.Validate(Settings.ReflectionCaptures.Span,
             (stream?.Identity ?? raster!.TransportIdentity).Span,
             Settings.BakedEnvironment, Settings.ReflectionCaptureBytes);
+        HdrRadianceScale = Settings.BakedEnvironment?.CubeRadianceScale ?? 1;
+        foreach (var capture in captures) HdrRadianceScale = MathF.Max(HdrRadianceScale, capture.Environment.CubeRadianceScale);
         if (captures.Length != 0) {
             _staticInstanceIds = [];
             foreach (var capture in captures) foreach (var id in capture.Capture.StaticInstances) _staticInstanceIds.Add(id);
