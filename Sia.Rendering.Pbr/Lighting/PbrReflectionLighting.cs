@@ -34,7 +34,7 @@ public sealed class PbrReflectionLighting
         }
         foreach (var light in locals) {
             RequireColor(light.Radiance, 1e18f);
-            if (!math.all(math.isfinite(light.Position)) || !float.IsFinite(light.Range) || light.Range <= 0)
+            if (!math.all(math.isfinite(light.Position)) || !float.IsFinite(light.Range) || light.Range < 0)
                 throw new ArgumentException("Invalid local reflection light.");
             if (light.Spot) {
                 RequireDirection(light.Direction);
@@ -94,9 +94,9 @@ public sealed class PbrReflectionLighting
     private float3 LocalContribution(PbrReflectionLocalLight light, float3 position, float3 normal, float3 albedo)
     {
         var delta = light.Position - position; var distance = math.length(delta);
-        if (!float.IsFinite(distance) || distance <= 2 * _settings.RayBias || distance >= light.Range || distance > _settings.MaximumDistance) return default;
+        if (!float.IsFinite(distance) || distance <= 2 * _settings.RayBias || (light.Range > 0 && distance >= light.Range) || distance > _settings.MaximumDistance) return default;
         var toward = delta / distance; var cosine = MathF.Max(0, math.dot(normal, toward));
-        var window = System.Math.Clamp(1 - MathF.Pow(distance / light.Range, 4), 0, 1);
+        var window = light.Range == 0 ? 1 : System.Math.Clamp(1 - MathF.Pow(distance / light.Range, 4), 0, 1);
         var attenuation = window * window / MathF.Max(distance * distance, 1e-4f);
         if (light.Spot) {
             var cone = System.Math.Clamp((math.dot(-toward, math.normalize(light.Direction)) - light.OuterCosine)
