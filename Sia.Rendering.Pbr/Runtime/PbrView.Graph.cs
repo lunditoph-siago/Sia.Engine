@@ -183,6 +183,8 @@ internal sealed unsafe partial class PbrView
     private RenderGraphPassDeclarationBuilder ReadProbeTrace(RenderGraphPassDeclarationBuilder pass)
     {
         pass.Read(_traceKey, RenderGraphBufferUsage.Storage);
+        if (_owner.Settings.BakedEnvironment is not null)
+            pass.Read(_environmentCubeKey, RenderGraphTextureUsage.TextureBinding);
         if (_owner.Probes!.TracingGeometry.IsValid)
             pass.Read(_traceGeometryKey, RenderGraphBufferUsage.Storage).Read(_traceInstancesKey, RenderGraphBufferUsage.Storage);
         if (_owner.Probes.SignedCorrection)

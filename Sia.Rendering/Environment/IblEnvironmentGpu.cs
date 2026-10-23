@@ -25,6 +25,7 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
     public Entity Sampler { get; }
     public Entity Sh { get; }
     public float CubeRadianceScale => _baked?.CubeRadianceScale ?? 1;
+    internal double MaximumRadiance { get; private set; }
 
     public ulong Bytes => _gpu.Bytes;
 
@@ -147,10 +148,17 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
             }
         }
         _source = sky;
+        MaximumRadiance = ((double)math.cmax(math.max(sky.Horizon, math.max(sky.Zenith, sky.Ground)))
+            + math.cmax(sky.SunRadiance)) * sky.Intensity;
     }
 
     private void Upload(IblEnvironmentAsset asset)
     {
+        var peak = 0f;
+        var cube = asset.Cube.Span;
+        for (var at = 0; at < cube.Length; at += 4)
+            peak = MathF.Max(peak, MathF.Max(MathF.Abs((float)cube[at]), MathF.Max(MathF.Abs((float)cube[at + 1]), MathF.Abs((float)cube[at + 2]))));
+        MaximumRadiance = (double)peak * asset.CubeRadianceScale;
         Wgpu.WriteBuffer<float4>(_gpu.Queue, Sh.GetWgpu<WGPUBuffer>(), 0, asset.Coefficients.Span);
         Write(_lut, 0, 0, LutSize, asset.BrdfLut.Span);
         var offset = 0;

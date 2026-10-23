@@ -18,6 +18,20 @@ struct ProbeConfig {
 @group(0) @binding(2) var<storage, read_write> probes: array<vec4<f32>>;
 @group(0) @binding(3) var probe_texture: texture_storage_3d<rgba16float, write>;
 
+#ifdef PROBE_ENVIRONMENT
+@group(0) @binding(9) var probe_environment: texture_cube<f32>;
+@group(0) @binding(10) var probe_environment_sampler: sampler;
+#endif
+
+fn probe_sky(direction: vec3<f32>, sky: Sky, reference: bool) -> vec3<f32> {
+#ifdef PROBE_ENVIRONMENT
+    if (!reference) {
+        return textureSampleLevel(probe_environment, probe_environment_sampler, direction, 0.0).rgb * config.shape.z;
+    }
+#endif
+    return sky_color(direction, sky);
+}
+
 #ifdef INSTANCE_PROBE_TRACE
 #import rendering/Geometry/instance_trace
 @group(0) @binding(4) var<storage, read> instance_trace_geometry: array<vec4<u32>>;
@@ -49,7 +63,7 @@ fn probe_incident(origin: vec3<f32>, direction: vec3<f32>, reference: bool) -> v
     if (reference) { lighting = reference_config; }
 #endif
     let hit = trace_instances_domain(origin, direction, 0.0, lighting.light_direction.w, reference);
-    var radiance = sky_color(direction, lighting.sky);
+    var radiance = probe_sky(direction, lighting.sky, reference);
     var back = 0.0;
     if (hit.instance != 0xffffffffu) {
         let material = hit.material * 2u;
@@ -148,7 +162,7 @@ fn integrate_probes(
         backs += u32(max(live.w, reference.w));
 #else
         let hit = trace_scene(position,direction,config.light_direction.w);
-        var radiance = sky_color(direction,config.sky);
+        var radiance = probe_sky(direction,config.sky,false);
 #ifdef INSTANCE_PROBE_TRACE
         if (hit.instance != 0xffffffffu) {
             let material = hit.material * 2u;
@@ -215,6 +229,7 @@ fn integrate_probes(
     var live_coefficients: array<vec3<f32>, 9>;
 #endif
     var valid = select(1.0,0.0,probe_contributions[0].w*2.0>f32(samples));
+    let texture_scale = max(config.shape.w, 1.0);
     for (var c=0u; c<9u; c++) {
         let integrated = probe_contributions[c*64u];
         var coefficient = integrated.xyz*(4.0*IBL_PI/f32(samples));
@@ -223,19 +238,17 @@ fn integrate_probes(
         else {
             let absolute = probe_contributions[(c+4u)*64u].xyz*(4.0*IBL_PI/f32(samples));
             live_coefficients[c] = absolute;
-            if (any(absolute != absolute) || any(abs(absolute) > vec3<f32>(65504.0))) { valid = 0.0; }
+            if (any(absolute != absolute) || any(abs(absolute / texture_scale) > vec3<f32>(65504.0))) { valid = 0.0; }
         }
 #endif
         coefficients[c] = coefficient;
-#ifdef PAIRED_PROBE_TRACE
-        if (any(coefficient != coefficient) || any(abs(coefficient) > vec3<f32>(65504.0))) { valid = 0.0; }
-#endif
+        if (any(coefficient != coefficient) || any(abs(coefficient / texture_scale) > vec3<f32>(65504.0))) { valid = 0.0; }
     }
     for (var c=0u; c<9u; c++) {
         probes[3u+index*9u+c] = vec4<f32>(select(vec3<f32>(0.0), coefficients[c], valid > 0.0), valid);
-        coefficients[c] = clamp(select(vec3<f32>(0.0), coefficients[c], valid > 0.0),vec3<f32>(-65504),vec3<f32>(65504));
+        coefficients[c] = select(vec3<f32>(0.0), coefficients[c] / texture_scale, valid > 0.0);
 #ifdef PAIRED_PROBE_TRACE
-        live_coefficients[c] = select(vec3<f32>(0.0), live_coefficients[c], valid > 0.0);
+        live_coefficients[c] = select(vec3<f32>(0.0), live_coefficients[c] / texture_scale, valid > 0.0);
 #endif
     }
     let packed = rendering_pack_probe(coefficients,valid);

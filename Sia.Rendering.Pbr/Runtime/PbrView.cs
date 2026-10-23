@@ -55,6 +55,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly RenderGraphBufferKey _probeHeaderKey;
     private readonly RenderGraphBufferKey _referenceConfigKey, _referenceSurfacesKey, _referenceInstancesKey;
     private readonly RenderGraphTextureKey _probeTextureKey;
+    private readonly RenderGraphTextureKey _environmentCubeKey;
     private readonly RenderGraphTextureKey _idKey, _hdrKey, _shadowKey, _snapshotKey;
     private Entity _id, _depth, _hdr, _snapshot;
     private Entity _tiles;
@@ -138,7 +139,8 @@ internal sealed unsafe partial class PbrView : IDisposable
         _sceneBuffers.Add((_environmentShKey, owner.Environment.Sh, RenderGraphBufferUsage.Uniform));
         foreach (var entity in owner.Materials.Textures)
             Texture(entity);
-        Texture(owner.Environment.Cube);
+        _environmentCubeKey = new(_prefix + "environment-cube");
+        _sceneTextures.Add((_environmentCubeKey, owner.Environment.Cube));
         Texture(owner.Environment.Lut);
         if (owner.Captures is { } captureResources) {
             Buffer(captureResources.Regions, RenderGraphBufferUsage.Uniform); Texture(captureResources.Texture);

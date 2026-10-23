@@ -285,14 +285,16 @@ public sealed class PbrRenderer :
                     if (total > Settings.SceneGiBytes)
                         throw new ArgumentException("Paired probe field and transport exceed the total GI budget.", nameof(settings));
                 }
-                var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
-                    Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
+                var asset = Settings.BakedProbes ?? (Settings.BakedEnvironment is { } source
+                    ? PbrSceneTransport.CreateVolume(tracing!, Settings.ProbeDimensions, source.Coefficients.Span, Settings.ProbeBounds)
+                    : PbrSceneTransport.CreateVolume(tracing!, Settings.ProbeDimensions, new ProceduralSky(), Settings.ProbeBounds));
                 var identity = (tracing?.Identity ?? raster?.TransportIdentity ?? stream!.Identity).ToArray();
                 if (!asset.SceneIdentity.Span.SequenceEqual(identity))
                     throw new ArgumentException("Baked probes belong to different scene geometry/materials.", nameof(settings));
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))
                     throw new ArgumentOutOfRangeException(nameof(settings), "Invalid dynamic probe update budget.");
-                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference);
+                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference,
+                    Settings.BakedEnvironment is null ? null : Environment);
             }
         }
         catch {
