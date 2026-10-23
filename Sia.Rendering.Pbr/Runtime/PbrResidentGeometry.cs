@@ -105,6 +105,14 @@ internal sealed class PbrResidentGeometry : IDisposable
         }
     }
 
+    internal void RasterCoordinates(int index, out float3 position, out float2 bakeUv)
+    {
+        var product = _raster!.Product;
+        var source = _source![index];
+        position = product.Vertices[source].Position;
+        bakeUv = product.HasBakeUvs ? product.BakeUvs[source] : default;
+    }
+
     public void UploadIndices(Span<uint> scratch, uint vertexOffset, IndexUpload upload)
     {
         if (scratch.IsEmpty) throw new ArgumentException("Index scratch must be nonempty.", nameof(scratch));
