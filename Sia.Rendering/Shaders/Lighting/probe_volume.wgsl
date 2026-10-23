@@ -28,6 +28,7 @@ fn rendering_scene_probe_irradiance(volume: texture_3d<f32>, volume_sampler: sam
     let coefficients = rendering_unpack_probe(packed); let basis = rendering_probe_basis(normal);
     var irradiance = vec3<f32>(0);
     for (var c = 0u; c < 9u; c++) { irradiance += coefficients[c] * basis[c] * rendering_probe_convolution(c); }
+    irradiance *= max(header[2].w, 1.0);
     // Sparse unknown pairs retain zero weight; absolute live values normalize valid samples.
     if (correction) { return irradiance; }
     return max(irradiance / validity, vec3<f32>(0));
