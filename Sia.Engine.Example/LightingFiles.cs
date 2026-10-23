@@ -11,7 +11,7 @@ using Sia.Reactors;
 namespace Sia.Engine.Example;
 
 // Application IO and acquisition composition; Rendering owns the record/value codecs.
-internal static class LightingFiles
+internal static partial class LightingFiles
 {
     // Scene policy stays in the application. The World owns successfully published lights.
     internal static Entity[] PublishSceneLights(World world, PbrSceneData? scene, ProceduralSky? sky)
