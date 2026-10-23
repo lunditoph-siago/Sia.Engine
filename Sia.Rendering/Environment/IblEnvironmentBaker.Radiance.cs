@@ -21,8 +21,7 @@ public static partial class IblEnvironmentBaker
         if (filterSamples is < 16 or > 1024) throw new ArgumentOutOfRangeException(nameof(filterSamples));
         const int size = IblEnvironmentAsset.CubeSize, baseCount = 6 * size * size;
         if (RadianceWorkingBytes > maximumWorkingBytes) throw new ArgumentException("Capture scratch and final cube exceed the working budget.", nameof(maximumWorkingBytes));
-        var radiance = new float3[baseCount]; var cube = new Half[IblEnvironmentAsset.CubeTexels * 4];
-        var peak = 0f;
+        var radiance = new float3[baseCount];
         for (var face = 0; face < 6; face++) for (var y = 0; y < size; y++) {
             cancellationToken.ThrowIfCancellationRequested();
             for (var x = 0; x < size; x++) {
@@ -31,9 +30,19 @@ public static partial class IblEnvironmentBaker
                 var value = sample(CubeDirection(face, x, y, size), background);
                 if (!math.all(math.isfinite(value)) || math.any(value < 0) || math.any(value > 1e18f))
                     throw new InvalidDataException("Capture radiance must be nonnegative, finite and within the transport range.");
-                radiance[at] = value; peak = MathF.Max(peak, MathF.Max(value.x, MathF.Max(value.y, value.z)));
+                radiance[at] = value;
             }
         }
+        return FilterRadiance(source, radiance, filterSamples, cancellationToken);
+    }
+
+    private static IblEnvironmentAsset FilterRadiance(IblEnvironmentAsset source, float3[] radiance,
+        int filterSamples, CancellationToken cancellationToken)
+    {
+        const int size = IblEnvironmentAsset.CubeSize, baseCount = 6 * size * size;
+        var cube = new Half[IblEnvironmentAsset.CubeTexels * 4];
+        var peak = 0f;
+        foreach (var value in radiance) peak = MathF.Max(peak, MathF.Max(value.x, MathF.Max(value.y, value.z)));
         var scale = 1f;
         while (peak / scale > 65504) scale *= 2;
         for (var at = 0; at < baseCount; at++) {
