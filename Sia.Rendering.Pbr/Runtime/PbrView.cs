@@ -48,7 +48,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly HashSet<Entity> _casters = [];
     private readonly EntityHandler _collectCaster, _collectDirectional, _collectPoint, _collectSpot;
     private readonly string _prefix;
-    private readonly RenderGraphBufferKey _frameKey, _lightsKey, _clustersKey, _tilesKey;
+    private readonly RenderGraphBufferKey _frameKey, _outputUniformKey, _lightsKey, _clustersKey, _tilesKey;
     private readonly RenderGraphBufferKey _environmentShKey;
     private readonly RenderGraphBufferKey _probesKey, _traceKey, _traceGeometryKey, _traceInstancesKey, _probeConfigKey;
     private readonly RenderGraphBufferKey _probeHeaderKey;
@@ -100,6 +100,7 @@ internal sealed unsafe partial class PbrView : IDisposable
         _prefix = "pbr/" + view.Key.Value + "/";
         _timingsKey = owner.GetGpuTimingsTarget(view.Key);
         _frameKey = new(_prefix + "frame");
+        _outputUniformKey = new(_prefix + "output-parameters");
         _lightsKey = new(_prefix + "lights");
         _clustersKey = new(_prefix + "clusters");
         _tilesKey = new(_prefix + "tiles");
@@ -160,7 +161,7 @@ internal sealed unsafe partial class PbrView : IDisposable
             _uniform = _gpu.Buffer(512, WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);
-            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 0, 0)], WGPUBufferUsage.Uniform);
+            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale, owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 1 / owner.HdrRadianceScale, 0)], WGPUBufferUsage.Uniform);
             var sampler = WGPUSamplerDescriptor.Default;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;
