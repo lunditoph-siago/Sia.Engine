@@ -132,6 +132,7 @@ fn visit(index: u32, odd: bool) {
     let side = entry.z;
     let current = entry.x;
     let instance = instances[entry.y];
+    if ((instance.material.x & 0x80000000u) != 0u) { return; }
     let n = nodes[current];
     let local_center = (n.lo.xyz + n.hi.xyz) * 0.5;
     let local_extent = (n.hi.xyz - n.lo.xyz) * 0.5;

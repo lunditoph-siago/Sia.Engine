@@ -104,7 +104,12 @@ internal sealed class PbrLightmapCoefficientStreaming
     internal void EndFrame()
     {
         RequireRunning(); if (!_inFrame) throw new InvalidOperationException("No coefficient frame is open."); _inFrame = false;
-        try { Update(); }
+        var completed = _requests.Statistics.Completed;
+        try {
+            Update();
+            // Rebuild after admission: active/resident pages must not be requested again.
+            if (_requests.Statistics.Completed != completed) UpdateRequests();
+        }
         catch (Exception error) { _failure = error; throw; }
     }
 

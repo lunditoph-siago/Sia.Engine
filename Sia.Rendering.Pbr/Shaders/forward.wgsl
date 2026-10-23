@@ -31,6 +31,11 @@ fn prepass_vertex(
 #endif
 }
 
+@fragment
+fn prepass_fragment_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return position.z;
+}
+
 @vertex
 fn forward_vertex(
     @location(0) p: vec4<f32>,
