@@ -10,7 +10,8 @@ public readonly record struct PbrTextureMipReference
     public AssetContent<PbrTextureRecord> Content { get; }
     public AssetId Id => Content?.Id ?? default;
     public string ContentHash { get; }
-    public int EncodedBytes => (int)(Content?.Length ?? 0);
+    public int EncodedBytes => (int)(Content?.DecodedLength ?? 0);
+    public long StoredBytes => Content?.Length ?? 0;
     public AssetRefer<PbrTextureRecord>.Id Reference => new(Id);
 
     public PbrTextureMipReference(AssetId id, string contentHash, int encodedBytes)
@@ -21,12 +22,12 @@ public readonly record struct PbrTextureMipReference
         ArgumentNullException.ThrowIfNull(content);
         if (contentHash is not { Length: 64 } || !contentHash.All(char.IsAsciiHexDigit))
             throw new ArgumentException("Mip content requires a SHA-256 digest.", nameof(contentHash));
-        if (content.Length is < 64 or > 268435520) throw new ArgumentOutOfRangeException(nameof(content));
-        long remaining = content.Length;
+        if (content.DecodedLength is < 64 or > 268435520) throw new ArgumentOutOfRangeException(nameof(content));
+        long remaining = content.DecodedLength;
         foreach (var chunk in content.Chunks) {
-            if (chunk.Length != System.Math.Min(AssetChunk.MaximumLength, remaining) || !chunk.Dependencies.IsEmpty)
+            if (chunk.DecodedLength > remaining || !chunk.Dependencies.IsEmpty)
                 throw new InvalidDataException("Mip content requires ordered bounded chunks without external dependencies.");
-            remaining -= chunk.Length;
+            remaining -= chunk.DecodedLength;
         }
         if (remaining != 0) throw new InvalidDataException("Incomplete texture mip chunks.");
         Content = content; ContentHash = contentHash.ToUpperInvariant();
@@ -36,7 +37,7 @@ public readonly record struct PbrTextureMipReference
 /// <summary>Complete texture shape, independently readable fine mips and an immutable bootstrap tail. No IO or GPU owner.</summary>
 public sealed class PbrTextureMipsData
 {
-    private const int HeaderBytes = 64, ReferenceBytes = 64, ChunkBytes = 36;
+    private const int HeaderBytes = 64, ReferenceBytes = 64, ChunkBytes = 44;
     private readonly PbrTextureMipReference[] _mips;
     public uint Width { get; }
     public uint Height { get; }
@@ -58,11 +59,14 @@ public sealed class PbrTextureMipsData
             || tail.Width != System.Math.Max(1u, width >> mips.Length) || tail.Height != System.Math.Max(1u, height >> mips.Length))
             throw new InvalidDataException("Mip index and bootstrap texture shapes disagree.");
         var ids = new HashSet<AssetId>();
+        var chunkCount = 0;
         for (var mip = 0; mip < mips.Length; mip++) {
             var reference = mips[mip];
             var bytes = 64L + (long)System.Math.Max(1u, width >> mip) * System.Math.Max(1u, height >> mip) * 4;
             if (reference.Content is null || reference.Id.Value == Guid.Empty || !ids.Add(reference.Id) || reference.EncodedBytes != bytes
                 || !ValidHash(reference.ContentHash)) throw new InvalidDataException("Invalid or duplicate texture mip reference.");
+            chunkCount = checked(chunkCount + reference.Content.Chunks.Length);
+            if (chunkCount > ushort.MaxValue) throw new InvalidDataException("Texture mip index has too many independent blocks.");
         }
         return new(width, height, tail, mips.ToArray());
     }
@@ -77,9 +81,7 @@ public sealed class PbrTextureMipsData
             || data.Height != System.Math.Max(1u, Height >> mip) || data.MipLevels.Length != 1
             || data.Srgb != Tail.Srgb || data.Sampler != Tail.Sampler || data.EncodedBytes != (ulong)_mips[mip].EncodedBytes)
             throw new InvalidDataException("Texture mip does not match its index shape or sampling contract.");
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        data.Save(new DigestStream(Stream.Null, hash));
-        if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(), Convert.FromHexString(_mips[mip].ContentHash)))
+        if (data.EncodedHash != _mips[mip].ContentHash)
             throw new InvalidDataException("Texture mip content differs from its index.");
     }
 
@@ -87,7 +89,7 @@ public sealed class PbrTextureMipsData
     {
         ArgumentNullException.ThrowIfNull(stream);
         Span<byte> header = stackalloc byte[HeaderBytes]; header.Clear();
-        "SIATEXI1"u8.CopyTo(header);
+        "SIATEXI2"u8.CopyTo(header);
         BinaryPrimitives.WriteUInt32LittleEndian(header[8..], Width);
         BinaryPrimitives.WriteUInt32LittleEndian(header[12..], Height);
         header[16] = (byte)Levels; header[17] = (byte)TailMip;
@@ -106,6 +108,8 @@ public sealed class PbrTextureMipsData
             foreach (var chunk in _mips[mip].Content.Chunks) {
                 var target = references.AsSpan(TailMip * ReferenceBytes + firstChunk++ * ChunkBytes, ChunkBytes);
                 Convert.FromHexString(chunk.Id).CopyTo(target); BinaryPrimitives.WriteInt32LittleEndian(target[32..], chunk.Length);
+                BinaryPrimitives.WriteInt32LittleEndian(target[36..], chunk.DecodedLength);
+                BinaryPrimitives.WriteInt32LittleEndian(target[40..], (int)chunk.Encoding);
             }
         }
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -134,31 +138,29 @@ public sealed class PbrTextureMipsData
             var levels = (int)header[16]; var first = (int)header[17];
             var chunkCount = (int)BinaryPrimitives.ReadUInt16LittleEndian(header[18..]);
             var tailBytes = BinaryPrimitives.ReadUInt64LittleEndian(header[24..]);
-            if (!header[..8].SequenceEqual("SIATEXI1"u8) || header[20..24].IndexOfAnyExcept((byte)0) >= 0
-                || width is 0 or > 8192 || height is 0 or > 8192 || levels is < 1 or > 14 || first >= levels
-                || chunkCount < first || chunkCount > first * 17
-                || (levels > 1 && (width >> (levels - 2)) <= 1 && (height >> (levels - 2)) <= 1))
-                throw new InvalidDataException("Invalid texture mip index header.");
-            ulong expectedTail = 64;
-            for (var mip = first; mip < levels; mip++)
-                expectedTail += (ulong)System.Math.Max(1u, width >> mip) * System.Math.Max(1u, height >> mip) * 4;
-            var metadataBytes = HeaderBytes + (ulong)first * ReferenceBytes + (ulong)chunkCount * ChunkBytes;
+            var legacy = header[..8].SequenceEqual("SIATEXI1"u8);
+            var chunkBytes = legacy ? 36 : ChunkBytes;
+            _ = ValidateHeader(header, maximumBytes);
+            var expectedTail = tailBytes;
             var tailOwned = expectedTail - 64 + (ulong)(levels - first) * (ulong)Unsafe.SizeOf<ReadOnlyMemory<byte>>();
-            var indexOwned = (ulong)first * ((ulong)Unsafe.SizeOf<PbrTextureMipReference>() + 128) + (ulong)chunkCount * 256;
-            if (tailBytes != expectedTail || metadataBytes > maximumBytes || tailBytes > maximumBytes - metadataBytes
-                || tailOwned > maximumBytes || indexOwned > maximumBytes - tailOwned)
-                throw new InvalidDataException("Texture mip index exceeds its shape or decode limit.");
-            var references = new byte[first * ReferenceBytes + chunkCount * ChunkBytes]; stream.ReadExactly(references);
+            var references = new byte[first * ReferenceBytes + chunkCount * chunkBytes]; stream.ReadExactly(references);
             var chunks = new AssetChunk[chunkCount];
-            var chunkLengths = new Dictionary<string, int>(StringComparer.Ordinal);
+            var chunkLengths = new Dictionary<string, (int Stored, int Decoded, AssetChunkEncoding Encoding)>(StringComparer.Ordinal);
             for (var c = 0; c < chunkCount; c++) {
-                var row = references.AsSpan(first * ReferenceBytes + c * ChunkBytes, ChunkBytes);
+                var row = references.AsSpan(first * ReferenceBytes + c * chunkBytes, chunkBytes);
                 var length = BinaryPrimitives.ReadInt32LittleEndian(row[32..]);
-                if (length is < 1 or > AssetChunk.MaximumLength) throw new InvalidDataException("Invalid mip chunk length.");
+                var decoded = legacy ? length : BinaryPrimitives.ReadInt32LittleEndian(row[36..]);
+                var encoding = legacy ? 0 : BinaryPrimitives.ReadInt32LittleEndian(row[40..]);
+                if (length is < 1 or > AssetChunk.MaximumLength || decoded is < 1 or > AssetChunk.MaximumLength
+                    || encoding is < 0 or > (int)AssetChunkEncoding.Lz4
+                    || (encoding == 0 ? decoded != length : length >= decoded))
+                    throw new InvalidDataException("Invalid mip chunk encoding or length.");
                 var digest = Convert.ToHexString(row[..32]);
-                if (chunkLengths.TryGetValue(digest, out var priorLength) && priorLength != length)
+                var shape = (length, decoded, (AssetChunkEncoding)encoding);
+                if (chunkLengths.TryGetValue(digest, out var priorLength) && priorLength != shape)
                     throw new InvalidDataException("Conflicting mip chunk lengths for one digest.");
-                chunkLengths[digest] = length; chunks[c] = new(digest, length);
+                chunkLengths[digest] = shape;
+                chunks[c] = new(digest, length, decodedLength: decoded, encoding: (AssetChunkEncoding)encoding);
             }
             var mips = new PbrTextureMipReference[first];
             var ids = new HashSet<AssetId>();
@@ -172,14 +174,15 @@ public sealed class PbrTextureMipsData
                 var count = BinaryPrimitives.ReadInt32LittleEndian(row[52..]);
                 if (id.Value == Guid.Empty || !ids.Add(id) || bytes != expected)
                     throw new InvalidDataException("Invalid or duplicate mip payload reference.");
-                if (start != nextChunk || count != (expected + AssetChunk.MaximumLength - 1) / AssetChunk.MaximumLength
+                if (start != nextChunk || count < 1 || (legacy && count != (expected + AssetChunk.MaximumLength - 1) / AssetChunk.MaximumLength)
                     || count > chunkCount - nextChunk) throw new InvalidDataException("Invalid mip chunk range.");
                 var remaining = expected;
                 for (var c = start; c < start + count; c++) {
-                    if (chunks[c].Length != System.Math.Min(AssetChunk.MaximumLength, remaining))
+                    if (chunks[c].DecodedLength > remaining || (legacy && chunks[c].DecodedLength != System.Math.Min(AssetChunk.MaximumLength, remaining)))
                         throw new InvalidDataException("Mip chunks disagree with their payload length.");
-                    remaining -= chunks[c].Length;
+                    remaining -= chunks[c].DecodedLength;
                 }
+                if (remaining != 0) throw new InvalidDataException("Incomplete texture mip payload.");
                 mips[mip] = new(new(id, chunks.AsSpan(start, count).ToArray()), Convert.ToHexString(row[16..48]));
                 nextChunk += count;
             }
@@ -198,6 +201,30 @@ public sealed class PbrTextureMipsData
 
     private static bool ValidHash(string? value)
         => value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
+
+    internal static ulong ValidateHeader(ReadOnlySpan<byte> header, ulong maximumBytes)
+    {
+        var legacy = header[..8].SequenceEqual("SIATEXI1"u8);
+        var width = BinaryPrimitives.ReadUInt32LittleEndian(header[8..]);
+        var height = BinaryPrimitives.ReadUInt32LittleEndian(header[12..]);
+        var levels = (int)header[16]; var first = (int)header[17];
+        var chunks = BinaryPrimitives.ReadUInt16LittleEndian(header[18..]);
+        if ((!legacy && !header[..8].SequenceEqual("SIATEXI2"u8)) || header[20..24].IndexOfAnyExcept((byte)0) >= 0
+            || width is 0 or > 8192 || height is 0 or > 8192 || levels is < 1 or > 14 || first >= levels
+            || chunks < first || (legacy && chunks > first * 17)
+            || (levels > 1 && (width >> (levels - 2)) <= 1 && (height >> (levels - 2)) <= 1))
+            throw new InvalidDataException("Invalid texture mip index header.");
+        ulong tail = 64;
+        for (var mip = first; mip < levels; mip++)
+            tail += (ulong)System.Math.Max(1u, width >> mip) * System.Math.Max(1u, height >> mip) * 4;
+        var metadata = HeaderBytes + (ulong)first * ReferenceBytes + (ulong)chunks * (legacy ? 36ul : ChunkBytes);
+        var tailOwned = tail - 64 + (ulong)(levels - first) * (ulong)Unsafe.SizeOf<ReadOnlyMemory<byte>>();
+        var indexOwned = (ulong)first * ((ulong)Unsafe.SizeOf<PbrTextureMipReference>() + 128) + (ulong)chunks * 256;
+        if (tail != BinaryPrimitives.ReadUInt64LittleEndian(header[24..]) || metadata > maximumBytes || tail > maximumBytes - metadata
+            || tailOwned > maximumBytes || indexOwned > maximumBytes - tailOwned)
+            throw new InvalidDataException("Texture mip index exceeds its shape or decode limit.");
+        return metadata + tail;
+    }
 
     private sealed class DigestStream(Stream source, IncrementalHash hash, long remaining = long.MaxValue) : Stream
     {

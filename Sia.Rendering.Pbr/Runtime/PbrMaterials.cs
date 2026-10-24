@@ -22,10 +22,10 @@ internal sealed partial class PbrMaterials : IDisposable
         public Entity Texture = texture, View = view;
         public PbrTextureData[] Sources = [];
         public uint Width, Height;
-        public int Levels, TailMip, ResidentMip, WantedMip, DesiredMip;
+        public int Levels, TailMip, ResidentMip, DesiredMip, MinimumMip;
         public long RetryFrame;
-        public int CoarserFrames;
-        public float Priority;
+        public int[] ResidentMips = [], WantedMips = [], DesiredMips = [], Idle = [];
+        public float[] Priorities = [];
         public TextureArrayUpload? Residency;
     }
 
@@ -44,7 +44,8 @@ internal sealed partial class PbrMaterials : IDisposable
             var bytes = _gpu.Bytes;
             foreach (var array in _arrays) bytes = checked(bytes + (array.Residency?.Bytes ?? 0));
             foreach (var (Upload, Completion) in _retired) bytes = checked(bytes + Upload.Bytes);
-            return checked(bytes + (_pending?.Upload?.Bytes ?? 0));
+            foreach (var pending in _pending) bytes = checked(bytes + (pending.Upload?.Bytes ?? 0));
+            return bytes;
         }
     }
 
@@ -75,6 +76,9 @@ internal sealed partial class PbrMaterials : IDisposable
                 var perLayer = TailBytes(Width, Height, Levels, 0);
                 var layerLimit = stream is null ? (int)_gpu.Limits.MaxTextureArrayLayers
                     : (int)System.Math.Min(_gpu.Limits.MaxTextureArrayLayers, System.Math.Max(1L, _streaming.DecodedBytes / perLayer));
+                // Per-layer explicit LOD clamps preserve filtering when min/mag agree.
+                // Distinct filters retain hardware implicit-LOD selection in independent arrays.
+                if (stream is not null && Sampler.MinFilter != Sampler.MagFilter) layerLimit = 1;
                 foreach (var textures in shape.Chunk(layerLimit)) {
                     var array = stream is not null && stream.TextureSources.ContainsKey(textures[0])
                         ? UploadStreamTail(textures) : UploadArray(textures);
@@ -83,7 +87,7 @@ internal sealed partial class PbrMaterials : IDisposable
                         references.Add(textures[i], (array, (uint)i));
                 }
             }
-            _materialArrays = [.. maps.Select(m => m.Select(t => references[t].Texture).Distinct().ToArray())];
+            _materialUses = [.. maps.Select(m => m.Select(t => references[t]).ToArray())];
             var batchMaps = new List<ArrayTexture[]>();
             MaterialBatches = new int[assets.Length];
             var parameters = new PbrMaterialGpu[assets.Length];
@@ -102,16 +106,21 @@ internal sealed partial class PbrMaterials : IDisposable
                     | (m.MetallicRoughness is null ? 0u : 2u)
                     | (m.Occlusion is null || m.OcclusionStrength == 0 ? 0u : 4u)
                     | (m.Emissive is null || p.EmissiveStrength == 0 ? 0u : 8u);
+                uint streamingFlags = 0;
+                for (var map = 0; map < entries.Length; map++)
+                    if (entries[map].Texture.Sources.Length > 1 && !entries[map].Texture.Sources[entries[map].Layer].Sampler.UseMipmaps)
+                        streamingFlags |= 1u << (20 + map);
                 parameters[i] = new(new(p.BaseColor, p.Metallic), new(p.EmissiveColor * p.EmissiveStrength, p.Roughness),
                     new(m.NormalScale, m.OcclusionStrength, m.Normal is null ? 0 : 1, m.DoubleSided ? 1 : 0),
                     new(entries[0].Layer, entries[1].Layer, entries[2].Layer, entries[3].Layer),
-                    new(entries[4].Layer, (uint)batch, textureFlags, 0), new(m.Opacity, m.Transmission, m.Thickness, 0));
+                    new(entries[4].Layer, (uint)batch, textureFlags, streamingFlags), new(m.Opacity, m.Transmission, m.Thickness, 0));
             }
             var tableBytes = checked(((ulong)parameters.Length * (ulong)Marshal.SizeOf<PbrMaterialGpu>())
                 + ((ulong)batchMaps.Count * 16));
             if (tableBytes > budget - Bytes)
                 throw new InvalidOperationException("Combined material allocation budget exceeded.");
             Table = _gpu.Upload<PbrMaterialGpu>(parameters);
+            _parameters = parameters;
             _batchMaps = batchMaps;
             Groups = new Entity[batchMaps.Count];
             for (var batch = 0; batch < Groups.Length; batch++) {
@@ -190,7 +199,7 @@ internal sealed partial class PbrMaterials : IDisposable
     public void Dispose()
     {
         if (!IsStopped) throw new InvalidOperationException("Await material streaming shutdown before disposal.");
-        _pending?.Upload?.Dispose();
+        foreach (var pending in _pending) pending.Upload?.Dispose();
         foreach (var (Upload, Completion) in _retired) Upload.Dispose();
         foreach (var array in _arrays) array.Residency?.Dispose();
         _gpu.Dispose();
