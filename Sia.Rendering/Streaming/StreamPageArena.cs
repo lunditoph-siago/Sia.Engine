@@ -1,4 +1,5 @@
 using Sia;
+using Sia.Engine.Mesh;
 using Sia.Math;
 using Sia.WebGPU;
 using System.Runtime.InteropServices;
@@ -22,8 +23,8 @@ public sealed class StreamPageArena : IDisposable
 
         public long StagingBytes => ((long)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes) + ((long)Allocation.Triangles.Count * 12);
 
-        internal ReadOnlySpan<float4> Vertices
-            => MemoryMarshal.Cast<byte, float4>(_storage.AsSpan(0, (int)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes));
+        internal ReadOnlySpan<uint> Vertices
+            => MemoryMarshal.Cast<byte, uint>(_storage.AsSpan(0, (int)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes));
 
         internal ReadOnlySpan<uint> Indices
             => MemoryMarshal.Cast<byte, uint>(_storage.AsSpan((int)Allocation.Vertices.Count * StreamGeometryPage.VertexBytes, (int)Allocation.Triangles.Count * 12));
@@ -87,7 +88,7 @@ public sealed class StreamPageArena : IDisposable
         if (page.VertexCount != allocation.Vertices.Count || page.TriangleCount != allocation.Triangles.Count
             || !float.IsFinite(tangentMagnitude) || tangentMagnitude <= 0)
             throw new ArgumentException("Invalid geometry upload allocation.");
-        var packed = MemoryMarshal.Cast<byte, float4>(_staging.AsSpan(0, page.VertexCount * StreamGeometryPage.VertexBytes));
+        var packed = MemoryMarshal.Cast<byte, uint>(_staging.AsSpan(0, page.VertexCount * StreamGeometryPage.VertexBytes));
         PackVertices(page, packed, transform, sourceInstance, tangentMagnitude);
         var indices = MemoryMarshal.Cast<byte, uint>(_staging.AsSpan(page.VertexCount * StreamGeometryPage.VertexBytes, page.TriangleCount * 12));
         var sourceIndices = page.Indices;
@@ -95,10 +96,10 @@ public sealed class StreamPageArena : IDisposable
         return _current = new(allocation, _staging);
     }
 
-    internal static void PackVertices(StreamGeometryPage page, Span<float4> packed, float4x4 transform, uint sourceInstance, float tangentMagnitude)
+    internal static void PackVertices(StreamGeometryPage page, Span<uint> packed, float4x4 transform, uint sourceInstance, float tangentMagnitude)
     {
         ArgumentNullException.ThrowIfNull(page);
-        if (packed.Length != page.VertexCount * StreamGeometryPage.VertexPlanes || sourceInstance > 1u << 24
+        if (packed.Length != page.VertexCount * StreamVertexEncoding.Words || sourceInstance > 1u << 24
             || !float.IsFinite(tangentMagnitude) || tangentMagnitude <= 0
             || !math.all(math.isfinite(transform.c0)) || !math.all(math.isfinite(transform.c1))
             || !math.all(math.isfinite(transform.c2)) || !math.all(math.isfinite(transform.c3)))
@@ -111,11 +112,11 @@ public sealed class StreamPageArena : IDisposable
             var vertex = page.GetVertex(i); var t = vertex.Tangent;
             var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
             var direction = math.mul(normal, new float4(vertex.Normal, 0)).xyz;
-            packed[i] = new(position, direction.x);
-            packed[page.VertexCount + i] = new(direction.y, direction.z, vertex.UV.x, vertex.UV.y);
-            packed[(page.VertexCount * 2) + i] = new(math.mul(transform, new float4(t.xyz, 0)).xyz, (t.w < 0 ? -1 : 1) * tangentMagnitude);
             var bake = page.GetBakeUv(i);
-            packed[page.VertexCount * 3 + i] = new(bake.x, bake.y, page.HasBakeUvs ? 1 : 0, sourceInstance);
+            var value = new MeshVertex(position, direction, vertex.UV) {
+                Tangent = new(math.mul(transform, new float4(t.xyz, 0)).xyz, (t.w < 0 ? -1 : 1) * tangentMagnitude)
+            };
+            StreamVertexEncoding.PackVertex(packed, i, page.VertexCount, value, bake, page.HasBakeUvs, sourceInstance);
         }
     }
 
@@ -145,14 +146,15 @@ public sealed class StreamPageArena : IDisposable
         uint written = 0;
         while (!upload.Complete) {
             var vertex = upload.Plane < StreamGeometryPage.VertexPlanes;
-            var stride = vertex ? 16u : 4u;
+            var stride = vertex ? StreamGeometryPage.PlaneStride((uint)upload.Plane) : 4u;
             var length = vertex ? (int)upload.Allocation.Vertices.Count : upload.Indices.Length;
             var count = (int)System.Math.Min((maximumBytes - written) / stride, (uint)(length - upload.Offset));
             if (count == 0) break;
             if (vertex) {
-                var offset = (((ulong)upload.Plane * VertexCapacity) + upload.Allocation.Vertices.Offset + (uint)upload.Offset) * 16;
-                Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), offset,
-                    upload.Vertices.Slice((upload.Plane * length) + upload.Offset, count));
+                var offset = (ulong)upload.Plane * VertexCapacity * 16 + ((ulong)upload.Allocation.Vertices.Offset + (uint)upload.Offset) * stride;
+                var words = (int)stride / 4;
+                Wgpu.WriteBuffer<uint>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), offset,
+                    upload.Vertices.Slice(upload.Plane * length * 4 + upload.Offset * words, count * words));
             }
             else Wgpu.WriteBuffer<uint>(_gpu.Queue, Topology.GetWgpu<WGPUBuffer>(),
                 (((ulong)upload.Allocation.Triangles.Offset * 3) + (uint)upload.Offset) * 4, upload.Indices.Slice(upload.Offset, count));
