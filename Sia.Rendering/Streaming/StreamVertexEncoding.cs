@@ -34,22 +34,34 @@ public static class StreamVertexEncoding
         var at = index * 4;
         packed[at] = Bits(vertex.Position.x); packed[at + 1] = Bits(vertex.Position.y);
         packed[at + 2] = Bits(vertex.Position.z); packed[at + 3] = Bits(vertex.UV.x);
+        var normal = PackVector(vertex.Normal);
+        var tangent = PackVector(vertex.Tangent.xyz);
         at += stride * 4;
-        packed[at] = PackDirection(vertex.Normal); packed[at + 1] = Bits(Scale(vertex.Normal));
+        packed[at] = normal.x; packed[at + 1] = normal.y;
         packed[at + 2] = Bits(vertex.UV.y); packed[at + 3] = Bits(bake.x);
         at += stride * 4;
-        packed[at] = PackDirection(vertex.Tangent.xyz); packed[at + 1] = Bits(Scale(vertex.Tangent.xyz));
+        packed[at] = tangent.x; packed[at + 1] = tangent.y;
         packed[at + 2] = Bits(vertex.Tangent.w); packed[at + 3] = Bits(bake.y);
         packed[stride * 12 + index] = sourceInstance | (hasBake ? 0x80000000u : 0);
     }
 
     private static uint Bits(float value) => BitConverter.SingleToUInt32Bits(value);
 
-    private static float Scale(float3 direction)
+    private static uint2 PackVector(float3 direction)
     {
-        // Oct coordinates have unit L1 length. Store that scale so the common GPU path only multiplies.
-        var sum = System.Math.Abs((double)direction.x) + System.Math.Abs((double)direction.y) + System.Math.Abs((double)direction.z);
-        // The sign selects a maximum-component fallback without overflowing large finite vectors.
-        return sum <= float.MaxValue / 2d ? (float)sum : -math.cmax(math.abs(direction));
+        var bits = Bits(math.cmax(math.abs(direction)));
+        if (bits == 0) return default;
+        var exponent = (int)(bits >> 23);
+        var power = exponent == 0 ? System.Numerics.BitOperations.Log2(bits) - 149 : exponent - 127;
+        // A power-of-two Float32 scale needs only its high half. Tiny subnormal
+        // powers use the sign bit as a tag and retain their single-bit index.
+        var scale = exponent == 0 ? 0x8000u | (uint)(power + 149) : (uint)exponent << 7;
+        // Admitted powers are -149..127, so this reciprocal is always a normal Float64.
+        var inverse = BitConverter.UInt64BitsToDouble((ulong)(1022 - power) << 52) * 32767d;
+        // Decoding doubles the mantissa before scaling. Do not round the largest
+        // finite exponent up to the unrepresentable positive/negative 2^128.
+        var limit = power == 127 ? 32766 : 32767;
+        uint Component(float value) => (ushort)(short)System.Math.Clamp((int)System.Math.Round(value * inverse), -limit, limit);
+        return new(Component(direction.x) | (Component(direction.y) << 16), Component(direction.z) | (scale << 16));
     }
 }
