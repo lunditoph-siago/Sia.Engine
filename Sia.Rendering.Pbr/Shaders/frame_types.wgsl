@@ -14,7 +14,7 @@ struct Frame {
     size: vec4<u32>,
     geometry: vec4<u32>,
     grid: vec4<u32>,
-    depth: vec4<f32>,
+    depth: vec4<f32>, // logarithmic cluster scale/bias, physical-to-HDR factor, stored-cube-to-physical factor
     counts: vec4<u32>,
     shadow: vec4<u32>,
     splits: vec4<f32>,

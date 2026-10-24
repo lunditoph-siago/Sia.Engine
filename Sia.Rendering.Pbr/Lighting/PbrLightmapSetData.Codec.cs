@@ -10,7 +10,8 @@ public sealed partial class PbrLightmapSetData
     public void Save(Stream stream,CancellationToken cancellationToken=default)
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
-        Span<byte> header=stackalloc byte[200]; "SIALMSET"u8.CopyTo(header);
+        Span<byte> header=stackalloc byte[200+BakeSettings.EnvironmentBytes];
+        (BakeSettings.Environment is null ? "SIALMSET"u8 : "SIALMSE2"u8).CopyTo(header);
         ProductId.Value.TryWriteBytes(header.Slice(8,16),bigEndian:true,out _);
         _=Convert.FromHexString(SceneIdentity,header.Slice(24,32),out _,out _);
         _=Convert.FromHexString(BakeIdentity,header.Slice(56,32),out _,out _);
@@ -42,10 +43,15 @@ public sealed partial class PbrLightmapSetData
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         if (maximumBytes<232) throw new InvalidDataException("Lighting set header exceeds its decode budget.");
         try {
-            Span<byte> header=stackalloc byte[200]; stream.ReadExactly(header);
-            if (!header[..8].SequenceEqual("SIALMSET"u8)) throw new InvalidDataException("Invalid lighting set signature.");
+            Span<byte> storage=stackalloc byte[248]; var header=storage[..200]; stream.ReadExactly(header);
+            var environment=header[..8].SequenceEqual("SIALMSE2"u8);
+            if (environment) {
+                if (maximumBytes<280) throw new InvalidDataException("HDR lighting set header exceeds its decode budget.");
+                stream.ReadExactly(storage[200..]); header=storage;
+            }
+            else if (!header[..8].SequenceEqual("SIALMSET"u8)) throw new InvalidDataException("Invalid lighting set signature.");
             var productCount=BinaryPrimitives.ReadInt32LittleEndian(header[88..]); var receiverCount=BinaryPrimitives.ReadInt32LittleEndian(header[92..]);
-            Admit(productCount,receiverCount,maximumBytes);
+            Admit(productCount,receiverCount,maximumBytes,environment);
             var remaining=(long)productCount*84+(long)receiverCount*152+32;
             if (stream.CanSeek && stream.Length-stream.Position!=remaining) throw new InvalidDataException("Lighting set length differs from its counts.");
             var id=new AssetId(new Guid(header.Slice(8,16),bigEndian:true));

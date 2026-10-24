@@ -49,11 +49,14 @@ internal sealed unsafe partial class PbrView
             Grid = new(16, 9, 24, k_LightsPerCell), Counts = new(0, 0, uint.MaxValue, 0)
         };
         var scale = 24 / MathF.Log(parameters.Far / parameters.Near);
-        _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1, 0);
+        // Lighting and reflection history use physical units; only the final Half HDR attachment is scaled.
+        _data.Depth = new(scale, MathF.Log(parameters.Near) * scale, 1 / _owner.HdrRadianceScale,
+            _owner.Environment.CubeRadianceScale);
         _directional.Clear();
         _casters.Clear();
         Array.Clear(_shadowActive);
         _spotCount = 0;
+        _localRadianceBound = 0; double directionalRadianceBound = 0;
         frame.Frame.MainWorld.Query(s_Casters, _collectCaster);
         frame.Frame.MainWorld.Query(s_Directionals, _collectDirectional);
         var directionalData = MemoryMarshal.CreateSpan(ref _data.Direction0, 8);
@@ -63,9 +66,11 @@ internal sealed unsafe partial class PbrView
         for (var i = 0; i < _directional.Count; i++) {
             var e = _directional[i];
             var light = e.Get<LightColor>();
-            var direction = -math.normalize(e.Get<GlobalTransform>().Affine.RotationScale.c2);
+            var direction = -LightDirection(e.Get<GlobalTransform>().Affine.RotationScale.c2);
             directionalData[i * 2] = new(direction, 0);
-            directionalData[(i * 2) + 1] = new(LightRadiance(light), 0);
+            var radiance = LightRadiance(light);
+            directionalData[(i * 2) + 1] = new(radiance, 0);
+            directionalRadianceBound += math.cmax(math.abs(radiance));
             if (_data.Counts.z != uint.MaxValue || !_casters.Contains(e) || shadowConfig.CascadeCount == 0) continue;
             _data.Counts.z = (uint)i;
             _data.Shadow.x = (uint)shadowConfig.CascadeCount;
@@ -95,7 +100,20 @@ internal sealed unsafe partial class PbrView
         }
         frame.Frame.MainWorld.Query(s_Points, _collectPoint);
         frame.Frame.MainWorld.Query(s_Spots, _collectSpot);
+        var hdrScale = _owner.FrameRadianceScale(directionalRadianceBound + _localRadianceBound);
+        _data.Depth.z = 1 / hdrScale;
         PrepareHistory();
+        var exposure = _owner.DebugMode == VisibilityDebugMode.Shaded ? _owner.ExposureCompensation : 0;
+        if (hdrScale != _hdrRadianceScale) {
+            // Composition and display observe the same view-owned storage units.
+            var manual = _owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0;
+            Wgpu.WriteBuffer<float4>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [new(hdrScale * MathF.Pow(2, exposure), manual, 1 / hdrScale, 0)]);
+            _hdrRadianceScale = hdrScale; _outputExposure = exposure;
+        }
+        else if (exposure != _outputExposure) {
+            Wgpu.WriteBuffer<float>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [hdrScale * MathF.Pow(2, exposure)]);
+            _outputExposure = exposure;
+        }
         Wgpu.WriteBuffer<PbrFrame>(_gpu.Queue, _uniform.GetWgpu<WGPUBuffer>(), 0, [_data]);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
         var culler = new FrustumCuller(camera.Frustum);

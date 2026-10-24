@@ -4,6 +4,10 @@ namespace Sia.Engine.Rendering;
 
 public static partial class IblEnvironmentBaker
 {
+    /// <summary>Principal scratch and final owned cube bytes, excluding array headers and caller callback storage.</summary>
+    public static ulong RadianceWorkingBytes => 6ul * IblEnvironmentAsset.CubeSize * IblEnvironmentAsset.CubeSize
+        * (ulong)System.Runtime.CompilerServices.Unsafe.SizeOf<float3>() + IblEnvironmentAsset.CubeTexels * 16ul;
+
     /// <summary>
     /// Pure CPU producer: invokes the borrowed scene callback exactly once per base texel, then filters
     /// the cached radiance using GGX importance sampling. Preserves shared sky/SH/BRDF. No IO or GPU effects.
@@ -16,19 +20,34 @@ public static partial class IblEnvironmentBaker
         cancellationToken.ThrowIfCancellationRequested();
         if (filterSamples is < 16 or > 1024) throw new ArgumentOutOfRangeException(nameof(filterSamples));
         const int size = IblEnvironmentAsset.CubeSize, baseCount = 6 * size * size;
-        const ulong bytes = baseCount * 12ul + IblEnvironmentAsset.CubeTexels * 16ul;
-        if (bytes > maximumWorkingBytes) throw new ArgumentException("Capture scratch and final cube exceed the working budget.", nameof(maximumWorkingBytes));
-        var radiance = new float3[baseCount]; var cube = new Half[IblEnvironmentAsset.CubeTexels * 4];
+        if (RadianceWorkingBytes > maximumWorkingBytes) throw new ArgumentException("Capture scratch and final cube exceed the working budget.", nameof(maximumWorkingBytes));
+        var radiance = new float3[baseCount];
         for (var face = 0; face < 6; face++) for (var y = 0; y < size; y++) {
             cancellationToken.ThrowIfCancellationRequested();
             for (var x = 0; x < size; x++) {
                 var at = (face * size + y) * size + x; var offset = at * 4;
-                var background = new float3((float)source.Cube.Span[offset], (float)source.Cube.Span[offset + 1], (float)source.Cube.Span[offset + 2]);
+                var background = new float3((float)source.Cube.Span[offset], (float)source.Cube.Span[offset + 1], (float)source.Cube.Span[offset + 2]) * source.CubeRadianceScale;
                 var value = sample(CubeDirection(face, x, y, size), background);
-                if (!math.all(math.isfinite(value)) || math.any(value < 0) || math.any(value > 65504))
-                    throw new InvalidDataException("Capture radiance must be nonnegative, finite and representable in the environment payload.");
-                radiance[at] = value; Store(cube, at, value);
+                if (!math.all(math.isfinite(value)) || math.any(value < 0) || math.any(value > 1e18f))
+                    throw new InvalidDataException("Capture radiance must be nonnegative, finite and within the transport range.");
+                radiance[at] = value;
             }
+        }
+        return FilterRadiance(source, radiance, filterSamples, cancellationToken);
+    }
+
+    private static IblEnvironmentAsset FilterRadiance(IblEnvironmentAsset source, float3[] radiance,
+        int filterSamples, CancellationToken cancellationToken)
+    {
+        const int size = IblEnvironmentAsset.CubeSize, baseCount = 6 * size * size;
+        var cube = new Half[IblEnvironmentAsset.CubeTexels * 4];
+        var peak = 0f;
+        foreach (var value in radiance) peak = MathF.Max(peak, MathF.Max(value.x, MathF.Max(value.y, value.z)));
+        var scale = 1f;
+        while (peak / scale > 65504) scale *= 2;
+        for (var at = 0; at < baseCount; at++) {
+            if ((at & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+            Store(cube, at, radiance[at] / scale);
         }
         var start = baseCount;
         for (var mip = 1; mip < IblEnvironmentAsset.MipCount; mip++) {
@@ -49,13 +68,13 @@ public static partial class IblEnvironmentBaker
                         total += SampleBase(radiance, light, size) * nl; weight += nl;
                     }
                     if (weight <= 0) throw new InvalidDataException("Capture filter has no supported direction.");
-                    Store(cube, start + (face * edge + y) * edge + x, total / weight);
+                    Store(cube, start + (face * edge + y) * edge + x, total / (weight * scale));
                 }
             }
             start += 6 * edge * edge;
         }
         cancellationToken.ThrowIfCancellationRequested();
-        return source.WithCube(cube, cancellationToken: cancellationToken);
+        return source.WithCube(cube, cancellationToken: cancellationToken, cubeRadianceScale: scale);
     }
 
     private static void Store(Half[] output, int texel, float3 value)

@@ -46,7 +46,7 @@ internal sealed class PbrLightmapProductStreaming : IDisposable
         var count = set.Products.Length; _ids = new string[count]; _bytes = new int[count]; _eligible = new bool[count];
         _evicting = new bool[count]; _lastUsed = new long[count]; var maximumBytes = 1;
         for (var at = 0; at < count; at++) {
-            var shape = set.ProductCounts(at); _bytes[at] = checked((int)PbrLightmapData.RequiredBytes(shape.Receivers, shape.Charts, shape.Pages));
+            var shape = set.ProductCounts(at); _bytes[at] = checked((int)PbrLightmapData.RequiredBytes(shape.Receivers, shape.Charts, shape.Pages, set.BakeSettings));
             _ids[at] = set.Products[at].Id.Value.ToString("N"); _indices.Add(_ids[at], at);
             _eligible[at] = _bytes[at] <= decodedBytes && (ulong)shape.Receivers * 16 <= uploadBytesPerFrame && pool.CanFit(at);
             if (_eligible[at]) maximumBytes = System.Math.Max(maximumBytes, _bytes[at]);

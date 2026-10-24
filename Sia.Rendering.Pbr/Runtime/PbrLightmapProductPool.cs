@@ -79,7 +79,7 @@ internal sealed class PbrLightmapProductPool : IDisposable
         var scratch = 0;
         foreach (var receiver in _set.Receivers)
             if (receiver.Product == product) scratch = System.Math.Max(scratch, receiver.Receiver.ChartCount);
-        var cpu = checked(PbrLightmapData.RequiredBytes(counts.Receivers, counts.Charts, counts.Pages) + bytes + (ulong)scratch * 4);
+        var cpu = checked(PbrLightmapData.RequiredBytes(counts.Receivers, counts.Charts, counts.Pages, _set.BakeSettings) + bytes + (ulong)scratch * 4);
         return bytes / 16 <= _metadata.Capacity && counts.Pages <= _pages.Capacity && cpu <= _cpuBudget;
     }
 

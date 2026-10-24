@@ -76,19 +76,35 @@ public static partial class PbrSceneTransport
     public static DiffuseProbeAsset CreateVolume(SceneTraceData scene, uint3 dimensions,
         ProceduralSky sky, Aabb? bounds = null)
     {
+        _ = VolumeCount(dimensions);
+        return CreateVolume(scene, dimensions, IrradianceSh.Project(sky.Evaluate), bounds);
+    }
+
+    /// <summary>Seeds physical incident-radiance SH without reprojecting a procedural placeholder.</summary>
+    public static DiffuseProbeAsset CreateVolume(SceneTraceData scene, uint3 dimensions,
+        ReadOnlySpan<float4> coefficients, Aabb? bounds = null)
+    {
+        if (coefficients.Length != 9) throw new ArgumentException("Probe seeds require nine physical SH coefficients.", nameof(coefficients));
+        foreach (var coefficient in coefficients)
+            if (!math.all(math.isfinite(coefficient))) throw new ArgumentException("Non-finite probe seed.", nameof(coefficients));
         var box = bounds ?? scene.Bounds;
         var extent = math.max(box.Max - box.Min, new float3(.01f));
+        var count = VolumeCount(dimensions);
+        var step = extent / new float3(dimensions.x - 1, dimensions.y - 1, dimensions.z - 1);
+        var seed = new float4[count * 9];
+        for (var i = 0; i < seed.Length; i++)
+            seed[i] = new(coefficients[i % 9].xyz, 1);
+        return new(box.Min, step, dimensions, scene.Identity.Span, seed);
+    }
+
+    private static int VolumeCount(uint3 dimensions)
+    {
         if (dimensions.x > DiffuseProbeAsset.MaximumProbes || dimensions.y > DiffuseProbeAsset.MaximumProbes
             || dimensions.z > DiffuseProbeAsset.MaximumProbes)
             throw new ArgumentOutOfRangeException(nameof(dimensions));
         var count = (ulong)dimensions.x * dimensions.y * dimensions.z;
         if (dimensions.x < 2 || dimensions.y < 2 || dimensions.z < 2 || count > DiffuseProbeAsset.MaximumProbes)
             throw new ArgumentOutOfRangeException(nameof(dimensions));
-        var step = extent / new float3(dimensions.x - 1, dimensions.y - 1, dimensions.z - 1);
-        var sh = IrradianceSh.Project(sky.Evaluate);
-        var coefficients = new float4[(int)count * 9];
-        for (var i = 0; i < coefficients.Length; i++)
-            coefficients[i] = new(sh[i % 9].xyz, 1);
-        return new(box.Min, step, dimensions, scene.Identity.Span, coefficients);
+        return (int)count;
     }
 }

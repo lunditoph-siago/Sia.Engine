@@ -9,7 +9,7 @@ export function readSceneOptions(pageUrl) {
   if (!Object.hasOwn(scenes, pipeline)) throw new Error('Expected pipeline bunny|unlit.');
   const scene = scenes[pipeline];
   for (const name of parameters.keys()) {
-    if (!['pipeline', 'quality', 'scene', 'environment', 'probes'].includes(name))
+    if (!['pipeline', 'quality', 'scene', 'environment', 'probes', 'exposure-compensation'].includes(name))
       throw new Error(`Unknown scene option: ${name}.`);
     if (parameters.getAll(name).length !== 1) throw new Error(`Duplicate scene option: ${name}.`);
     if (pipeline === 'unlit' && name !== 'pipeline') throw new Error('Unlit has no external scene or lighting assets.');
@@ -20,6 +20,14 @@ export function readSceneOptions(pageUrl) {
   if (quality) args.push('--quality', quality);
   for (const name of ['environment', 'probes']) {
     if (parameters.has(name)) args.push('--' + name, parameters.get(name));
+  }
+  if (parameters.has('exposure-compensation')) {
+    const value = parameters.get('exposure-compensation').trim();
+    const stops = Math.fround(Number(value));
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)
+        || !Number.isFinite(stops) || stops < -16 || stops > 16)
+      throw new Error('Expected exposure-compensation stops in -16..16.');
+    args.push('--exposure-compensation', value);
   }
   return { ...scene, pipeline, quality, sceneUrl: parameters.get('scene'), args };
 }

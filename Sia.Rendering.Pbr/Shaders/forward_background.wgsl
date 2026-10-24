@@ -18,5 +18,5 @@ fn forward_background(@builtin(global_invocation_id) id: vec3<u32>) {
     let vector = world.xyz / world.w - frame.eye.xyz;
     let direction = vector * inverseSqrt(max(dot(vector, vector), 1e-20));
     let color = textureSampleLevel(environment, environment_sampler, direction, 0).rgb;
-    textureStore(hdr, vec2<i32>(id.xy), vec4<f32>(color, 1));
+    textureStore(hdr, vec2<i32>(id.xy), vec4<f32>(color * (frame.depth.w * frame.depth.z), 1));
 }

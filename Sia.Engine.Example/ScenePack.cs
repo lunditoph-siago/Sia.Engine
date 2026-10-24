@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Sia;
 using Sia.Asset;
 using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
@@ -31,6 +32,7 @@ internal static partial class ScenePack
         public Entry[] Meshes { get; init; } = [];
         public Entry[] Materials { get; init; } = [];
         public Entry[] Textures { get; init; } = [];
+        public LightingFiles.GltfLightInput? GltfLights { get; init; }
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -53,6 +55,8 @@ internal static partial class ScenePack
         if (Path.Exists(output)) throw new IOException("Scene output must not already exist.");
         recipePath = Path.GetFullPath(recipePath);
         var recipe = ReadRecipe(recipePath);
+        var authoredLights = recipe.GltfLights is { } sourceLights
+            ? await LightingFiles.ReadGltfLightsAsync(sourceLights, Path.GetDirectoryName(recipePath)!, maximumFileBytes, cancellationToken) : null;
         var bakeSettings = lightmap?.Settings();
         if (lightmap is not null && bakeLayouts is null)
             throw new InvalidDataException("Lightmap scene publication requires exact canonical layouts.");
@@ -81,6 +85,17 @@ internal static partial class ScenePack
         var meshInputs = Entries(recipe.Meshes, typeof(MeshManifestRecord));
         var materialInputs = Entries(recipe.Materials, typeof(PbrMaterialRecord));
         var textureInputs = Entries(recipe.Textures, typeof(PbrTextureRecord));
+        IblEnvironmentRecord? environment = null;
+        if (lightmap?.Environment is { } environmentInput) {
+            Claim(new(environmentInput.Id), typeof(IblEnvironmentRecord));
+            if (IblEnvironmentAsset.EncodedBytes > maximumFileBytes || IblEnvironmentAsset.EncodedBytes > maximumTotalBytes
+                || 4ul * IblEnvironmentAsset.EncodedBytes + 8192 > lightmap.MaximumWorkingBytes)
+                throw new InvalidDataException("Lightmap environment exceeds encoded or preparation working admission.");
+            using var http = new HttpClient();
+            environment = (await LightingFiles.PrepareAsync(Path.GetFullPath(environmentInput.Input, Path.GetDirectoryName(recipePath)!),
+                null, http, cancellationToken)).Environment;
+            bakeSettings = lightmap.Settings(environment);
+        }
         var stage = Path.Combine(parent, ".scene-pack-" + Guid.NewGuid().ToString("N"));
         if (Path.Exists(stage)) throw new IOException("Scene staging path already exists.");
         Directory.CreateDirectory(stage);
@@ -93,6 +108,15 @@ internal static partial class ScenePack
                 throw new IOException("Scene staging directory must not be a directory link.");
         }
         try {
+            async Task Publish(AssetId id, ReadOnlyMemory<byte> bytes, bool scene)
+            {
+                if (bytes.Length > maximumFileBytes || bytes.Length > maximumTotalBytes - total)
+                    throw new InvalidDataException("Scene output exceeds its encoded publication admission.");
+                cancellationToken.ThrowIfCancellationRequested(); RequireStage(); total += bytes.Length;
+                var target = Path.Combine(stage, id.Value.ToString("N") + (scene ? ".siascene" : ".siaasset"));
+                using var file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous);
+                files.Add(target); await file.WriteAsync(bytes, cancellationToken);
+            }
             async Task<T> Read<T>(AssetId id, string path, Func<Stream, string, T> decode, bool scene = false, bool publish = true) where T : class, IAssetRecord
             {
                 cancellationToken.ThrowIfCancellationRequested(); Claim(id, typeof(T));
@@ -103,21 +127,26 @@ internal static partial class ScenePack
                 if (input.Length > available)
                     throw new InvalidDataException($"Scene input {id.Value:N} requires {input.Length} encoded bytes; remaining admission {available}, consumed {total}, total limit {maximumTotalBytes}.");
                 var bytes = await AssetInput.ReadBoundedAsync(input, available, cancellationToken);
-                if (publish) total += bytes.Length;
                 if (!MemoryMarshal.TryGetArray(bytes, out var segment)) throw new InvalidOperationException("Expected encoded array.");
                 T record;
                 using (var payload = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false)) record = decode(payload, path);
                 cancellationToken.ThrowIfCancellationRequested(); RequireStage();
                 if (!publish) return record;
-                var target = Path.Combine(stage, id.Value.ToString("N") + (scene ? ".siascene" : ".siaasset"));
-                using var file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous);
-                files.Add(target); await file.WriteAsync(bytes, cancellationToken);
+                await Publish(id, bytes, scene);
                 return record;
             }
             string Locate(Dictionary<AssetId, string> inputs, AssetId id) => inputs.TryGetValue(id, out var path)
                 ? path : throw new AssetNotFoundException("Scene recipe has no entry for a required asset.");
             var scene = await Read(sceneId, Path.GetFullPath(recipe.Input, Path.GetDirectoryName(recipePath)!),
-                (s, n) => PbrSceneRecord.Load(s, (ulong)maximumFileBytes, n), scene: true);
+                (s, n) => PbrSceneRecord.Load(s, (ulong)maximumFileBytes, n), scene: true, publish: authoredLights is null);
+            if (authoredLights is not null) {
+                scene = scene with { Data = scene.Data.WithLights(authoredLights) };
+                if (scene.Data.EncodedBytes > (ulong)maximumFileBytes || scene.Data.EncodedBytes > (ulong)(maximumTotalBytes - total))
+                    throw new InvalidDataException("Authored lighting exceeds scene encoded publication admission.");
+                var bytes = new byte[checked((int)scene.Data.EncodedBytes)];
+                using (var encoded = new MemoryStream(bytes, writable: true)) scene.Data.Save(encoded, cancellationToken);
+                await Publish(sceneId, bytes, scene: true);
+            }
             var meshes = new Dictionary<AssetId, MeshManifestRecord>();
             var rasters = new Dictionary<AssetId, MeshRasterRecord>(); var virtuals = new Dictionary<AssetId, MeshVirtualRecord>();
             var bvhs = new Dictionary<AssetId, MeshBvhRecord>();
@@ -219,6 +248,7 @@ internal static partial class ScenePack
             // Original generated acquisition plus pure domain composition validate selected file graphs.
             using (var world = new World()) {
                 world.AddAddon<AssetLibrary>();
+                if (scene.Data.HasAuthoredLights) LightingFiles.PublishSceneLights(world, scene.Data, null);
                 if (recipe.Raster) PbrSceneFiles.AcquireRaster(world, new(sceneId, scene, meshes, rasters, materials, textures)).Root.Destroy();
                 if (recipe.Virtual) {
                     AssetLibrary.RegisterAsset<MeshVirtualPageAsset, MeshVirtualPageRecord>();
@@ -235,12 +265,14 @@ internal static partial class ScenePack
                     maximumMetadataBytes: System.Math.Min((ulong)maximumFileBytes, PbrLightmapData.MaximumEncodedBytes),
                     maximumWorkingBytes: lightmap.MaximumWorkingBytes, maximumStagingBytes: lightmap.MaximumStagingBytes,
                     cancellationToken: cancellationToken, maximumEncodedBytes: (ulong)(maximumTotalBytes - total),
-                    maximumFileBytes: (ulong)maximumFileBytes, maximumPageResolution: lightmap.MaximumPageResolution);
+                    maximumFileBytes: (ulong)maximumFileBytes, maximumPageResolution: lightmap.MaximumPageResolution,
+                    environment: environment);
                 lightingFiles = lighting.Files;
                 foreach (var filename in lightingFiles) {
                     cancellationToken.ThrowIfCancellationRequested(); var path = Path.Combine(lightingDirectory, filename);
                     var id = new AssetId(Guid.ParseExact(Path.GetFileNameWithoutExtension(filename), "N"));
-                    if (ids.ContainsKey(id)) throw new InvalidDataException("Lighting output aliases a scene input identity.");
+                    if (ids.ContainsKey(id) && (bakeSettings?.Environment?.Id != id || ids[id] != typeof(IblEnvironmentRecord)))
+                        throw new InvalidDataException("Lighting output aliases a scene input identity.");
                     var length = new FileInfo(path).Length;
                     if (length > maximumFileBytes || length > maximumTotalBytes - total)
                         throw new InvalidDataException("Lighting files exceed selected scene publication admission.");
