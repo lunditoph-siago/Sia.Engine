@@ -111,10 +111,12 @@ fn resident_direction(word: u32) -> vec3<f32> {
 }
 
 fn stream_direction(word: u32, scale: u32) -> vec3<f32> {
-    let direction = packed_direction(word);
-    if ((scale & 0x80000000u) == 0u) { return direction * bitcast<f32>(scale); }
-    let scaled = clamp(direction / max(max(abs(direction.x), abs(direction.y)), abs(direction.z)), vec3<f32>(-1.0), vec3<f32>(1.0));
-    return scaled * bitcast<f32>(scale & 0x7fffffffu);
+    let direction = vec3<f32>(unpack2x16snorm(word), unpack2x16snorm(scale).x) * 2.0;
+    var magnitude = bitcast<f32>(scale & 0xffff0000u);
+    if ((scale & 0x80000000u) != 0u) {
+        magnitude = bitcast<f32>(1u << ((scale >> 16u) & 31u));
+    }
+    return direction * magnitude;
 }
 
 fn resident_normal(word: u32) -> vec3<f32> {
