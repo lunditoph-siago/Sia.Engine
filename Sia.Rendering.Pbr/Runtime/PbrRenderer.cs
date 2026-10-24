@@ -125,6 +125,7 @@ public sealed partial class PbrRenderer :
     private readonly HashSet<Guid>? _staticInstanceIds;
     private PbrBvhTrace? _trace, _pendingTrace;
     private SceneTraceData? _traceData, _pendingTraceData;
+    private bool _pendingTraceVisibility;
 
     public RenderFeatureKey Key { get; } = new("pbr");
     public VisibilityDebugMode DebugMode { get; set; }
@@ -347,7 +348,7 @@ public sealed partial class PbrRenderer :
             nextData = currentData.WithInstances(nextTrace.PackGpuInstances((ulong)currentData.Instances.Length * 16));
         }
         Scene.StageVisibility(updates);
-        if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; }
+        if (nextTrace is not null) { _pendingTrace = nextTrace; _pendingTraceData = nextData; _pendingTraceVisibility = true; }
     }
 
     /// <summary>Stages explicit late-bound diffuse transport values by asset ID; draw materials and frozen reference inputs are separate.</summary>
@@ -441,9 +442,12 @@ public sealed partial class PbrRenderer :
         if (_pendingTraceData is { } pendingTraceData) Probes!.UpdateInstances(pendingTraceData);
         Scene.ApplyTransforms();
         if (_pendingTrace is { } pendingTrace) {
+            // Rigid motion is validated per receiver/hit; radiance and visibility changes reject the whole history.
+            if (_pendingTraceVisibility || !_pendingTraceData!.Packed.Equals(_traceData!.Packed))
+                ReflectionTransportRevision++;
             _trace = pendingTrace; _traceData = _pendingTraceData;
             _pendingTrace = null; _pendingTraceData = null;
-            ReflectionTransportRevision++;
+            _pendingTraceVisibility = false;
         }
         Scene.Streaming?.BeginFrame();
         Materials.BeginFrame();
