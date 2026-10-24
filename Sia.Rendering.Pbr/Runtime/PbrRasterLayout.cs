@@ -5,7 +5,7 @@ using Sia.Math;
 namespace Sia.Engine.Rendering.Pbr;
 
 // Owns compact section remaps until upload completes. Source products remain borrowed from the caller.
-internal sealed class PbrRasterLayout : IDisposable
+internal sealed partial class PbrRasterLayout : IDisposable
 {
     internal PbrResidentGeometry[] Geometry { get; private set; } = [];
     internal uint[] VertexOffsets { get; private set; } = [];
@@ -23,11 +23,15 @@ internal sealed class PbrRasterLayout : IDisposable
     internal Aabb Bounds { get; }
     private bool _disposed;
 
-    internal PbrRasterLayout(PbrRasterScene source,int[] materialBatches,ulong maximumBytes)
+    internal PbrRasterLayout(PbrRasterScene source,int[] materialBatches,ulong maximumBytes,bool tablePacking=false)
     {
         ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(materialBatches);
         if(materialBatches.Length!=source.Materials.Length || materialBatches.Any(batch=>batch<0))
             throw new ArgumentException("Raster material batches must cover the acquired material table.",nameof(materialBatches));
+        var instanceBytes=checked((ulong)System.Math.Max(1,source.Instances.Length)*(ulong)Unsafe.SizeOf<PbrInstanceGpu>());
+        if(instanceBytes>maximumBytes) throw new ArgumentException("Raster instances exceed the geometry budget.",nameof(maximumBytes));
+        _tablePacking=tablePacking; _maximumBytes=maximumBytes;
+        if(tablePacking) { _positionIndices=[]; _positions=[]; _bakeIndices=[]; _bakeComponents=[]; }
         Bounds=source.Bounds;
         var geometry=new List<PbrResidentGeometry>(); var offsets=new List<uint>(); var levels=new List<MeshRasterLod[]>();
         var shapes=new Dictionary<(MeshRasterData,int),int>(); var rows=new int[source.Geometry.Length]; Array.Fill(rows,-1);
@@ -36,9 +40,17 @@ internal sealed class PbrRasterLayout : IDisposable
                 if(rows[instance.Geometry]>=0) continue;
                 var value=source.Geometry.Span[instance.Geometry]; var key=(value.Product,value.Section);
                 if(!shapes.TryGetValue(key,out var slot)) {
-                    var prepared=new PbrResidentGeometry(value); geometry.Add(prepared); slot=geometry.Count-1;
+                    var end=IndexCount;
+                    foreach(var level in value.Lods) end=checked(end+(uint)level.IndexCount);
+                    var vertexBytes=MinimumVertexBytes;
+                    var fixedBytes=checked(instanceBytes+(ulong)end*4+(ulong)VertexCount*vertexBytes);
+                    if(fixedBytes>maximumBytes) throw new ArgumentException("Raster topology exceeds the remaining geometry budget.",nameof(maximumBytes));
+                    var maximumVertices=(int)System.Math.Min((ulong)int.MaxValue,(maximumBytes-fixedBytes)/vertexBytes);
+                    var prepared=new PbrResidentGeometry(value,maximumVertices); geometry.Add(prepared); slot=geometry.Count-1;
                     shapes.Add(key,slot); offsets.Add(VertexCount);
                     VertexCount=checked(VertexCount+(uint)prepared.VertexCount);
+                    RegisterPacking(prepared);
+                    CheckPackingBudget(checked(instanceBytes+(ulong)end*4));
                     var lods = new MeshRasterLod[value.Lods.Length];
                     for (var lod = 0; lod < lods.Length; lod++) {
                         var input = value.Lods[lod];
@@ -75,8 +87,7 @@ internal sealed class PbrRasterLayout : IDisposable
                 if(Bin(original)==0) SingleSidedTriangles=TriangleCount;
                 if(Bin(original)<=1) OpaqueTriangles=TriangleCount;
             }
-            RequiredBytes=checked((ulong)VertexCount*PbrRasterVertex.Bytes+(ulong)IndexCount*4
-                +(ulong)System.Math.Max(1,Instances.Length)*(ulong)Unsafe.SizeOf<PbrInstanceGpu>());
+            SelectPacking(checked((ulong)IndexCount*4+instanceBytes));
             if(RequiredBytes>maximumBytes) throw new ArgumentException(
                 $"Shared Raster geometry/instances require {RequiredBytes} bytes, exceeding budget {maximumBytes}.",nameof(maximumBytes));
             Opaque=opaque.ToArray(); Transparent=transparent.ToArray();
@@ -101,7 +112,11 @@ internal sealed class PbrRasterLayout : IDisposable
     internal void ValidateBindingLimit(ulong maximumBytes)
     {
         ObjectDisposedException.ThrowIf(_disposed,this);
-        if((ulong)VertexCount*PbrRasterVertex.Bytes>maximumBytes || (ulong)IndexCount*4>maximumBytes
+        if(VertexPackingMode==2 && (VertexBufferBytes>maximumBytes || AttributeBufferBytes>maximumBytes)
+            && (ulong)VertexCount*20<=maximumBytes && _fixedBytes+(ulong)VertexCount*PbrRasterVertex.Bytes<=_maximumBytes) {
+            ClearPackingTables(); VertexPackingMode=1; RequiredBytes=_fixedBytes+(ulong)VertexCount*PbrRasterVertex.Bytes;
+        }
+        if(VertexBufferBytes>maximumBytes || AttributeBufferBytes>maximumBytes || (ulong)IndexCount*4>maximumBytes
             || (ulong)System.Math.Max(1,Instances.Length)*(ulong)Unsafe.SizeOf<PbrInstanceGpu>()>maximumBytes)
             throw new NotSupportedException("Shared Raster vertex, topology or instance buffer exceeds device binding limits.");
     }
@@ -110,5 +125,6 @@ internal sealed class PbrRasterLayout : IDisposable
     {
         if(_disposed) return; _disposed=true;
         foreach(var geometry in Geometry) geometry.Dispose(); Geometry=[];
+        ClearPackingTables();
     }
 }

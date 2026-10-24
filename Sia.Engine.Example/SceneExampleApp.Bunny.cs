@@ -141,6 +141,13 @@ internal sealed partial class SceneExampleApp
     {
         if (_referenceScene is not { } prepared) return;
         switch (prepared) {
+            case PbrSceneFiles.PreparedRasterStreaming raster: {
+                var acquired = PbrSceneFiles.AcquireRasterStreaming(_renderWorld!.Entities, raster);
+                _assetRoot = acquired.Root; _materialStream = acquired.Stream;
+                _rasterScene = acquired.Stream is null ? acquired.Scene : null;
+                _materialInstanceCount = acquired.Scene.Instances.Length;
+                break;
+            }
             case PbrSceneFiles.PreparedMixed mixed: {
                 var acquired = PbrSceneFiles.AcquireMixed(_renderWorld!.Entities, mixed);
                 _assetRoot = acquired.Root; _materialStream = acquired.Stream; _traceScene = acquired.Trace;
