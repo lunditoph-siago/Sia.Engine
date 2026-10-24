@@ -130,7 +130,7 @@ fn coverage_fragment(input: GlassVertex) {
     let m = materials[input.material];
     var opacity = m.transport.x;
     if ((m.indices.z & 1u) != 0u) {
-        opacity *= textureSampleGrad(albedo, albedo_sampler, input.uv, i32(m.layers.x), uv_dx, uv_dy).a;
+        opacity *= sample_base(m, input.uv, uv_dx, uv_dy).a;
     }
     if (opacity < 1.0 || m.transport.y > 0.0) { discard; }
 }
