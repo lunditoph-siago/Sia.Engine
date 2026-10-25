@@ -19,6 +19,7 @@ public sealed partial class PbrSceneStream
         var tails = new Dictionary<PbrTextureData, PbrTextureData>(ReferenceEqualityComparer.Instance);
         var result = new PbrMaterialAsset[materials.Length];
         for (var i = 0; i < materials.Length; i++) {
+            materials[i].DiffuseMoments?.ValidateSources(materials[i].BaseColor, materials[i].MetallicRoughness);
             var maps = TextureMaps(materials[i]);
             for (var m = 0; m < maps.Length; m++) {
                 if (maps[m] is not { } source) continue;
