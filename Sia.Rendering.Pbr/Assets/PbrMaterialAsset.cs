@@ -15,7 +15,8 @@ public sealed record PbrMaterialAsset(
     bool AlphaBlend = false,
     float Opacity = 1,
     float Transmission = 0,
-    float Thickness = 0);
+    float Thickness = 0,
+    PbrDiffuseMoments? DiffuseMoments = null);
 
 public readonly record struct PbrSceneInstance(int Geometry, int Material, float4x4 Transform)
 {
