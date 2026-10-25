@@ -14,6 +14,7 @@ internal sealed class PbrGpuSelection : IDisposable
         public Task? Mapping;
         public bool Recorded;
         public long Frame;
+        public long OwnerFrame, RecoveryEpoch;
         public ulong PoseRevision;
     }
 
@@ -25,9 +26,11 @@ internal sealed class PbrGpuSelection : IDisposable
     private readonly Entity[] _rasterGroups = new Entity[8];
     private readonly Slot[] _slots = new Slot[3];
     private readonly uint[] _latest;
-    private readonly List<int> _activeFeedback = [];
+    private readonly List<int> _activePages = [];
+    private readonly List<int> _activeChildren = [];
     private long _clock;
     private long _latestFrame = -1;
+    private long _latestOwnerFrame = -1, _latestRecoveryEpoch = -1;
     private ulong _poseRevision;
     private int _capture = -1;
     private bool _disposed;
@@ -56,14 +59,15 @@ internal sealed class PbrGpuSelection : IDisposable
 
     internal ReadOnlySpan<Entity> Configurations => _configuration;
 
-    private ulong FeedbackBytes => (ulong)_hierarchy.PageCount * 8;
+    private int FeedbackWords => checked((int)_hierarchy.PageCount + (int)_hierarchy.SourceNodeCount);
+    private ulong FeedbackBytes => checked((ulong)FeedbackWords * sizeof(uint));
     private ulong ReadbackBytes => FeedbackBytes + 64;
 
     public PbrGpuSelection(in GpuFrame frame, PbrGpuHierarchy hierarchy, Entity rasterLayout, ulong budget)
     {
         _gpu = new(frame, budget);
         _hierarchy = hierarchy;
-        _latest = new uint[checked(((int)hierarchy.PageCount * 2) + 16)];
+        _latest = new uint[checked(FeedbackWords + 16)];
         try {
             // Selected nodes and two traversal frontiers occupy disjoint buffer tails.
             // Sharing the binding keeps the compute storage-buffer count unchanged.
@@ -121,12 +125,17 @@ internal sealed class PbrGpuSelection : IDisposable
                     mapping.GetAwaiter().GetResult();
                     if (AcceptFeedback(slot.Frame)) {
                         Wgpu.GetMappedRangeReadOnly<uint>(slot.Buffer.GetWgpu<WGPUBuffer>(), 0, _latest.Length).CopyTo(_latest);
-                        _activeFeedback.Clear();
+                        _activePages.Clear();
+                        _activeChildren.Clear();
                         for (var i = 0; i < (int)_hierarchy.PageCount; i++)
-                            if ((_latest[i * 2] | _latest[(i * 2) + 1]) != 0) _activeFeedback.Add(i);
+                            if (_latest[i] != 0) _activePages.Add(i);
+                        for (var n = 0; n < (int)_hierarchy.SourceNodeCount; n++)
+                            if (_latest[(int)_hierarchy.PageCount + n] != 0) _activeChildren.Add(n);
                         _latestFrame = slot.Frame;
-                        var offset = (int)_hierarchy.PageCount * 2;
-                        // Page slots retain their identity for this owner's lifetime.
+                        _latestOwnerFrame = slot.OwnerFrame;
+                        _latestRecoveryEpoch = slot.RecoveryEpoch;
+                        var offset = FeedbackWords;
+                        // Page and source-node slots retain their identity for this owner's lifetime.
                         // Motion changes demand, but cannot invalidate delayed IO hints.
                         // Display statistics still describe only the current pose.
                         if (slot.PoseRevision == _poseRevision) {
@@ -137,7 +146,7 @@ internal sealed class PbrGpuSelection : IDisposable
                 }
                 catch (Exception) { FeedbackFailures++; }
                 finally { Wgpu.UnmapBuffer(slot.Buffer.GetWgpu<WGPUBuffer>()); slot.Mapping = null; }
-                if (_latest[((int)_hierarchy.PageCount * 2) + 10] != 0)
+                if (_latest[FeedbackWords + 10] != 0)
                     throw new InvalidOperationException("GPU hierarchy work capacity invariant failed.");
             }
             // The previous frame has submitted this copy before its next Prepare.
@@ -147,8 +156,11 @@ internal sealed class PbrGpuSelection : IDisposable
                 slot.Recorded = false;
             }
         }
-        if (_latestFrame >= 0 && _clock - _latestFrame <= 8)
-            residency.ApplyGpuFeedback(_latest.AsSpan(0, (int)_hierarchy.PageCount * 2), CollectionsMarshal.AsSpan(_activeFeedback));
+        var validLatest = _latestFrame >= 0 && _clock - _latestFrame <= 8;
+        residency.ObserveGpuFeedback(this, validLatest ? _latestOwnerFrame : -1, validLatest ? _latestRecoveryEpoch : -1);
+        if (validLatest)
+            residency.ApplyGpuFeedback(_latest.AsSpan(0, FeedbackWords),
+                CollectionsMarshal.AsSpan(_activePages), CollectionsMarshal.AsSpan(_activeChildren), _latestOwnerFrame);
         for (var i = 0; i < _slots.Length; i++)
             if (_slots[i].Mapping is null && !_slots[i].Recorded) { _capture = i; break; }
         if (_capture < 0) FeedbackDropped++;
@@ -174,7 +186,7 @@ internal sealed class PbrGpuSelection : IDisposable
         try {
             Wgpu.SetBindGroup(pass, 0, _groups[7].GetWgpu<WGPUBindGroup>());
             Wgpu.SetComputePipeline(pass, _hierarchy.ResetFeedback.GetWgpu<WGPUComputePipeline>());
-            Wgpu.DispatchWorkgroups(pass, ((_hierarchy.PageCount * 2) + 63) / 64);
+            Wgpu.DispatchWorkgroups(pass, checked((uint)(((ulong)FeedbackWords + 63) / 64)));
         }
         finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
     }
@@ -242,6 +254,8 @@ internal sealed class PbrGpuSelection : IDisposable
         Wgpu.CopyBufferToBuffer(encoder, Feedback.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), 0, FeedbackBytes);
         Wgpu.CopyBufferToBuffer(encoder, Arguments.GetWgpu<WGPUBuffer>(), 0, slot.Buffer.GetWgpu<WGPUBuffer>(), FeedbackBytes, 64);
         slot.Frame = _clock;
+        slot.OwnerFrame = _hierarchy.FeedbackFrame;
+        slot.RecoveryEpoch = _hierarchy.RecoveryEpoch;
         slot.PoseRevision = _poseRevision;
         slot.Recorded = true;
     }
