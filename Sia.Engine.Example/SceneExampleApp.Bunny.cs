@@ -192,6 +192,7 @@ internal sealed partial class SceneExampleApp
         var preset = _qualitySettings;
         var settings = preset with {
             ExposureCompensation = _options.ExposureCompensation,
+            AutoExposure = _options.AutoExposure ? new PbrAutoExposureSettings() : null,
             BakedEnvironment = _bakedEnvironment,
             ReflectionCaptures = _captureInputs ?? [],
             Lightmaps = _lightmapInput,

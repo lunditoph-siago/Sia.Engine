@@ -104,16 +104,25 @@ internal sealed unsafe partial class PbrView
         _data.Depth.z = 1 / hdrScale;
         PrepareHistory();
         var exposure = _owner.DebugMode == VisibilityDebugMode.Shaded ? _owner.ExposureCompensation : 0;
+        var automaticExposure = UseAutomaticExposure;
         if (hdrScale != _hdrRadianceScale) {
             // Composition and display observe the same view-owned storage units.
             var manual = _owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0;
-            Wgpu.WriteBuffer<float4>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [new(hdrScale * MathF.Pow(2, exposure), manual, 1 / hdrScale, 0)]);
+            Wgpu.WriteBuffer<float4>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [new(hdrScale * MathF.Pow(2, exposure), manual, 1 / hdrScale, _owner.Settings.AutoExposure is null ? 0 : exposure)]);
             _hdrRadianceScale = hdrScale; _outputExposure = exposure;
         }
-        else if (exposure != _outputExposure) {
-            Wgpu.WriteBuffer<float>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [hdrScale * MathF.Pow(2, exposure)]);
+        else if (exposure != _outputExposure || automaticExposure != _automaticExposureActive) {
+            if (_owner.Settings.AutoExposure is null)
+                Wgpu.WriteBuffer<float>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0, [hdrScale * MathF.Pow(2, exposure)]);
+            else {
+                // Reset the GPU-authored display multiplier when bypassing metering, even at EV0.
+                var manual = _owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0;
+                Wgpu.WriteBuffer<float4>(_gpu.Queue, _outputUniform.GetWgpu<WGPUBuffer>(), 0,
+                    [new(hdrScale * MathF.Pow(2, exposure), manual, 1 / hdrScale, exposure)]);
+            }
             _outputExposure = exposure;
         }
+        _automaticExposureActive = automaticExposure;
         Wgpu.WriteBuffer<PbrFrame>(_gpu.Queue, _uniform.GetWgpu<WGPUBuffer>(), 0, [_data]);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
         var culler = new FrustumCuller(camera.Frustum);

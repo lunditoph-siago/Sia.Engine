@@ -20,7 +20,8 @@ internal sealed unsafe partial class PbrView
         ulong Resources);
 
     public void Build(ref RenderGraphBuildContext graph)
-        => graph.UseBranch(_prefix, UseForward,
+        // Settings are immutable; either conditional pass shape changes only when Shaded is toggled.
+        => graph.UseBranch(_prefix, UseForward || UseAutomaticExposure,
             new GraphBranch(this, _sizeResources!, _frame.ColorTarget, _frame.DepthTarget, _owner.ResourceRevision),
             static (in branch, ref child) => branch.View.BuildCore(ref child));
 
@@ -34,7 +35,9 @@ internal sealed unsafe partial class PbrView
             Import(ref graph, _streamDispatchKey, _selection.DispatchArguments,
                 RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination);
         Import(ref graph, _frameKey, _uniform, RenderGraphBufferUsage.Uniform);
-        Import(ref graph, _outputUniformKey, _outputUniform, RenderGraphBufferUsage.Uniform);
+        Import(ref graph, _outputUniformKey, _outputUniform, RenderGraphBufferUsage.Uniform
+            | (_owner.Settings.AutoExposure is null ? 0 : RenderGraphBufferUsage.Storage));
+        ImportExposure(ref graph);
         Import(ref graph, _lightsKey, _lightData, RenderGraphBufferUsage.Storage);
         Import(ref graph, _clustersKey, _clusters, RenderGraphBufferUsage.Storage);
         if (_owner.Probes is { } probes) {
@@ -128,6 +131,7 @@ internal sealed unsafe partial class PbrView
             d.View.ReadLighting(p).Read(d.Depth, RenderGraphTextureUsage.RenderAttachment | RenderGraphTextureUsage.TextureBinding)
                 .Read(d.View._snapshotKey, RenderGraphTextureUsage.TextureBinding).ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Transparency);
         TimingMarker(ref graph, dependency, 10);
+        BuildExposure(ref graph, dependency);
         graph.UsePass(new(_prefix + "output"), "pbr-output", dependency, static (in d, p) =>
             d.View.ReadTiming(p).Read(d.View._outputUniformKey, RenderGraphBufferUsage.Uniform).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
         TimingMarker(ref graph, dependency, 11);

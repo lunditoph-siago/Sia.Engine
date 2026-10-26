@@ -28,6 +28,8 @@ public sealed record PbrRendererSettings
     public bool GpuTiming { get; init; }
     /// <summary>Display-only exposure in stops, -16..16. Does not change physical lighting or transport.</summary>
     public float ExposureCompensation { get; init; }
+    /// <summary>Optional full-frame geometric-mean metering. Null retains manual exposure.</summary>
+    public PbrAutoExposureSettings? AutoExposure { get; init; }
 
     public float TargetPixelError { get; init; }
     public float ShadowTexelError { get; init; }
@@ -190,6 +192,7 @@ public sealed partial class PbrRenderer :
     {
         if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
+        Settings.AutoExposure?.Validate();
         ExposureCompensation = Settings.ExposureCompensation;
         if (Settings.Reflections is { } reflectionSettings) {
             reflectionSettings.Validate();
@@ -252,7 +255,8 @@ public sealed partial class PbrRenderer :
             var rasterPositionTables=raster is not null && Wgpu.GetLimits(frame.Device.GetWgpu<WGPUDevice>()).MaxStorageBuffersPerShaderStage>=8;
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 raster is null && stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
-                Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables,cpuStreamInstances);
+                Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables,cpuStreamInstances,
+                Settings.AutoExposure is not null);
             Materials = new(frame, (stream?.Materials ?? raster!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches,Pipelines.RasterGeometryLayout,rasterPositionTables)
                 : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);

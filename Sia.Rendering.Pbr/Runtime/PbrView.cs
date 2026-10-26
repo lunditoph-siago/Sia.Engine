@@ -37,6 +37,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly Entity _frameGroup, _rasterGroup, _clusterGroup;
     private readonly Entity _outputUniform;
     private float _outputExposure;
+    private bool _automaticExposureActive;
     private float _hdrRadianceScale;
     private double _localRadianceBound;
     private readonly Entity _sampler;
@@ -52,6 +53,8 @@ internal sealed unsafe partial class PbrView : IDisposable
     private readonly EntityHandler _collectCaster, _collectDirectional, _collectPoint, _collectSpot;
     private readonly string _prefix;
     private readonly RenderGraphBufferKey _frameKey, _outputUniformKey, _lightsKey, _clustersKey, _tilesKey;
+    private readonly RenderGraphBufferKey _exposurePartialsKey, _exposureConfigurationKey;
+    private Entity _exposurePartials, _exposureConfiguration, _exposureGroup;
     private readonly RenderGraphBufferKey _environmentShKey;
     private readonly RenderGraphBufferKey _probesKey, _traceKey, _traceGeometryKey, _traceInstancesKey, _probeConfigKey;
     private readonly RenderGraphBufferKey _probeHeaderKey;
@@ -91,6 +94,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     public ulong Bytes => _gpu.Bytes + (_sizeResources?.Bytes ?? 0) + (_selection?.Bytes ?? 0);
 
     private bool UseForward => _owner.Settings.OpaquePath == PbrOpaquePath.ForwardPlus && _owner.DebugMode == VisibilityDebugMode.Shaded;
+    private bool UseAutomaticExposure => _owner.Settings.AutoExposure is not null && _owner.DebugMode == VisibilityDebugMode.Shaded;
 
     public PbrView(PbrRenderer owner, RenderView view, in GpuFrame frame)
     {
@@ -105,6 +109,8 @@ internal sealed unsafe partial class PbrView : IDisposable
         _timingsKey = owner.GetGpuTimingsTarget(view.Key);
         _frameKey = new(_prefix + "frame");
         _outputUniformKey = new(_prefix + "output-parameters");
+        _exposurePartialsKey = new(_prefix + "exposure-partials");
+        _exposureConfigurationKey = new(_prefix + "exposure-configuration");
         _lightsKey = new(_prefix + "lights");
         _clustersKey = new(_prefix + "clusters");
         _tilesKey = new(_prefix + "tiles");
@@ -167,8 +173,11 @@ internal sealed unsafe partial class PbrView : IDisposable
             _lightData = _gpu.Buffer((ulong)_sceneData.Length * 16, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
             _clusters = _gpu.Buffer(k_Cells * (k_LightsPerCell + 1) * 4, WGPUBufferUsage.Storage);
             _outputExposure = owner.DebugMode == VisibilityDebugMode.Shaded ? owner.ExposureCompensation : 0;
+            _automaticExposureActive = UseAutomaticExposure;
             _hdrRadianceScale = owner.HdrRadianceScale;
-            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale * MathF.Pow(2, _outputExposure), owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 1 / owner.HdrRadianceScale, 0)], WGPUBufferUsage.Uniform);
+            _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale * MathF.Pow(2, _outputExposure), owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 1 / owner.HdrRadianceScale, owner.Settings.AutoExposure is null ? 0 : _outputExposure)],
+                WGPUBufferUsage.Uniform | (owner.Settings.AutoExposure is null ? 0 : WGPUBufferUsage.Storage));
+            InitializeExposure();
             var sampler = WGPUSamplerDescriptor.Default;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;

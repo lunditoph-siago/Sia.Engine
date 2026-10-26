@@ -31,6 +31,9 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public Entity TileLayout { get; }
     public Entity GlassLayout { get; }
     public Entity OutputLayout { get; }
+    public Entity ExposureLayout { get; }
+    public Entity ExposureMeasure { get; }
+    public Entity ExposureReduce { get; }
     public Entity BackgroundLayout { get; }
     public Entity StreamWorkLayout { get; }
     public Entity ReflectionTraceLayout { get; }
@@ -74,7 +77,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
 
     public Entity Output { get; }
 
-    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool reflectionHistory = false,bool rasterPositionTables=false,bool cpuStreamInstances=false)
+    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool reflectionHistory = false,bool rasterPositionTables=false,bool cpuStreamInstances=false,bool autoExposure=false)
     {
         _sourceWorld = frame.ResourceWorld;
         _gpu = new(frame, 0);
@@ -201,6 +204,18 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 GpuBinding.Texture(1, WGPUTextureSampleType.Float, WGPUShaderStage.Fragment),
                 GpuBinding.Sampler(2, WGPUShaderStage.Fragment)
             ]);
+            if (autoExposure) {
+                ExposureLayout = GpuBinding.Layout(_gpu, [
+                    GpuBinding.Buffer(0, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute, 16),
+                    GpuBinding.Texture(1, WGPUTextureSampleType.Float, WGPUShaderStage.Compute),
+                    GpuBinding.Buffer(2, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute, 2048),
+                    GpuBinding.Buffer(3, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 16)
+                ]);
+                var exposure = Module("exposure.wgsl");
+                var exposureLayout = GpuBinding.PipelineLayout(_gpu, ExposureLayout);
+                ExposureMeasure = Compute(exposure, exposureLayout, "measure_exposure");
+                ExposureReduce = Compute(exposure, exposureLayout, "reduce_exposure");
+            }
             if (opaquePath == PbrOpaquePath.ForwardPlus) {
                 BackgroundLayout = GpuBinding.Layout(_gpu, [
                     GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 512),

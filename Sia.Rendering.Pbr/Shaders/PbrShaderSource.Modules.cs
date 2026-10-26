@@ -20,6 +20,7 @@ internal static partial class PbrShaderSource
         ["pbr/instance_types"] = new(new Guid("8121f956-3f0e-430e-a20b-717e495ac688")),
         ["pbr/lighting"] = new(new Guid("7b9aa285-19e1-49b6-859b-5486a02d9049")),
         ["pbr/output"] = new(new Guid("0a3c0407-65f6-4332-9175-b797dacc4328")),
+        ["pbr/exposure"] = new(new Guid("961849e5-8c2e-421b-8dd8-bc00948a8d9c")),
         ["pbr/pbr_lighting"] = new(new Guid("c743ee26-8bd2-469a-8f61-3c8932f5a7c1")),
         ["pbr/Providers/environment"] = new(new Guid("7e9b975b-0b30-43cf-a112-09bce22cca0c")),
         ["pbr/Providers/reflection_capture"] = new(new Guid("a5e88471-1b54-4845-a815-63b9cf7d2b0f")),

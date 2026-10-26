@@ -15,6 +15,8 @@ internal sealed unsafe partial class PbrView
     private void Resize(uint width, uint height)
     {
         if (width == _width && height == _height && _hasVisibilityTargets == !UseForward) return;
+        if (_owner.Settings.AutoExposure is not null && (ulong)width * height > uint.MaxValue)
+            throw new NotSupportedException("Automatic exposure requires a pixel count within UInt32 addressing.");
         _owner.RequireRetirementCapacity(this);
         var used = checked(Bytes + _owner.RetiredBytes(this));
         if (used > _owner.Settings.ViewBytes) throw new InvalidOperationException("Pending view retirements exceed the view byte budget.");
@@ -131,6 +133,12 @@ internal sealed unsafe partial class PbrView
                 GpuBinding.Texture(1, hdrView.GetWgpu<WGPUTextureView>()),
                 GpuBinding.Sampler(2, _sampler)
             ]);
+            var exposure = _owner.Settings.AutoExposure is null ? default : GpuBinding.Group(next, _owner.Pipelines.ExposureLayout, [
+                GpuBinding.Buffer(0, _outputUniform),
+                GpuBinding.Texture(1, hdrView.GetWgpu<WGPUTextureView>()),
+                GpuBinding.Buffer(2, _exposurePartials),
+                GpuBinding.Buffer(3, _exposureConfiguration)
+            ]);
             Entity traceGroup = default, composeGroup = default;
             Entity historyGroup = default, historyCommitGroup = default, historyCommitHitGroup = default;
             if (HasReflections) {
@@ -203,6 +211,7 @@ internal sealed unsafe partial class PbrView
             _tileGroup = tile;
             _glassGroup = glass;
             _outputGroup = output;
+            _exposureGroup = exposure;
             _tileStride = stride;
             _backgroundGroup = background;
             _hasVisibilityTargets = !UseForward;
