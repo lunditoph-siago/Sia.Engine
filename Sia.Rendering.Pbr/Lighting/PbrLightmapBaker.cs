@@ -17,8 +17,7 @@ public sealed partial record PbrLightmapBakeSettings
     public ProceduralSky Sky { get; init; } = new();
     /// <summary>Optional immutable single-chunk HDR miss source. The producer borrows its authenticated decoded value.</summary>
     public AssetContent<IblEnvironmentRecord>? Environment { get; init; }
-    internal int InputBytes => Environment is null ? 104 : 152;
-    internal int EnvironmentBytes => Environment is null ? 0 : 48;
+    internal const int InputBytes = 156;
     internal ulong EnvironmentPayloadBytes => Environment is null ? 0ul : 256ul;
     public float3 TowardLight { get; init; } = new(0, 1, 0);
     public float3 LightRadiance { get; init; }
@@ -29,7 +28,9 @@ public sealed partial record PbrLightmapBakeSettings
     internal void Validate()
     {
         if (Environment is { } environment && (environment.Name is not null || environment.Chunks.Length != 1
-            || environment.Length != IblEnvironmentAsset.EncodedBytes || environment.Chunks[0].Id is not { Length: 64 } hash
+            || environment.Length != IblEnvironmentAsset.EncodedBytes || environment.Chunks[0].Encoding != AssetChunkEncoding.Raw
+            || environment.Chunks[0].DecodedLength != IblEnvironmentAsset.EncodedBytes || !environment.Chunks[0].Dependencies.IsEmpty
+            || environment.Chunks[0].Id is not { Length: 64 } hash
             || hash.Any(c => c is not (>= '0' and <= '9') and not (>= 'A' and <= 'F'))))
             throw new ArgumentException("HDR lightmap input requires one canonical typed environment chunk.");
         static bool Color(float3 color) => math.all(math.isfinite(color)) && math.all(color >= 0) && math.all(color <= 1e10f);

@@ -32,7 +32,7 @@ public sealed partial class PbrLightmapSetData
     public PbrLightmapBakeSettings BakeSettings { get; }
     public ReadOnlySpan<PbrLightmapProductReference> Products => _products;
     public ReadOnlySpan<PbrLightmapReceiverReference> Receivers => _receivers;
-    public ulong EncodedBytes => 232ul + (ulong)BakeSettings.EnvironmentBytes + (ulong)_products.Length * 84 + (ulong)_receivers.Length * 152;
+    public ulong EncodedBytes => 284ul + (ulong)_products.Length * 84 + (ulong)_receivers.Length * 152;
     /// <summary>Owned array values, hash characters and settings; excludes object headers and validation scratch.</summary>
     public ulong PayloadBytes => OwnedBytes(_products.Length, _receivers.Length) + BakeSettings.EnvironmentPayloadBytes;
 
@@ -68,7 +68,7 @@ public sealed partial class PbrLightmapSetData
     {
         if (products is <1 or >MaximumProducts || receivers is <1 or >MaximumReceivers)
             throw new ArgumentException("Lighting set product/receiver counts exceed their admission.");
-        var encoded=232ul+(environment?48ul:0)+(ulong)products*84+(ulong)receivers*152;
+        var encoded=284ul+(ulong)products*84+(ulong)receivers*152;
         if (encoded>MaximumEncodedBytes) throw new ArgumentException("Lighting set exceeds its encoded admission.");
         return System.Math.Max(encoded,OwnedBytes(products,receivers)+(environment?256ul:0));
     }
@@ -106,7 +106,7 @@ public sealed partial class PbrLightmapSetData
             token.ThrowIfCancellationRequested();
             if (!product.Id.IsValid || product.Id==ProductId || product.Id==BakeSettings.Environment?.Id || !productIds.Add(product.Id)
                 || !ValidHash(product.ContentHash) || !ValidHash(product.BakeIdentity)
-                || product.EncodedBytes is <236 or >PbrLightmapData.MaximumEncodedBytes)
+                || product.EncodedBytes is <288 or >PbrLightmapData.MaximumEncodedBytes)
                 throw new ArgumentException("Invalid or aliased independent lighting product.");
         }
         var instances=new HashSet<(Guid,int)>(); var rows=new Dictionary<(int,int),PbrLightmapReceiver>();
@@ -136,7 +136,7 @@ public sealed partial class PbrLightmapSetData
                     throw new ArgumentException("Lighting member receiver rows and chart ranges must be complete and ordered.");
                 firstChart+=receiver.ChartCount;
             }
-            var encoded=236ul+(ulong)BakeSettings.EnvironmentBytes+(ulong)counts.Receivers*120+(ulong)counts.Charts*48+(ulong)counts.Pages*68;
+            var encoded=288ul+(ulong)counts.Receivers*120+(ulong)counts.Charts*48+(ulong)counts.Pages*68;
             if (encoded!=(ulong)_products[at].EncodedBytes)
                 throw new ArgumentException("Lighting member encoded size differs from its declared receiver shape.");
         }
@@ -180,10 +180,10 @@ public sealed partial class PbrLightmapSetData
     private string ComputeBakeIdentity(CancellationToken token)
     {
         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(BakeSettings.Environment is null ? "SIALIGHTMAP-SET-INPUT1"u8 : "SIALIGHTMAP-SET-INPUT-HDR1"u8);
-        Span<byte> bytes=stackalloc byte[152];
+        hash.AppendData("SIALIGHTMAP-SET-INPUT3"u8);
+        Span<byte> bytes=stackalloc byte[PbrLightmapBakeSettings.InputBytes];
         _=Convert.FromHexString(SceneIdentity,bytes[..32],out _,out _); hash.AppendData(bytes[..32]);
-        BakeSettings.Encode(bytes); hash.AppendData(bytes[..BakeSettings.InputBytes]);
+        BakeSettings.Encode(bytes); hash.AppendData(bytes);
         var order=Enumerable.Range(0,_receivers.Length).OrderBy(at=>_receivers[at].Receiver.InstanceId)
             .ThenBy(at=>_receivers[at].Receiver.MaterialSlot);
         foreach (var at in order) {

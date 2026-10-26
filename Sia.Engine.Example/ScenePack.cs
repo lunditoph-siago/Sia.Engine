@@ -33,9 +33,8 @@ internal static partial class ScenePack
         public Entry[] Meshes { get; init; } = [];
         public Entry[] Materials { get; init; } = [];
         public Entry[] Textures { get; init; } = [];
-        public LightingFiles.GltfLightInput? GltfLights { get; init; }
+        public LightEntry[]? Lights { get; init; }
         public CameraEntry[]? Cameras { get; init; }
-        public GltfCameraInput? GltfCameras { get; init; }
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -58,9 +57,8 @@ internal static partial class ScenePack
         if (Path.Exists(output)) throw new IOException("Scene output must not already exist.");
         recipePath = Path.GetFullPath(recipePath);
         var recipe = ReadRecipe(recipePath);
-        var authoredLights = recipe.GltfLights is { } sourceLights
-            ? await LightingFiles.ReadGltfLightsAsync(sourceLights, Path.GetDirectoryName(recipePath)!, maximumFileBytes, cancellationToken) : null;
-        var authoredCameras = await ReadCamerasAsync(recipe, Path.GetDirectoryName(recipePath)!, maximumFileBytes, cancellationToken);
+        var authoredLights = ReadLights(recipe, cancellationToken);
+        var authoredCameras = ReadCameras(recipe, cancellationToken);
         var bakeSettings = lightmap?.Settings();
         if (lightmap is not null && bakeLayouts is null)
             throw new InvalidDataException("Lightmap scene publication requires exact canonical layouts.");

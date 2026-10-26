@@ -33,14 +33,13 @@ internal static partial class MaterialCook
         try {
             Span<byte> header = stackalloc byte[64]; file.ReadExactly(header[..8]);
             if (header[..8].SequenceEqual("SIATEXR1"u8)) { file.Position = 0; return file; }
-            var legacy = header[..8].SequenceEqual("SIATEXI1"u8);
-            if (!legacy && !header[..8].SequenceEqual("SIATEXI2"u8))
+            if (!header[..8].SequenceEqual("SIATEXI2"u8))
                 throw new InvalidDataException("Invalid diffuse texture source signature.");
             file.ReadExactly(header[8..]);
             var levels = (int)header[16]; var first = (int)header[17];
             var chunks = (int)BinaryPrimitives.ReadUInt16LittleEndian(header[18..]);
             var tailBytes = BinaryPrimitives.ReadUInt64LittleEndian(header[24..]);
-            var references = (ulong)first * 64 + (ulong)chunks * (legacy ? 36ul : 44ul);
+            var references = (ulong)first * 64 + (ulong)chunks * 44;
             var rootBytes = (ulong)file.Length;
             if (rootBytes > maximumBytes - reserved)
                 throw new InvalidDataException("Diffuse texture index exceeds admission.");
