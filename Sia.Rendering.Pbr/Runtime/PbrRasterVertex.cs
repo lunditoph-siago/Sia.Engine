@@ -11,16 +11,7 @@ internal static class PbrRasterVertex
 
     private static uint PackDirection(float3 direction)
     {
-        var scale=math.cmax(math.abs(direction));
-        if (!float.IsFinite(scale)) throw new ArgumentException("Raster direction must be finite.", nameof(direction));
-        var oct=float2.zero;
-        if(scale>0) {
-            direction/=scale; direction/=math.csum(math.abs(direction)); oct=direction.xy;
-            if(direction.z<0) oct=new((1-MathF.Abs(oct.y))*(oct.x<0?-1:1),(1-MathF.Abs(oct.x))*(oct.y<0?-1:1));
-        }
-        var x=(short)System.Math.Clamp((int)MathF.Round(oct.x*32767),-32767,32767);
-        var y=(short)System.Math.Clamp((int)MathF.Round(oct.y*32767),-32767,32767);
-        return (uint)(ushort)x|((uint)(ushort)y<<16);
+        return StreamVertexEncoding.PackDirection(direction);
     }
 
     internal static uint4 Pack(float4 tangent,float2 bake,bool present)

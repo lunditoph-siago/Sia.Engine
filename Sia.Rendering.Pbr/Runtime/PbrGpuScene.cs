@@ -69,7 +69,7 @@ internal sealed partial class PbrGpuScene : IDisposable
     {
         _gpu = new(frame, budget);
         var geometries = new PbrResidentGeometry?[geometryCount];
-        float4[]? vertexScratch = null;
+        uint[]? vertexScratch = null;
         uint[]? indexScratch = null;
         try {
             if ((ulong)instanceBase + (ulong)sourceInstances.Length > (1ul << 24) + 1)
@@ -97,15 +97,16 @@ internal sealed partial class PbrGpuScene : IDisposable
             Topology = _gpu.Buffer(indexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopySrc | WGPUBufferUsage.CopyDst);
             const int vertexBatch = 16384;
             const int indexBatch = 65536;
-            vertexScratch = ArrayPool<float4>.Shared.Rent(vertexBatch * StreamGeometryPage.VertexPlanes);
+            vertexScratch = ArrayPool<uint>.Shared.Rent(vertexBatch * StreamVertexEncoding.Words);
             indexScratch = ArrayPool<uint>.Shared.Rent(indexBatch);
             void FlushVertices(int count, uint first)
             {
                 if (count == 0) return;
                 for (var plane = 0; plane < StreamGeometryPage.VertexPlanes; plane++) {
-                    var at = checked((ulong)plane * (uint)totalVertices + first);
-                    Wgpu.WriteBuffer<float4>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), at * 16,
-                        vertexScratch.AsSpan(plane * vertexBatch, count));
+                    var stride = StreamGeometryPage.PlaneStride((uint)plane);
+                    var at = checked((ulong)plane * (uint)totalVertices * 16 + (ulong)first * stride);
+                    Wgpu.WriteBuffer<uint>(_gpu.Queue, Vertices.GetWgpu<WGPUBuffer>(), at,
+                        vertexScratch.AsSpan(plane * vertexBatch * 4, count * (int)(stride / 4)));
                 }
             }
             var indexWriter = new PbrResidentGeometry.IndexWriter(indexScratch.AsSpan(0, indexBatch),
@@ -136,8 +137,8 @@ internal sealed partial class PbrGpuScene : IDisposable
                 if (!upload) drawFirst = shared[instance.Geometry];
                 for (var first = 0; upload && first < geometry.VertexCount;) {
                     var count = System.Math.Min(vertexBatch - bufferedVertices, geometry.VertexCount - first);
-                    geometry.PackVertices(vertexScratch.AsSpan(bufferedVertices), first, count,
-                        transform, normal, instance.Material, checked(instanceBase + (uint)i), vertexBatch);
+                    geometry.PackVertices(vertexScratch, first, count,
+                        transform, normal, instance.Material, checked(instanceBase + (uint)i), vertexBatch, bufferedVertices);
                     first += count;
                     bufferedVertices += count;
                     if (bufferedVertices == vertexBatch) {
@@ -181,7 +182,7 @@ internal sealed partial class PbrGpuScene : IDisposable
         }
         finally {
             if (indexScratch is not null) ArrayPool<uint>.Shared.Return(indexScratch);
-            if (vertexScratch is not null) ArrayPool<float4>.Shared.Return(vertexScratch);
+            if (vertexScratch is not null) ArrayPool<uint>.Shared.Return(vertexScratch);
             foreach (var geometry in geometries) geometry?.Dispose();
         }
     }

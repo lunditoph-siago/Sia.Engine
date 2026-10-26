@@ -65,7 +65,7 @@ internal sealed partial class PbrGpuScene
                 var encoder = temporary.Own(Wgpu.CreateCommandEncoder(temporary.Device));
                 for (uint plane = 0; plane < StreamGeometryPage.VertexPlanes; plane++)
                     Wgpu.CopyBufferToBuffer(encoder.GetWgpu<WGPUCommandEncoder>(), bootstrap.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * bootstrap.VertexCount * 16,
-                        Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * VertexCount * 16, (ulong)bootstrap.VertexCount * 16);
+                        Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * VertexCount * 16, (ulong)bootstrap.VertexCount * StreamGeometryPage.PlaneStride(plane));
                 Wgpu.CopyBufferToBuffer(encoder.GetWgpu<WGPUCommandEncoder>(), bootstrap.Topology.GetWgpu<WGPUBuffer>(), 0,
                     Topology.GetWgpu<WGPUBuffer>(), 0, (ulong)bootstrap.TriangleCount * 12);
                 var commands = temporary.Own(Wgpu.FinishCommandEncoder(encoder.GetWgpu<WGPUCommandEncoder>(), WGPUCommandBufferDescriptor.Default));

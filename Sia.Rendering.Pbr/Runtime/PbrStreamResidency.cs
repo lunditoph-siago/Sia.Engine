@@ -441,8 +441,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         transform = instance.Transform;
                         material = instance.MaterialIndex + 1;
                     }
-                    _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
-                        _settings.GpuTraversal ? 0u : (uint)candidate.Key.Instance, material));
+                    try {
+                        _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
+                            _settings.GpuTraversal ? 0u : (uint)candidate.Key.Instance, material));
+                    }
+                    catch { _arena.Free(allocation); throw; }
                     break;
                 }
                 if (_upload is null) break;
