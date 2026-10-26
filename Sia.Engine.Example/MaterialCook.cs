@@ -78,12 +78,7 @@ internal static partial class MaterialCook
             if ((sources.BaseColor is not null) != (recipe.BaseColorTexture is not null)
                 || (sources.MetallicRoughness is not null) != (recipe.MetallicRoughnessTexture is not null))
                 throw new InvalidDataException("Diffuse source paths must match the authored texture roles.");
-            FileStream? Open(string? path) => path is null ? null
-                : new FileStream(Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!), FileMode.Open,
-                    FileAccess.Read, FileShare.Read, 1, FileOptions.RandomAccess);
-            using var color = Open(sources.BaseColor);
-            using var metal = Open(sources.MetallicRoughness);
-            data = recipe.Data(PbrDiffuseMoments.Compute(color, metal, sources.MaximumBytes, cancellationToken));
+            data = recipe.Data(ComputeDiffuseSources(sources, Path.GetDirectoryName(recipePath)!, cancellationToken));
         }
         cancellationToken.ThrowIfCancellationRequested();
         var stage = Path.Combine(parent, ".material-cook-" + Guid.NewGuid().ToString("N"));

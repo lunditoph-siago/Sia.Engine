@@ -9,7 +9,8 @@ public sealed partial class PbrDiffuseMoments
 {
     /// <summary>
     /// Integrates the finest-LOD diffuse texture functions over uniform UV using borrowed whole
-    /// SIATEXR1 streams. Inputs require equal dimensions, repeat addressing and unambiguous filtering.
+    /// SIATEXR1 streams. Inputs require equal dimensions or constant metallic B,
+    /// repeat addressing and unambiguous filtering.
     /// The bound includes both complete encoded inputs and known array elements, not just working pixels.
     /// </summary>
     public static PbrDiffuseMoments Compute(Stream? baseColor, Stream? metallicRoughness,
@@ -23,15 +24,17 @@ public sealed partial class PbrDiffuseMoments
             ulong admitted = 0;
             var color = OpenMomentSource(baseColor, true, maximumBytes, ref admitted, cancellationToken);
             var metal = OpenMomentSource(metallicRoughness, false, maximumBytes, ref admitted, cancellationToken);
-            if (color is not null && metal is not null && (color.Width != metal.Width || color.Height != metal.Height))
-                throw new InvalidDataException("Joint material moments require equal source dimensions.");
+            var unequal = color is not null && metal is not null
+                && (color.Width != metal.Width || color.Height != metal.Height);
             var shape = color ?? metal!;
             var width = shape.Width; var height = shape.Height; var rowBytes = checked(width * 4);
             var scratchBytes = (int)System.Math.Min(65536ul, System.Math.Max(color?.PayloadBytes ?? 0, metal?.PayloadBytes ?? 0));
             AdmitMomentBytes((ulong)scratchBytes, maximumBytes, ref admitted);
             var scratch = new byte[scratchBytes];
             AuthenticateMomentSource(color, scratch, maximumBytes, ref admitted, cancellationToken);
-            AuthenticateMomentSource(metal, scratch, maximumBytes, ref admitted, cancellationToken);
+            AuthenticateMomentSource(metal, scratch, maximumBytes, ref admitted, cancellationToken, unequal);
+            if (unequal && metal!.ConstantMetallic is null)
+                throw new InvalidDataException("Joint material moments require equal source dimensions or constant metallic B.");
 
             var colorRow = Array.Empty<byte>();
             var previous = Array.Empty<byte>(); var current = Array.Empty<byte>(); var next = Array.Empty<byte>();
@@ -44,7 +47,12 @@ public sealed partial class PbrDiffuseMoments
                     linear[at] = value <= .04045 ? value / 12.92 : System.Math.Pow((value + .055) / 1.055, 2.4);
                 }
             }
-            if (metal is not null) {
+            if (unequal) {
+                var metalRowBytes = checked(metal!.Width * 4);
+                AdmitMomentBytes((ulong)metalRowBytes, maximumBytes, ref admitted);
+                current = new byte[metalRowBytes];
+            }
+            else if (metal is not null) {
                 AdmitMomentBytes((ulong)rowBytes * 3, maximumBytes, ref admitted);
                 previous = new byte[rowBytes]; current = new byte[rowBytes]; next = new byte[rowBytes];
                 ReadMomentRow(metal, height - 1, previous, cancellationToken);
@@ -56,6 +64,14 @@ public sealed partial class PbrDiffuseMoments
             using var metalHash = metal is null ? null : IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             if (color is not null) colorHash!.AppendData(color.Header);
             if (metal is not null) metalHash!.AppendData(metal.Header);
+            if (unequal) {
+                // Authenticate every original MR row again, independently of the color grid.
+                // R/G/A may vary even though metallic B is a constant reconstruction function.
+                for (var y = 0; y < metal!.Height; y++) {
+                    ReadMomentRow(metal, y, current, cancellationToken);
+                    metalHash!.AppendData(current);
+                }
+            }
             // Exact products of the two separable nearest/linear reconstruction functions.
             // A constant absent source needs no filtering; either kernel preserves the mean.
             var side = color is null || metal is null ? 0d
@@ -70,14 +86,14 @@ public sealed partial class PbrDiffuseMoments
                     ReadMomentRow(color, y, colorRow, cancellationToken);
                     colorHash!.AppendData(colorRow);
                 }
-                if (metal is not null) metalHash!.AppendData(current);
+                if (metal is not null && !unequal) metalHash!.AppendData(current);
                 for (var x = 0; x < width; x++) {
                     var at = x * 4;
                     var r = color is null ? 1 : linear[colorRow[at]];
                     var g = color is null ? 1 : linear[colorRow[at + 1]];
                     var b = color is null ? 1 : linear[colorRow[at + 2]];
-                    var m = 1d;
-                    if (metal is not null) {
+                    var m = unequal ? metal!.ConstantMetallic!.Value / 255d : 1d;
+                    if (metal is not null && !unequal) {
                         if (side == 0) m = current[at + 2] / 255d;
                         else {
                             var left = (x == 0 ? width - 1 : x - 1) * 4 + 2;
@@ -92,7 +108,7 @@ public sealed partial class PbrDiffuseMoments
                     red += r; green += g; blue += b;
                     jointRed += r * m; jointGreen += g * m; jointBlue += b * m;
                 }
-                if (metal is not null && y + 1 < height) {
+                if (metal is not null && !unequal && y + 1 < height) {
                     var reuse = previous; previous = current; current = next; next = reuse;
                     ReadMomentRow(metal, (y + 2) % height, next, cancellationToken);
                 }
@@ -121,6 +137,7 @@ public sealed partial class PbrDiffuseMoments
         internal readonly ulong PayloadBytes = payloadBytes;
         internal ulong EncodedBytes => 64 + PayloadBytes;
         internal byte[] RowHashes = [];
+        internal byte? ConstantMetallic;
     }
 
     private static MomentSource? OpenMomentSource(Stream? input, bool srgb, ulong maximumBytes,
@@ -141,7 +158,8 @@ public sealed partial class PbrDiffuseMoments
         return new(input, origin, header.ToArray(), (int)width, (int)height, sampler, payload);
     }
 
-    private static void ScanMomentSource(MomentSource source, byte[] scratch, CancellationToken token)
+    private static void ScanMomentSource(MomentSource source, byte[] scratch, CancellationToken token,
+        bool findConstantMetallic)
     {
         using var complete = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         using var finest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -153,11 +171,18 @@ public sealed partial class PbrDiffuseMoments
         finest.AppendData(canonical[..32]);
         source.Input.Position = checked(source.Origin + 64);
         var rowBytes = source.Width * 4;
+        byte metallic = 0;
+        var constant = true;
         for (var y = 0; y < source.Height; y++) {
             token.ThrowIfCancellationRequested();
             var row = scratch.AsSpan(0, rowBytes); source.Input.ReadExactly(row);
             complete.AppendData(row); finest.AppendData(row);
             SHA256.HashData(row, source.RowHashes.AsSpan(y * 32, 32));
+            if (findConstantMetallic && constant) {
+                if (y == 0) metallic = row[2];
+                for (var at = 2; at < row.Length; at += 4)
+                    if (row[at] != metallic) { constant = false; break; }
+            }
         }
         var remaining = source.PayloadBytes - finestBytes;
         while (remaining != 0) {
@@ -170,17 +195,18 @@ public sealed partial class PbrDiffuseMoments
         if (!CryptographicOperations.FixedTimeEquals(digest, source.Header.AsSpan(32, 32)))
             throw new InvalidDataException("Diffuse moment texture checksum mismatch.");
         if (source.Input.ReadByte() != -1) throw new InvalidDataException("Trailing diffuse moment texture data.");
+        if (findConstantMetallic && constant) source.ConstantMetallic = metallic;
         finest.GetHashAndReset(canonical[32..]);
         canonical.CopyTo(source.Header);
     }
 
     private static void AuthenticateMomentSource(MomentSource? source, byte[] scratch, ulong maximumBytes,
-        ref ulong admitted, CancellationToken token)
+        ref ulong admitted, CancellationToken token, bool findConstantMetallic = false)
     {
         if (source is null) return;
         AdmitMomentBytes((ulong)source.Height * 32, maximumBytes, ref admitted);
         source.RowHashes = new byte[source.Height * 32];
-        ScanMomentSource(source, scratch, token);
+        ScanMomentSource(source, scratch, token, findConstantMetallic);
     }
 
     private static string? FinishMomentHash(IncrementalHash? hash)
