@@ -33,6 +33,8 @@ internal static partial class ScenePack
         public Entry[] Materials { get; init; } = [];
         public Entry[] Textures { get; init; } = [];
         public LightingFiles.GltfLightInput? GltfLights { get; init; }
+        public CameraEntry[]? Cameras { get; init; }
+        public GltfCameraInput? GltfCameras { get; init; }
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -57,6 +59,7 @@ internal static partial class ScenePack
         var recipe = ReadRecipe(recipePath);
         var authoredLights = recipe.GltfLights is { } sourceLights
             ? await LightingFiles.ReadGltfLightsAsync(sourceLights, Path.GetDirectoryName(recipePath)!, maximumFileBytes, cancellationToken) : null;
+        var authoredCameras = await ReadCamerasAsync(recipe, Path.GetDirectoryName(recipePath)!, maximumFileBytes, cancellationToken);
         var bakeSettings = lightmap?.Settings();
         if (lightmap is not null && bakeLayouts is null)
             throw new InvalidDataException("Lightmap scene publication requires exact canonical layouts.");
@@ -138,11 +141,15 @@ internal static partial class ScenePack
             string Locate(Dictionary<AssetId, string> inputs, AssetId id) => inputs.TryGetValue(id, out var path)
                 ? path : throw new AssetNotFoundException("Scene recipe has no entry for a required asset.");
             var scene = await Read(sceneId, Path.GetFullPath(recipe.Input, Path.GetDirectoryName(recipePath)!),
-                (s, n) => PbrSceneRecord.Load(s, (ulong)maximumFileBytes, n), scene: true, publish: authoredLights is null);
-            if (authoredLights is not null) {
-                scene = scene with { Data = scene.Data.WithLights(authoredLights) };
-                if (scene.Data.EncodedBytes > (ulong)maximumFileBytes || scene.Data.EncodedBytes > (ulong)(maximumTotalBytes - total))
-                    throw new InvalidDataException("Authored lighting exceeds scene encoded publication admission.");
+                (s, n) => PbrSceneRecord.Load(s, (ulong)maximumFileBytes, n), scene: true, publish: authoredLights is null && authoredCameras is null);
+            if (authoredLights is not null || authoredCameras is not null) {
+                var data = scene.Data;
+                if (authoredLights is not null) data = data.WithLights(authoredLights);
+                if (authoredCameras is not null) data = data.WithCameras(authoredCameras);
+                scene = scene with { Data = data };
+                if (scene.Data.EncodedBytes > (ulong)maximumFileBytes || scene.Data.MetadataArrayBytes > (ulong)maximumFileBytes
+                    || scene.Data.EncodedBytes > (ulong)(maximumTotalBytes - total))
+                    throw new InvalidDataException("Authored metadata exceeds scene publication admission.");
                 var bytes = new byte[checked((int)scene.Data.EncodedBytes)];
                 using (var encoded = new MemoryStream(bytes, writable: true)) scene.Data.Save(encoded, cancellationToken);
                 await Publish(sceneId, bytes, scene: true);

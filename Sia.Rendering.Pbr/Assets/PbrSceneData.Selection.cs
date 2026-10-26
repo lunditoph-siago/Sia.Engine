@@ -34,6 +34,6 @@ public sealed partial class PbrSceneData
             selected[index] = selected[index] with { Binding = remap[selected[index].Binding] };
         }
         cancellationToken.ThrowIfCancellationRequested();
-        return new(bindings, selected, Attribution, _lights);
+        return new(bindings, selected, Attribution, _lights, _cameras);
     }
 }

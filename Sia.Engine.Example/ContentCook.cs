@@ -54,7 +54,8 @@ internal static partial class ContentCook
         }
         var scene = recipe.Scene with { Input = Locate(recipe.Scene.Input),
             Materials = LocateEntries(recipe.Scene.Materials), Textures = LocateEntries(recipe.Scene.Textures),
-            GltfLights = recipe.Scene.GltfLights is { } lights ? lights with { Input = Locate(lights.Input) } : null };
+            GltfLights = recipe.Scene.GltfLights is { } lights ? lights with { Input = Locate(lights.Input) } : null,
+            GltfCameras = recipe.Scene.GltfCameras is { } cameras ? cameras with { Input = Locate(cameras.Input) } : null };
         var meshInputs = new (AssetId Id, string Path, HashSet<string> Files)[recipe.Meshes.Length];
         var claimed = new HashSet<AssetId>();
         for (var index = 0; index < meshInputs.Length; index++) {
