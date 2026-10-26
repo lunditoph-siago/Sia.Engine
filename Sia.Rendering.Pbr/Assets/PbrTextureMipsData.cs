@@ -49,7 +49,8 @@ public sealed class PbrTextureMipsData
         + (ulong)_mips.Sum(m => m.Content.Chunks.Length) * ChunkBytes + Tail.EncodedBytes;
 
     private PbrTextureMipsData(uint width, uint height, PbrTextureData tail, PbrTextureMipReference[] mips)
-        => (Width, Height, Tail, _mips) = (width, height, tail, mips);
+        => (Width, Height, Tail, _mips) = (width, height,
+            mips.Length == 0 ? tail : tail.WithSourceLevel0Hash(mips[0].ContentHash), mips);
 
     public static PbrTextureMipsData Create(uint width, uint height, PbrTextureData tail,
         ReadOnlySpan<PbrTextureMipReference> mips)

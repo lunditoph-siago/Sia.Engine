@@ -19,6 +19,7 @@ public sealed partial class PbrMaterialData
     public float Opacity { get; }
     public float Transmission { get; }
     public float Thickness { get; }
+    public PbrDiffuseMoments? DiffuseMoments { get; }
 
     public IEnumerable<TextureReference> TextureReferences {
         get {
@@ -33,7 +34,7 @@ public sealed partial class PbrMaterialData
     public PbrMaterialData(PbrMaterial parameters, TextureReference? baseColor = null, TextureReference? normal = null,
         TextureReference? metallicRoughness = null, TextureReference? occlusion = null, TextureReference? emissive = null,
         float normalScale = 1, float occlusionStrength = 1, bool doubleSided = false, bool alphaBlend = false,
-        float opacity = 1, float transmission = 0, float thickness = 0)
+        float opacity = 1, float transmission = 0, float thickness = 0, PbrDiffuseMoments? diffuseMoments = null)
     {
         if (!PbrMaterialValidation.ParametersValid(parameters, normalScale, occlusionStrength, alphaBlend, opacity, transmission, thickness))
             throw new ArgumentException("Invalid PBR material parameters.");
@@ -43,8 +44,10 @@ public sealed partial class PbrMaterialData
         if (Conflicts(baseColor, normal) || Conflicts(baseColor, metallicRoughness) || Conflicts(baseColor, occlusion)
             || Conflicts(emissive, normal) || Conflicts(emissive, metallicRoughness) || Conflicts(emissive, occlusion))
             throw new ArgumentException("One texture identity cannot require both linear and sRGB decoding.");
+        diffuseMoments?.ValidateBindings(baseColor is not null, metallicRoughness is not null);
         Parameters = parameters; NormalScale = normalScale; OcclusionStrength = occlusionStrength;
         DoubleSided = doubleSided; AlphaBlend = alphaBlend; Opacity = opacity; Transmission = transmission; Thickness = thickness;
+        DiffuseMoments = diffuseMoments;
     }
 
     private static bool Conflicts(TextureReference? color, TextureReference? linear) => color is not null && color == linear;
@@ -59,7 +62,8 @@ public sealed partial class PbrMaterialData
         var occlusion = Read(Occlusion); var emissive = Read(Emissive);
         if (!PbrMaterialValidation.TexturesValid(baseColor, normal, metallicRoughness, occlusion, emissive))
             throw new InvalidAssetException("Material texture color space does not match its role.");
+        DiffuseMoments?.ValidateSources(baseColor, metallicRoughness);
         return new(Parameters, baseColor, normal, metallicRoughness, occlusion, emissive, NormalScale, OcclusionStrength,
-            DoubleSided, AlphaBlend, Opacity, Transmission, Thickness);
+            DoubleSided, AlphaBlend, Opacity, Transmission, Thickness, DiffuseMoments);
     }
 }

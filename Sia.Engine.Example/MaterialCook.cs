@@ -30,8 +30,9 @@ internal static partial class MaterialCook
         public float Opacity { get; init; } = 1;
         public float Transmission { get; init; }
         public float Thickness { get; init; }
+        public DiffuseSources? DiffuseSources { get; init; }
 
-        internal PbrMaterialData Data()
+        internal PbrMaterialData Data(PbrDiffuseMoments? diffuseMoments = null)
         {
             if (Material == Guid.Empty || BaseColor is not { Length: 3 } || EmissiveColor is not { Length: 3 })
                 throw new InvalidDataException("Material cook requires an authored identity and two RGB triples.");
@@ -42,8 +43,15 @@ internal static partial class MaterialCook
                 new(EmissiveColor[0], EmissiveColor[1], EmissiveColor[2]), EmissiveStrength),
                 Reference(BaseColorTexture), Reference(NormalTexture), Reference(MetallicRoughnessTexture),
                 Reference(OcclusionTexture), Reference(EmissiveTexture), NormalScale, OcclusionStrength,
-                DoubleSided, AlphaBlend, Opacity, Transmission, Thickness);
+                DoubleSided, AlphaBlend, Opacity, Transmission, Thickness, diffuseMoments);
         }
+    }
+
+    internal sealed record DiffuseSources
+    {
+        public string? BaseColor { get; init; }
+        public string? MetallicRoughness { get; init; }
+        public ulong MaximumBytes { get; init; } = 256ul * 1024 * 1024;
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
@@ -53,18 +61,30 @@ internal static partial class MaterialCook
     private partial class MaterialRecipeJsonContext : JsonSerializerContext;
 
     internal static AssetId Cook(string recipePath, string outputDirectory,
-        ulong maximumBytes = PbrMaterialData.EncodedBytes, CancellationToken cancellationToken = default)
+        ulong maximumBytes = PbrMaterialData.MaximumEncodedBytes, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var recipe = AssetInput.ReadJson(Path.GetFullPath(recipePath), MaterialRecipeJsonContext.Default.Recipe, 8192);
+        recipePath = Path.GetFullPath(recipePath);
+        var recipe = AssetInput.ReadJson(recipePath, MaterialRecipeJsonContext.Default.Recipe, 8192);
         var data = recipe.Data();
-        if (maximumBytes < PbrMaterialData.EncodedBytes)
+        if (maximumBytes < (ulong)(recipe.DiffuseSources is null ? data.EncodedSize : PbrMaterialData.MaximumEncodedBytes))
             throw new InvalidDataException("Material metadata exceeds its encoded publication budget.");
         var output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
         var parent = Path.GetDirectoryName(output);
         if (parent is null || !Directory.Exists(parent))
             throw new DirectoryNotFoundException("Material output requires an existing parent directory.");
         if (Path.Exists(output)) throw new IOException("Material output must not already exist.");
+        if (recipe.DiffuseSources is { } sources) {
+            if ((sources.BaseColor is not null) != (recipe.BaseColorTexture is not null)
+                || (sources.MetallicRoughness is not null) != (recipe.MetallicRoughnessTexture is not null))
+                throw new InvalidDataException("Diffuse source paths must match the authored texture roles.");
+            FileStream? Open(string? path) => path is null ? null
+                : new FileStream(Path.GetFullPath(path, Path.GetDirectoryName(recipePath)!), FileMode.Open,
+                    FileAccess.Read, FileShare.Read, 1, FileOptions.RandomAccess);
+            using var color = Open(sources.BaseColor);
+            using var metal = Open(sources.MetallicRoughness);
+            data = recipe.Data(PbrDiffuseMoments.Compute(color, metal, sources.MaximumBytes, cancellationToken));
+        }
         cancellationToken.ThrowIfCancellationRequested();
         var stage = Path.Combine(parent, ".material-cook-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stage);
