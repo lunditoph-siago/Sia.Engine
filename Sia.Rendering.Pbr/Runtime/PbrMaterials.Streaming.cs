@@ -256,27 +256,33 @@ internal sealed partial class PbrMaterials
             StartRequest(best);
         }
 
-        Request? active = null;
-        foreach (var request in _pending) {
-            if (!request.Read.IsCompletedSuccessfully || request.Cancellation.IsCancellationRequested) continue;
-            if (active is null || CompareLayer(request.Array, request.Layer, request.Bytes, active.Array, active.Layer, active.Bytes) > 0)
-                active = request;
+        // Share this BeginFrame's allowance between already admitted ready arrays.
+        // Completed uploads stay owned by their requests until the following BeginFrame.
+        for (var attempt = 0; attempt < _pending.Count && _streaming.UploadBytesPerFrame - _uploaded >= 4; attempt++) {
+            var available = _budget - Bytes;
+            Request? active = null;
+            foreach (var request in _pending) {
+                if (!request.Read.IsCompletedSuccessfully || request.Cancellation.IsCancellationRequested
+                    || request.Upload is { Complete: true }
+                    || (request.Upload is null && AllocationBytes(request) > available)) continue;
+                if (active is null || CompareLayer(request.Array, request.Layer, request.Bytes, active.Array, active.Layer, active.Bytes) > 0)
+                    active = request;
+            }
+            if (active is null) break;
+            if (active.Upload is null) {
+                var width = System.Math.Max(1u, active.Array.Width >> active.Mip);
+                var height = System.Math.Max(1u, active.Array.Height >> active.Mip);
+                active.Upload = active.Mip == active.Array.ResidentMip
+                    ? TextureArrayUpload.Update(_frame, width, height, active.Array.Texture, active.Array.View, active.Read.Result)
+                    : new(_frame, width, height, active.Array.Sources[0].Srgb, active.Read.Result, available,
+                        active.Array.Texture, active.Array.ResidentMip - active.Mip, active.Array.Levels - active.Mip);
+            }
+            var advanced = active.Upload.Advance(_streaming.UploadBytesPerFrame - _uploaded);
+            _uploaded += advanced;
+            _copied += active.Upload.CopiedBytes;
+            _peak = System.Math.Max(_peak, Bytes);
+            if (advanced == 0 && !active.Upload.Complete) break;
         }
-        if (active is null) return;
-        if (active.Upload is null) {
-            var allocation = active.Mip == active.Array.ResidentMip ? 0
-                : checked(TailBytes(active.Array.Width, active.Array.Height, active.Array.Levels, active.Mip) * active.Array.Sources.Length);
-            if ((ulong)allocation > _budget - Bytes) return;
-            var width = System.Math.Max(1u, active.Array.Width >> active.Mip);
-            var height = System.Math.Max(1u, active.Array.Height >> active.Mip);
-            active.Upload = active.Mip == active.Array.ResidentMip
-                ? TextureArrayUpload.Update(_frame, width, height, active.Array.Texture, active.Array.View, active.Read.Result)
-                : new(_frame, width, height, active.Array.Sources[0].Srgb, active.Read.Result, _budget - Bytes,
-                    active.Array.Texture, active.Array.ResidentMip - active.Mip, active.Array.Levels - active.Mip);
-        }
-        _uploaded = active.Upload.Advance(_streaming.UploadBytesPerFrame);
-        _copied = active.Upload.CopiedBytes;
-        _peak = System.Math.Max(_peak, Bytes);
     }
 
     private static int CompareDemand(ArrayTexture a, ArrayTexture b)
