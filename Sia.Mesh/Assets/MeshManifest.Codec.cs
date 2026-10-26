@@ -6,13 +6,14 @@ namespace Sia.Engine.Mesh;
 
 public sealed partial class MeshManifest
 {
-    // Fixed header 93 bytes, at most 4096 slot integers and three 48-byte product references.
-    public const int MaximumEncodedBytes = 93 + MaximumMaterialSlots * sizeof(int) + 3 * 48;
+    // Fixed header, bounded slot/product inventory and the optional paged-version checksum.
+    public const int MaximumEncodedBytes = 93 + MaximumMaterialSlots * sizeof(int) + 4 * 48 + 32;
 
     /// <summary>Writes one bounded manifest to a borrowed stream without product payloads.</summary>
     public void Save(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        if (RasterPages is not null) { SavePaged(stream); return; }
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         writer.Write("SIAMESH1"u8);
         writer.Write((byte)((Raster is null ? 0 : 1) | (Bvh is null ? 0 : 2) | (HasBakeUvs ? 4 : 0) | (Virtual is null ? 0 : 8)));
@@ -35,6 +36,7 @@ public sealed partial class MeshManifest
         ArgumentNullException.ThrowIfNull(stream);
         Span<byte> magic = stackalloc byte[8];
         stream.ReadExactly(magic);
+        if (magic.SequenceEqual("SIAMESH2"u8)) return LoadPaged(stream, magic);
         if (!magic.SequenceEqual("SIAMESH1"u8)) throw new InvalidDataException("Unsupported Mesh manifest signature.");
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
         var flags = reader.ReadByte();

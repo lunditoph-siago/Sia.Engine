@@ -36,7 +36,7 @@ internal static partial class ContentCook
         if (recipe.Scene is null || recipe.Meshes is null || recipe.Meshes.Length is < 1 or > 4096
             || recipe.Scene.Meshes is null || recipe.Scene.Meshes.Length != 0)
             throw new InvalidDataException("Content recipe requires 1..4096 Mesh recipes and no prebuilt scene Mesh entries.");
-        if (!recipe.Scene.Raster && !recipe.Scene.Virtual && !recipe.Scene.Bvh)
+        if (!recipe.Scene.Raster && !recipe.Scene.RasterPages && !recipe.Scene.Virtual && !recipe.Scene.Bvh)
             throw new InvalidDataException("Select at least one scene representation.");
         if (recipe.Lightmap is { } lightmap) {
             _ = lightmap.Settings();
@@ -63,7 +63,7 @@ internal static partial class ContentCook
             var mesh = MeshCook.ReadRecipe(path);
             var id = new AssetId(mesh.Mesh);
             if (!claimed.Add(id)) throw new InvalidDataException("Content Mesh identities must be unique.");
-            Guid?[] ids = [mesh.Mesh, mesh.Source, mesh.Raster, mesh.Virtual?.Id, mesh.Bvh?.Id];
+            Guid?[] ids = [mesh.Mesh, mesh.Source, mesh.Raster, mesh.RasterPages, mesh.Virtual?.Id, mesh.Bvh?.Id];
             meshInputs[index] = (id, path, ids.Where(value => value.HasValue)
                 .Select(value => value!.Value.ToString("N") + ".siaasset").ToHashSet(StringComparer.OrdinalIgnoreCase));
         }

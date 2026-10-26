@@ -18,7 +18,7 @@ internal static partial class PbrSceneFiles
         CancellationToken cancellationToken = default)
     {
         var prepared = await PrepareRasterAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
-        var source = new PageSource(path, client, new(prepared.Id, prepared.Scene, prepared.Meshes,
+        var source = new PageSource(path, client, new Prepared<MeshVirtualRecord>(prepared.Id, prepared.Scene, prepared.Meshes,
             new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Materials, prepared.Textures));
         return new(prepared, source) { EncodedBytes = prepared.EncodedBytes };
     }
