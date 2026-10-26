@@ -15,15 +15,21 @@ public sealed partial class PbrSceneData
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         var attribution = s_utf8.GetBytes(Attribution);
-        Span<byte> framing = stackalloc byte[40];
-        var header = framing[..(HasAuthoredLights ? 40 : 32)];
-        (HasAuthoredLights ? "SIASCNR2"u8 : "SIASCNR1"u8).CopyTo(header);
+        Span<byte> framing = stackalloc byte[48];
+        var header = framing[..(HasAuthoredCameras ? 48 : HasAuthoredLights ? 40 : 32)];
+        (HasAuthoredCameras ? "SIASCNR3"u8 : HasAuthoredLights ? "SIASCNR2"u8 : "SIASCNR1"u8).CopyTo(header);
         BinaryPrimitives.WriteInt32LittleEndian(header[8..], _bindings.Length);
         BinaryPrimitives.WriteInt32LittleEndian(header[12..], _instances.Length);
         BinaryPrimitives.WriteInt32LittleEndian(header[16..], MaterialReferenceCount);
         BinaryPrimitives.WriteInt32LittleEndian(header[20..], attribution.Length);
         BinaryPrimitives.WriteUInt64LittleEndian(header[24..], EncodedBytes - (ulong)header.Length - 32);
-        if (HasAuthoredLights) {
+        if (HasAuthoredCameras) {
+            BinaryPrimitives.WriteInt32LittleEndian(header[32..], Lights.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(header[36..], Cameras.Length);
+            BinaryPrimitives.WriteUInt32LittleEndian(header[40..], HasAuthoredLights ? 1u : 0);
+            BinaryPrimitives.WriteUInt32LittleEndian(header[44..], 0);
+        }
+        else if (HasAuthoredLights) {
             BinaryPrimitives.WriteInt32LittleEndian(header[32..], Lights.Length);
             BinaryPrimitives.WriteUInt32LittleEndian(header[36..], 0);
         }
@@ -46,6 +52,9 @@ public sealed partial class PbrSceneData
         foreach (var light in Lights) {
             cancellationToken.ThrowIfCancellationRequested(); WriteLight(block, light); WriteBlock(stream, block[..76], hash);
         }
+        foreach (var camera in Cameras) {
+            cancellationToken.ThrowIfCancellationRequested(); WriteCamera(block, camera); WriteBlock(stream, block[..64], hash);
+        }
         WriteBlock(stream, attribution, hash); cancellationToken.ThrowIfCancellationRequested(); stream.Write(hash.GetHashAndReset());
     }
 
@@ -54,29 +63,40 @@ public sealed partial class PbrSceneData
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         if (maximumBytes < 64) throw new InvalidDataException("Scene framing exceeds its decode limit.");
         try {
-            Span<byte> framing = stackalloc byte[40]; stream.ReadExactly(framing[..32]);
+            Span<byte> framing = stackalloc byte[48]; stream.ReadExactly(framing[..32]);
+            var authoredCameras = framing[..8].SequenceEqual("SIASCNR3"u8);
             var authored = framing[..8].SequenceEqual("SIASCNR2"u8);
-            if (!authored && !framing[..8].SequenceEqual("SIASCNR1"u8)) throw new InvalidDataException("Invalid reference-scene signature.");
-            if (authored) {
-                if (maximumBytes < 72) throw new InvalidDataException("Scene framing exceeds its decode limit.");
+            if (!authoredCameras && !authored && !framing[..8].SequenceEqual("SIASCNR1"u8)) throw new InvalidDataException("Invalid reference-scene signature.");
+            if (authoredCameras) {
+                if (maximumBytes < 80) throw new InvalidDataException("Scene framing exceeds its decode limit.");
                 stream.ReadExactly(framing[32..]);
+                var flags = BinaryPrimitives.ReadUInt32LittleEndian(framing[40..]);
+                if ((flags & ~1u) != 0 || BinaryPrimitives.ReadUInt32LittleEndian(framing[44..]) != 0)
+                    throw new InvalidDataException("Unknown reference-scene header flags.");
+                authored = (flags & 1) != 0;
+            }
+            else if (authored) {
+                if (maximumBytes < 72) throw new InvalidDataException("Scene framing exceeds its decode limit.");
+                stream.ReadExactly(framing[32..40]);
                 if (BinaryPrimitives.ReadUInt32LittleEndian(framing[36..]) != 0)
                     throw new InvalidDataException("Unknown reference-scene header flags.");
             }
-            var header = framing[..(authored ? 40 : 32)];
-            var lightCount = authored ? BinaryPrimitives.ReadInt32LittleEndian(header[32..]) : 0;
+            var header = framing[..(authoredCameras ? 48 : authored ? 40 : 32)];
+            var lightCount = authoredCameras || authored ? BinaryPrimitives.ReadInt32LittleEndian(header[32..]) : 0;
+            var cameraCount = authoredCameras ? BinaryPrimitives.ReadInt32LittleEndian(header[36..]) : 0;
             var bindingCount = BinaryPrimitives.ReadInt32LittleEndian(header[8..]);
             var instanceCount = BinaryPrimitives.ReadInt32LittleEndian(header[12..]);
             var slotCount = BinaryPrimitives.ReadInt32LittleEndian(header[16..]);
             var attributionLength = BinaryPrimitives.ReadInt32LittleEndian(header[20..]);
             if (bindingCount is < 0 or > MaximumBindings || instanceCount is < 0 or > MaximumInstances
                 || slotCount is < 0 or > MaximumMaterialReferences || attributionLength is < 0 or > MaximumAttributionBytes
-                || lightCount is < 0 or > MaximumLights
+                || lightCount is < 0 or > MaximumLights || cameraCount is < 0 or > MaximumCameras || !authored && lightCount != 0
                 || slotCount < bindingCount || slotCount > (long)bindingCount * Mesh.MeshManifest.MaximumMaterialSlots)
                 throw new InvalidDataException("Invalid reference-scene metadata counts.");
-            var length = (ulong)bindingCount * 20 + (ulong)slotCount * 20 + (ulong)instanceCount * 84 + (ulong)lightCount * 76 + (ulong)attributionLength;
+            var length = (ulong)bindingCount * 20 + (ulong)slotCount * 20 + (ulong)instanceCount * 84 + (ulong)lightCount * 76
+                + (ulong)cameraCount * 64 + (ulong)attributionLength;
             if (length != BinaryPrimitives.ReadUInt64LittleEndian(header[24..]) || length + (ulong)header.Length + 32 > maximumBytes
-                || ArrayBytes(bindingCount, instanceCount, slotCount, lightCount) > maximumBytes)
+                || ArrayBytes(bindingCount, instanceCount, slotCount, lightCount, cameraCount) > maximumBytes)
                 throw new InvalidDataException("Reference-scene metadata exceeds its declared size or decode limit.");
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); hash.AppendData(header);
             var bindings = new PbrMeshBinding[bindingCount]; var remaining = slotCount; Span<byte> block = stackalloc byte[84];
@@ -104,11 +124,15 @@ public sealed partial class PbrSceneData
             if (lights is not null) for (var i = 0; i < lights.Length; i++) {
                 cancellationToken.ThrowIfCancellationRequested(); ReadBlock(stream, block[..76], hash); lights[i] = ReadLight(block);
             }
+            var cameras = authoredCameras ? new PbrSceneCamera[cameraCount] : null;
+            if (cameras is not null) for (var i = 0; i < cameras.Length; i++) {
+                cancellationToken.ThrowIfCancellationRequested(); ReadBlock(stream, block[..64], hash); cameras[i] = ReadCamera(block);
+            }
             var attribution = new byte[attributionLength]; ReadBlock(stream, attribution, hash);
             Span<byte> digest = stackalloc byte[32]; stream.ReadExactly(digest); cancellationToken.ThrowIfCancellationRequested();
             if (!CryptographicOperations.FixedTimeEquals(hash.GetHashAndReset(), digest)) throw new InvalidDataException("Reference-scene checksum mismatch.");
             if (stream.ReadByte() != -1) throw new InvalidDataException("Trailing reference-scene data.");
-            return new(bindings, instances, s_utf8.GetString(attribution), lights);
+            return new(bindings, instances, s_utf8.GetString(attribution), lights, cameras);
         }
         catch (EndOfStreamException error) { throw new InvalidDataException("Truncated reference-scene metadata.", error); }
         catch (ArgumentException error) { throw new InvalidDataException("Invalid reference-scene metadata.", error); }
@@ -136,6 +160,23 @@ public sealed partial class PbrSceneData
             ReadVector(bytes[20..]), BinaryPrimitives.ReadSingleLittleEndian(bytes[32..]), ReadVector(bytes[36..]), ReadVector(bytes[48..]),
             BinaryPrimitives.ReadSingleLittleEndian(bytes[60..]), BinaryPrimitives.ReadSingleLittleEndian(bytes[64..]),
             BinaryPrimitives.ReadSingleLittleEndian(bytes[68..]), flags != 0);
+    }
+    private static void WriteCamera(Span<byte> bytes, PbrSceneCamera camera)
+    {
+        WriteId(bytes, camera.Id); WriteVector(bytes[16..], camera.Position); WriteColumn(bytes[28..], camera.Rotation.value);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[44..], camera.FovRadians);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[48..], camera.Near);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes[52..], camera.Far);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[56..], (int)camera.FovAxis);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[60..], 0);
+    }
+    private static PbrSceneCamera ReadCamera(ReadOnlySpan<byte> bytes)
+    {
+        if (BinaryPrimitives.ReadUInt32LittleEndian(bytes[60..]) != 0)
+            throw new InvalidDataException("Unknown authored-camera flags.");
+        return new(ReadId(bytes), ReadVector(bytes[16..]), new quaternion(ReadColumn(bytes[28..])),
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[44..]), BinaryPrimitives.ReadSingleLittleEndian(bytes[48..]),
+            BinaryPrimitives.ReadSingleLittleEndian(bytes[52..]), (PbrCameraFovAxis)BinaryPrimitives.ReadInt32LittleEndian(bytes[56..]));
     }
     private static void WriteVector(Span<byte> bytes, float3 v)
     {

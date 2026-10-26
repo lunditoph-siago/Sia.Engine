@@ -35,8 +35,13 @@ export function createSceneUI(actions) {
     quality.value = scene.quality ?? 'high';
     settings.hidden = !scene.quality;
     element('bunny-credit').hidden = scene.pipeline !== 'bunny';
-    element('inspection-distance-row').hidden = scene.pipeline !== 'bunny';
-    tour.hidden = scene.pipeline !== 'bunny';
+    const inspectionCamera = scene.pipeline === 'bunny' && !scene.camera;
+    element('inspection-distance-row').hidden = !inspectionCamera;
+    tour.hidden = !inspectionCamera;
+    element('inspection-reset').hidden = !inspectionCamera;
+    element('inspection-help').textContent = scene.camera
+      ? 'This scene uses the selected camera. Use the shading control to inspect triangles.'
+      : 'Drag the distance slider to move closer or farther. Use the controls above to pause the tour, reset the view or change shading.';
     element('loading-note').textContent = 'Preparing the scene for your device.';
     for (const link of document.querySelectorAll('nav a')) {
       if (new URL(link.href).searchParams.get('pipeline') === scene.pipeline) link.setAttribute('aria-current', 'page');
