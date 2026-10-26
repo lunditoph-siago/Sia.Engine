@@ -61,7 +61,11 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
                 color = triangle_debug_color(visible - 1u);
             }
         }
+#if LIVE_REFLECTIONS
         resolve_store_opaque(vec2<i32>(id.xy), vec4<f32>(color, 1.0));
+#else
+        resolve_store_opaque(vec2<i32>(id.xy), vec4<f32>(color * frame.depth.z, 1.0));
+#endif
         return;
     }
     if (visible != 0u) {
@@ -70,7 +74,11 @@ fn background(@builtin(global_invocation_id) id: vec3<u32>) {
     let ndc = (vec2<f32>(id.xy) + .5) / vec2<f32>(frame.size.xy) * vec2<f32>(2, -2) + vec2<f32>(-1, 1);
     let world = frame.inv_vp * vec4<f32>(ndc, 1, 1);
     let direction = unit(world.xyz / world.w - frame.eye.xyz);
-    let color = textureSampleLevel(environment, environment_sampler, direction, 0).rgb;
+    var color = textureSampleLevel(environment, environment_sampler, direction, 0).rgb * frame.depth.w;
+#if LIVE_REFLECTIONS
+#else
+    color *= frame.depth.z;
+#endif
     resolve_store_opaque(vec2<i32>(id.xy), vec4<f32>(color, 1));
 #if SURFACE_DATA
     textureStore(normal_roughness, vec2<i32>(id.xy), vec4<f32>(0.0));
@@ -121,7 +129,7 @@ fn resolve_pixel(pixel: vec2<u32>) {
 #if LIVE_REFLECTIONS
     resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(color, 1));
 #else
-    resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(min(color, vec3<f32>(65504)), 1));
+    resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(min(color * frame.depth.z, vec3<f32>(65504)), 1));
 #endif
 }
 

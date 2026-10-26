@@ -97,13 +97,13 @@ fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool)
                 pixel = candidate;
             }
         }
-        let background_color = textureLoad(opaque, pixel, 0).rgb;
+        let background_color = textureLoad(opaque, pixel, 0).rgb / frame.depth.z;
         let f = 0.04 + 0.96 * pow(1.0 - max(dot(-view, s.normal), 0), 5.0);
         var reflected = s; reflected.base = vec3<f32>(0); reflected.metal = 0.0;
         let reflection = scene_lighting(reflected, input.position.xy);
         color = mix(color, reflection + (1.0 - f) * s.base * background_color, transmission);
     }
-    return vec4<f32>(min(color, vec3<f32>(65504)), s.opacity);
+    return vec4<f32>(min(color * frame.depth.z, vec3<f32>(65504)), s.opacity);
 }
 
 @fragment
@@ -117,7 +117,7 @@ fn transparent_fragment(input: GlassVertex, @builtin(front_facing) front: bool) 
     s.bake_uv = input.bake_uv;
     s.bake_uv_dx = dpdx(input.bake_uv); s.bake_uv_dy = dpdy(input.bake_uv);
     s.bake_present = input.bake.x != 0u; s.source_instance = input.bake.y;
-    return vec4<f32>(min(shade(s, input.position.xy), vec3<f32>(65504)), s.opacity);
+    return vec4<f32>(min(shade(s, input.position.xy) * frame.depth.z, vec3<f32>(65504)), s.opacity);
 }
 
 @fragment

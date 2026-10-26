@@ -26,6 +26,8 @@ public sealed record PbrRendererSettings
     public PbrOpaquePath OpaquePath { get; init; } = PbrOpaquePath.Visibility;
     public bool ExportSurfaceData { get; init; }
     public bool GpuTiming { get; init; }
+    /// <summary>Display-only exposure in stops, -16..16. Does not change physical lighting or transport.</summary>
+    public float ExposureCompensation { get; init; }
 
     public float TargetPixelError { get; init; }
     public float ShadowTexelError { get; init; }
@@ -98,7 +100,7 @@ public readonly record struct PbrFrameStatistics(
 public readonly record struct PbrReflectionTargets(RenderGraphTextureKey Radiance, RenderGraphTextureKey HitMetadata,
     RenderGraphTextureKey CurrentSpecular, RenderGraphTextureKey OpaqueColor);
 
-public sealed class PbrRenderer :
+public sealed partial class PbrRenderer :
     IPrepareRenderFeature<RenderFrameContext>,
     IRenderGraphContributor<RenderFrameContext>,
     IDisposable
@@ -127,6 +129,15 @@ public sealed class PbrRenderer :
     public RenderFeatureKey Key { get; } = new("pbr");
     public VisibilityDebugMode DebugMode { get; set; }
     public bool SampleGpuTiming { get; set; } = true;
+    private float _exposureCompensation;
+    /// <summary>Display-only exposure in stops, -16..16. Applied on the next prepared shaded frame.</summary>
+    public float ExposureCompensation {
+        get => _exposureCompensation;
+        set {
+            if (!float.IsFinite(value) || value is < -16 or > 16) throw new ArgumentOutOfRangeException(nameof(value));
+            _exposureCompensation = value;
+        }
+    }
 
     public PbrFrameStatistics FrameStatistics { get; private set; }
     public Aabb Bounds => Scene.Bounds;
@@ -162,6 +173,7 @@ public sealed class PbrRenderer :
     internal PbrRendererSettings Settings { get; }
     internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
+    internal float HdrRadianceScale { get; }
 
     public PbrRenderer(in GpuFrame frame, PbrRasterScene scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
@@ -177,6 +189,7 @@ public sealed class PbrRenderer :
     {
         if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
+        ExposureCompensation = Settings.ExposureCompensation;
         if (Settings.Reflections is { } reflectionSettings) {
             reflectionSettings.Validate();
             if (!Settings.DynamicSceneGi || Settings.OpaquePath != PbrOpaquePath.Visibility)
@@ -209,6 +222,8 @@ public sealed class PbrRenderer :
         var captures = PbrReflectionCaptureGpu.Validate(Settings.ReflectionCaptures.Span,
             (stream?.Identity ?? raster!.TransportIdentity).Span,
             Settings.BakedEnvironment, Settings.ReflectionCaptureBytes);
+        HdrRadianceScale = Settings.BakedEnvironment?.CubeRadianceScale ?? 1;
+        foreach (var capture in captures) HdrRadianceScale = MathF.Max(HdrRadianceScale, capture.Environment.CubeRadianceScale);
         if (captures.Length != 0) {
             _staticInstanceIds = [];
             foreach (var capture in captures) foreach (var id in capture.Capture.StaticInstances) _staticInstanceIds.Add(id);
@@ -218,12 +233,15 @@ public sealed class PbrRenderer :
             ArgumentNullException.ThrowIfNull(input.Set); ArgumentNullException.ThrowIfNull(input.PrepareProduct); ArgumentNullException.ThrowIfNull(input.AcquireProduct);
             ArgumentNullException.ThrowIfNull(input.PreparePage); ArgumentNullException.ThrowIfNull(input.AcquirePage);
             ArgumentNullException.ThrowIfNull(Settings.LightmapStreaming);
+            if (input.Set.BakeSettings.Environment is not null)
+                input.Set.BakeSettings.ValidateEnvironment(Settings.BakedEnvironment);
             lightmapRows = raster is not null ? input.Set.BindReceivers(raster.Instances.Span)
                 : input.Set.BindReceivers(stream!);
             _staticInstanceIds ??= [];
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
             if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
         }
+        HdrRadianceScale = StaticRadianceScale(HdrRadianceScale, (stream?.Materials ?? raster!.Materials).Span);
         try {
             _queue = frame.Queue.GetWgpu<WGPUQueue>();
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
@@ -270,14 +288,17 @@ public sealed class PbrRenderer :
                     if (total > Settings.SceneGiBytes)
                         throw new ArgumentException("Paired probe field and transport exceed the total GI budget.", nameof(settings));
                 }
-                var asset = Settings.BakedProbes ?? PbrSceneTransport.CreateVolume(tracing!,
-                    Settings.ProbeDimensions, Settings.BakedEnvironment?.Sky ?? new ProceduralSky(), Settings.ProbeBounds);
+                var asset = Settings.BakedProbes ?? (Settings.BakedEnvironment is { } source
+                    ? PbrSceneTransport.CreateVolume(tracing!, Settings.ProbeDimensions, source.Coefficients.Span, Settings.ProbeBounds)
+                    : PbrSceneTransport.CreateVolume(tracing!, Settings.ProbeDimensions, new ProceduralSky(), Settings.ProbeBounds));
                 var identity = (tracing?.Identity ?? raster?.TransportIdentity ?? stream!.Identity).ToArray();
                 if (!asset.SceneIdentity.Span.SequenceEqual(identity))
                     throw new ArgumentException("Baked probes belong to different scene geometry/materials.", nameof(settings));
                 if (Settings.DynamicSceneGi && (Settings.ProbeUpdates == 0 || Settings.ProbeUpdates > asset.Count || Settings.ProbeSamples is < 16 or > 1024))
                     throw new ArgumentOutOfRangeException(nameof(settings), "Invalid dynamic probe update budget.");
-                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference);
+                Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference,
+                    Settings.BakedEnvironment is null ? null : Environment,
+                    Settings.DynamicSceneGi && Settings.Lightmaps?.Set.BakeSettings.Environment is not null ? Environment : null);
             }
         }
         catch {

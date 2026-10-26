@@ -13,6 +13,11 @@ public static partial class Program
     private static async Task<bool> RunOfflineAsync(string[] args)
     {
         switch (args) {
+            case ["--cook-hdr-environment", var recipe, "--output", var output]: {
+                var environment = HdrEnvironmentCook.Cook(recipe, output);
+                Console.WriteLine($"Cooked HDR environment {environment.Value:N}: {Path.GetFullPath(output)}");
+                return true;
+            }
             case ["--cook-material", var recipe, "--output", var output]: {
                 var material = MaterialCook.Cook(recipe, output);
                 Console.WriteLine($"Cooked material {material.Value:N}: {Path.GetFullPath(output)}");

@@ -53,7 +53,8 @@ internal static partial class ContentCook
                 : entry with { Input = Locate(entry.Input) }).ToArray();
         }
         var scene = recipe.Scene with { Input = Locate(recipe.Scene.Input),
-            Materials = LocateEntries(recipe.Scene.Materials), Textures = LocateEntries(recipe.Scene.Textures) };
+            Materials = LocateEntries(recipe.Scene.Materials), Textures = LocateEntries(recipe.Scene.Textures),
+            GltfLights = recipe.Scene.GltfLights is { } lights ? lights with { Input = Locate(lights.Input) } : null };
         var meshInputs = new (AssetId Id, string Path, HashSet<string> Files)[recipe.Meshes.Length];
         var claimed = new HashSet<AssetId>();
         for (var index = 0; index < meshInputs.Length; index++) {
@@ -95,7 +96,8 @@ internal static partial class ContentCook
             await using (var file = new FileStream(sceneRecipePath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 65536, FileOptions.Asynchronous)) await file.WriteAsync(preparedRecipe, cancellationToken);
             var published = await ScenePack.PackAsync(sceneRecipePath, output, maximumFileBytes, maximumTotalBytes, cancellationToken,
-                recipe.Lightmap, layouts);
+                recipe.Lightmap is { Environment: { } environment } hdr
+                    ? hdr with { Environment = environment with { Input = Locate(environment.Input) } } : recipe.Lightmap, layouts);
             if (published != sceneId) throw new InvalidDataException("Unexpected published scene identity.");
             return published;
         }

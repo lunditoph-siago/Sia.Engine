@@ -27,6 +27,7 @@ public sealed record PbrReflectionSettings
 }
 
 public readonly record struct PbrReflectionDirectionalLight(float3 TowardLight, float3 Radiance);
+/// <summary>Local light in physical rendering units; Range zero has no cutoff within the bounded reflection work.</summary>
 public readonly record struct PbrReflectionLocalLight(float3 Position, float Range, float3 Radiance,
     float3 Direction = default, float InnerCosine = 1, float OuterCosine = 0, bool Spot = false);
 
