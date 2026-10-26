@@ -46,8 +46,7 @@ internal static partial class PbrSceneFiles
                         var prior = _pages[page.Id];
                         if (prior.Index.Pages[prior.Page] != page) throw new InvalidAssetException("Page ID has conflicting revisions.");
                     }
-                    locations.TryAdd(page.ContentHash, http ? new Uri(uri!, page.Id.Value.ToString("N") + ".siaasset").AbsoluteUri
-                        : Path.Combine(root!, page.Id.Value.ToString("N") + ".siaasset"));
+                    locations.TryAdd(page.ContentHash, page.Id.Value.ToString("N") + ".siaasset");
                 }
             }
             foreach (var texture in prepared.Textures.Values) {
@@ -57,25 +56,30 @@ internal static partial class PbrSceneFiles
                         throw new InvalidAssetException("Texture mip aliases another scene asset.");
                     if (!_mips.TryAdd(mip.Id, mip) && !SameMip(_mips[mip.Id], mip))
                         throw new InvalidAssetException("Texture mip ID has conflicting revisions.");
-                    foreach (var chunk in mip.Content.Chunks)
-                        locations.TryAdd(chunk.Id, http ? new Uri(uri!, chunk.FileName).AbsoluteUri : Path.Combine(root!, chunk.FileName));
                 }
             }
-            _cache = new(async (chunk, token) => await AssetInput.OpenAsync(locations[chunk.Id], client, token), cacheBytes);
+            _cache = new(async (chunk, token) => {
+                // Only legacy geometry needs an ID-to-file mapping. Authenticated typed
+                // mip references already carry content IDs; resolve their location on demand.
+                var name = locations.TryGetValue(chunk.Id, out var page) ? page : chunk.FileName;
+                var path = http ? new Uri(uri!, name).AbsoluteUri : Path.Combine(root!, name);
+                return await AssetInput.OpenAsync(path, client, token);
+            }, cacheBytes);
         }
 
         private static bool SameMip(PbrTextureMipReference a, PbrTextureMipReference b)
             => a.Id == b.Id && a.ContentHash == b.ContentHash && a.EncodedBytes == b.EncodedBytes
                 && a.Content.Chunks.Length == b.Content.Chunks.Length
-                && a.Content.Chunks.Zip(b.Content.Chunks).All(pair => pair.First.Id == pair.Second.Id && pair.First.Length == pair.Second.Length);
+                && a.Content.Chunks.Zip(b.Content.Chunks).All(pair => pair.First.Id == pair.Second.Id && pair.First.Length == pair.Second.Length
+                    && pair.First.DecodedLength == pair.Second.DecodedLength && pair.First.Encoding == pair.Second.Encoding);
 
         internal async Task<PbrTextureRecord> ReadMipAsync(PbrTextureMipReference reference, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             if (!_mips.TryGetValue(reference.Id, out var selected) || !SameMip(reference, selected))
                 throw new AssetNotFoundException("Unknown typed texture mip revision.");
-            return await ChunkLoader.LoadAsync<PbrTextureRecord, ulong>(selected.Content, _cache,
-                (ulong)selected.EncodedBytes, maximumBytes: selected.EncodedBytes, cancellationToken: token).ConfigureAwait(false);
+            return await ChunkLoader.LoadStreamingAsync<PbrTextureRecord, ulong>(selected.Content, _cache,
+                (ulong)selected.EncodedBytes, maximumBytes: selected.EncodedBytes, priority: 100, cancellationToken: token).ConfigureAwait(false);
         }
 
         internal async Task<MeshVirtualPageRecord> ReadAsync(PageReference reference, CancellationToken token)

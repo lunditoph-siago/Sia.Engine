@@ -57,8 +57,8 @@ internal static partial class TextureCook
         }
         try {
             var mips = new PbrTextureMipReference[recipe.Mips.Length];
-            // One fixed chunk buffer is shared by all mip encoders; pixels remain borrowed immutable slices.
-            var buffer = mips.Length == 0 ? [] : new byte[AssetChunk.MaximumLength];
+            // Independent bounded decode blocks; one scratch buffer is reused across all fine mips.
+            var buffer = mips.Length == 0 ? [] : new byte[(int)System.Math.Min(128 * 1024L, 64L + (long)source.Width * source.Height * 4)];
             for (var mip = 0; mip < mips.Length; mip++) {
                 cancellationToken.ThrowIfCancellationRequested();
                 using var encoded = new ChunkOutput(buffer, (chunk, bytes) => {
@@ -120,8 +120,8 @@ internal static partial class TextureCook
         public override void Flush() {
             token.ThrowIfCancellationRequested();
             if (_used == 0) return;
-            var chunk = AssetChunk.FromBytes(buffer.AsSpan(0, _used));
-            write(chunk, buffer.AsMemory(0, _used)); _chunks.Add(chunk); _used = 0;
+            var (chunk, bytes) = AssetChunk.Encode(buffer.AsSpan(0, _used));
+            write(chunk, bytes); _chunks.Add(chunk); _used = 0;
         }
         protected override void Dispose(bool disposing) { if (disposing) _hash.Dispose(); base.Dispose(disposing); }
         public override void Write(byte[] bytes, int offset, int count) => Write(bytes.AsSpan(offset, count));

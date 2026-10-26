@@ -113,22 +113,26 @@ internal sealed class PbrGpuSelection : IDisposable
         _capture = -1;
         if (_poseRevision != residency.PoseRevision) {
             _poseRevision = residency.PoseRevision;
-            _latestFrame = -1; VisibleTriangles = 0; DeferredRefinements = 0;
-            _activeFeedback.Clear(); Array.Clear(_latest);
+            VisibleTriangles = 0; DeferredRefinements = 0;
         }
         foreach (var slot in _slots) {
             if (slot.Mapping is { IsCompleted: true } mapping) {
                 try {
                     mapping.GetAwaiter().GetResult();
-                    if (AcceptFeedback(slot.PoseRevision, slot.Frame)) {
+                    if (AcceptFeedback(slot.Frame)) {
                         Wgpu.GetMappedRangeReadOnly<uint>(slot.Buffer.GetWgpu<WGPUBuffer>(), 0, _latest.Length).CopyTo(_latest);
                         _activeFeedback.Clear();
                         for (var i = 0; i < (int)_hierarchy.PageCount; i++)
                             if ((_latest[i * 2] | _latest[(i * 2) + 1]) != 0) _activeFeedback.Add(i);
                         _latestFrame = slot.Frame;
                         var offset = (int)_hierarchy.PageCount * 2;
-                        VisibleTriangles = _latest[offset + 15];
-                        DeferredRefinements = checked(_latest[offset + 9] + _latest[offset + 11]);
+                        // Page slots retain their identity for this owner's lifetime.
+                        // Motion changes demand, but cannot invalidate delayed IO hints.
+                        // Display statistics still describe only the current pose.
+                        if (slot.PoseRevision == _poseRevision) {
+                            VisibleTriangles = _latest[offset + 15];
+                            DeferredRefinements = checked(_latest[offset + 9] + _latest[offset + 11]);
+                        }
                     }
                 }
                 catch (Exception) { FeedbackFailures++; }
@@ -162,8 +166,7 @@ internal sealed class PbrGpuSelection : IDisposable
         Wgpu.WriteBuffer<PbrGpuHierarchy.Configuration>(_gpu.Queue, _configuration[view].GetWgpu<WGPUBuffer>(), 0, [value]);
     }
 
-    private bool AcceptFeedback(ulong poseRevision, long frame)
-        => poseRevision == _poseRevision && frame > _latestFrame;
+    private bool AcceptFeedback(long frame) => frame > _latestFrame;
 
     public void Reset(WgpuHandle<WGPUCommandEncoder> encoder)
     {

@@ -18,11 +18,12 @@ public sealed class AssetChunkManifest
         Chunks = chunks.Take(MaximumChunks + 1).ToImmutableArray();
         if (Chunks.Length > MaximumChunks) { throw new ArgumentException("Too many chunks.", nameof(chunks)); }
         _byId = new(StringComparer.Ordinal);
+        var rowBytes = Chunks.Any(c => c?.Encoding != AssetChunkEncoding.Raw) ? 48L : 40L;
         long size = 16;
         foreach (var chunk in Chunks) {
             ArgumentNullException.ThrowIfNull(chunk);
             if (!_byId.TryAdd(chunk.Id, chunk)) { throw new ArgumentException("Duplicate chunk ID.", nameof(chunks)); }
-            size += 40L + chunk.Dependencies.Length * 4L;
+            size += rowBytes + chunk.Dependencies.Length * 4L;
         }
         Bootstrap = bootstrap.Take(MaximumChunks + 1).ToImmutableArray();
         if (Bootstrap.Length > MaximumChunks || Bootstrap.Distinct(StringComparer.Ordinal).Count() != Bootstrap.Length) {
@@ -76,15 +77,20 @@ public sealed class AssetChunkManifest
 
     public byte[] Encode()
     {
+        var encoded = Chunks.Any(c => c.Encoding != AssetChunkEncoding.Raw);
         var indices = Chunks.Select((c, i) => (c.Id, i)).ToDictionary(p => p.Id, p => p.i, StringComparer.Ordinal);
         using var output = new MemoryStream();
         using var writer = new BinaryWriter(output);
-        writer.Write("SIACHNK1"u8);
+        writer.Write(encoded ? "SIACHNK2"u8 : "SIACHNK1"u8);
         writer.Write(Chunks.Length);
         writer.Write(Bootstrap.Length);
         foreach (var chunk in Chunks) {
             writer.Write(Convert.FromHexString(chunk.Id));
             writer.Write(chunk.Length);
+            if (encoded) {
+                writer.Write(chunk.DecodedLength);
+                writer.Write((int)chunk.Encoding);
+            }
             writer.Write(chunk.Dependencies.Length);
             foreach (var dependency in chunk.Dependencies) { writer.Write(indices[dependency]); }
         }
@@ -94,21 +100,27 @@ public sealed class AssetChunkManifest
 
     public static AssetChunkManifest Decode(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length is < 16 or > MaximumBytes || !bytes[..8].SequenceEqual("SIACHNK1"u8)) {
+        if (bytes.Length is < 16 or > MaximumBytes
+            || (!bytes[..8].SequenceEqual("SIACHNK1"u8) && !bytes[..8].SequenceEqual("SIACHNK2"u8))) {
             throw new InvalidDataException("Invalid chunk manifest header or size.");
         }
         var reader = new ManifestReader(bytes[8..]);
+        var encoded = bytes[7] == (byte)'2';
         var count = reader.Count(MaximumChunks);
         var bootstrapCount = reader.Count(MaximumChunks);
-        if ((long)count * 40 + (long)bootstrapCount * 4 > reader.Remaining) {
+        if ((long)count * (encoded ? 48 : 40) + (long)bootstrapCount * 4 > reader.Remaining) {
             throw new InvalidDataException("Truncated chunk manifest.");
         }
         var ids = new string[count];
         var lengths = new int[count];
+        var decodedLengths = new int[count];
+        var encodings = new AssetChunkEncoding[count];
         var dependencies = new int[count][];
         for (var i = 0; i < count; i++) {
             ids[i] = Convert.ToHexString(reader.Bytes(32));
             lengths[i] = reader.Count(AssetChunk.MaximumLength);
+            decodedLengths[i] = encoded ? reader.Count(AssetChunk.MaximumLength) : lengths[i];
+            encodings[i] = encoded ? (AssetChunkEncoding)reader.Count((int)AssetChunkEncoding.Lz4) : AssetChunkEncoding.Raw;
             var n = reader.Count(count);
             if ((long)n * 4 > reader.Remaining) { throw new InvalidDataException("Truncated dependencies."); }
             dependencies[i] = new int[n];
@@ -118,7 +130,8 @@ public sealed class AssetChunkManifest
         for (var i = 0; i < bootstrap.Length; i++) { bootstrap[i] = ids[reader.Index(count)]; }
         if (reader.Remaining != 0) { throw new InvalidDataException("Trailing manifest bytes."); }
         try {
-            return new(ids.Select((id, i) => new AssetChunk(id, lengths[i], dependencies[i].Select(index => ids[index]))), bootstrap);
+            return new(ids.Select((id, i) => new AssetChunk(id, lengths[i], decodedLengths[i], encodings[i],
+                dependencies[i].Select(index => ids[index]))), bootstrap);
         }
         catch (ArgumentException error) { throw new InvalidDataException("Invalid chunk manifest graph.", error); }
     }
