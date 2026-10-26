@@ -49,9 +49,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         PbrGpuScene.Draw[] Draws,
         Key[] Used,
         KeyValuePair<Key, float>[] Wanted,
+        KeyValuePair<ChildRequest, float>[] Requests,
         bool Complete = true);
     private readonly record struct ReadyCandidate(Key Key, float Priority, long Order);
-    private readonly record struct EvictionCandidate(Key Key, Resident Page, int Order);
+    private readonly record struct EvictionCandidate(Key Key, Resident Page, int Order, bool Admitted);
 
     private sealed class BranchGroup(int instance, int[] roots, Aabb bounds)
     {
@@ -109,7 +110,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _arena.Bytes, _arena.UsedBytes, _rootBytes, _arena.StagingBytes, _uploaded,
         _resident.Count, _installs, _evictions, Revision, _requests.Statistics, _deferredGroups);
 
-    internal bool IsStopped => _stopped;
+    internal bool IsStopped => _stopTask is { IsCompletedSuccessfully: true };
     internal int SelectionNodeLimit { get; }
 
     public PbrStreamResidency(PbrSceneStream source, StreamPageArena arena, PbrStreamingSettings settings, int[] materialBatches)
@@ -235,22 +236,28 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     public void BeginFrame()
     {
-        ObjectDisposedException.ThrowIf(_stopTask is not null, this);
+        ObjectDisposedException.ThrowIf(_stopped || _stopTask is not null, this);
         _clock++;
         _wanted.Clear();
         _used.Clear();
         _uploaded = 0;
         _deferredGroups = 0;
+        BeginBudgetFrame();
+        BeginRelocationFrame();
+        BeginRecoveryFrame();
     }
 
     public void Select(float4x4 vp, uint width, uint height, float error, FrustumCuller culler,
         List<PbrGpuScene.Draw> output)
     {
+        _recoveryCpuInput = true;
+        EnableBudgetAdmission();
         EnsureCpuSelection();
         var view = new View(vp, width, height, error);
         if (_cuts.TryGetValue(view, out var cached) && cached.Complete && cached.Revision == Revision) {
             foreach (var key in cached.Used) Touch(key);
             foreach (var pair in cached.Wanted) Demand(pair.Key, pair.Value);
+            foreach (var pair in cached.Requests) RequestChild(pair.Key, pair.Value);
             output.AddRange(cached.Draws);
             _cuts[view] = cached with { Frame = _clock };
             return;
@@ -263,6 +270,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         var cacheGroups = _cuts.ContainsKey(view);
         _viewUsed = cacheGroups ? [] : null;
         _viewWanted = cacheGroups ? [] : null;
+        _viewRequests = cacheGroups ? [] : null;
         Dictionary<BranchGroup, Cut>? groupCuts = null;
         if (cacheGroups && !_groupCuts.TryGetValue(view, out groupCuts)) _groupCuts.Add(view, groupCuts = []);
         for (var i = 0; i < _source.Instances.Length; i++) {
@@ -276,6 +284,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 if (groupCuts is not null && groupCuts.TryGetValue(group, out var cut) && cut.Revision == group.Revision) {
                     foreach (var key in cut.Used) Touch(key);
                     foreach (var pair in cut.Wanted) Demand(pair.Key, pair.Value);
+                    foreach (var pair in cut.Requests) RequestChild(pair.Key, pair.Value);
                     output.AddRange(cut.Draws);
                     continue;
                 }
@@ -294,19 +303,24 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 }
                 var allUsed = _viewUsed!;
                 var allWanted = _viewWanted;
+                var allRequests = _viewRequests;
                 _viewUsed = [];
                 _viewWanted = [];
+                _viewRequests = [];
                 var groupStart = output.Count;
                 groupIncomplete = false;
                 foreach (var n in group.Roots) Visit(i, tree, n);
                 if (!groupIncomplete)
-                    groupCuts![group] = new(group.Revision, _clock, [.. output.Skip(groupStart)], [.. _viewUsed], [.. _viewWanted]);
+                    groupCuts![group] = new(group.Revision, _clock, [.. output.Skip(groupStart)], [.. _viewUsed], [.. _viewWanted], [.. _viewRequests]);
                 else _deferredGroups++;
                 allUsed.UnionWith(_viewUsed);
                 var wanted = _viewWanted;
+                var requests = _viewRequests;
                 _viewUsed = allUsed;
                 _viewWanted = allWanted;
+                _viewRequests = allRequests;
                 foreach (var pair in wanted) Demand(pair.Key, pair.Value);
+                foreach (var pair in requests) RequestChild(pair.Key, pair.Value);
             }
         }
         if (!_cuts.ContainsKey(view) && _cuts.Count >= 8) {
@@ -315,10 +329,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             _groupCuts.Remove(oldest);
         }
         _cuts[view] = cacheGroups
-            ? new(Revision, _clock, output.Skip(start).ToArray(), _viewUsed!.ToArray(), _viewWanted!.ToArray(), !deferred)
-            : new(Revision, _clock, [], [], [], false);
+            ? new(Revision, _clock, output.Skip(start).ToArray(), _viewUsed!.ToArray(), _viewWanted!.ToArray(), _viewRequests!.ToArray(), !deferred)
+            : new(Revision, _clock, [], [], [], [], false);
         _viewUsed = null;
         _viewWanted = null;
+        _viewRequests = null;
         void Visit(int instanceIndex, PbrSceneStream.HierarchyInfo tree, int index)
         {
             var instance = _instances[instanceIndex];
@@ -340,14 +355,18 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         * .5f * _norms[instanceIndex]);
             var projected = float.IsFinite(raw) ? raw : float.MaxValue;
             if (node.ChildCount > 0 && (error == 0 || projected > error)) {
+                var priority = error > 0 ? (float)System.Math.Min((double)projected / error, 1.0e30) : System.Math.Min(projected, 1.0e30f);
+                priority = System.Math.Max(priority, 1.0e-20f);
                 var complete = true;
                 var visibleChildren = 0;
                 for (var c = node.Children; c < node.Children + node.ChildCount; c++) {
                     if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
                     visibleChildren++;
+                    RequestChild(new(_settings.GpuTraversal ? -1 : instanceIndex, instance.AssetIndex, c), priority);
                     foreach (var part in tree.Nodes[c].Pages) {
                         var key = PageKey(instanceIndex, part.Id);
-                        Demand(key, projected);
+                        if (!IsAdmitted(key)) { complete = false; continue; }
+                        Demand(key, priority);
                         if (_resident.ContainsKey(key)) Touch(key);
                         else complete = false;
                     }
@@ -373,6 +392,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     private void Demand(Key key, float priority)
     {
+        if (!IsAdmitted(key)) return;
         if (!_wanted.TryGetValue(key, out var old) || priority > old) _wanted[key] = priority;
         if (_viewWanted is { } wanted && (!wanted.TryGetValue(key, out old) || priority > old)) wanted[key] = priority;
     }
@@ -390,22 +410,35 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     public void EndFrame()
     {
         if (_stopped) return;
+        PrepareRecoveryEnd();
+        CancelRelocationReservation();
+        if (_relocation is not null) {
+            AdvanceRelocation();
+            EndBudgetFrame();
+            return;
+        }
         var completed = _requests.Statistics.Completed;
-        if (_upload is { } pending && !_wanted.ContainsKey(pending.Key)) {
+        if (_upload is { } pending && (!_wanted.ContainsKey(pending.Key) || !IsAdmitted(pending.Key))) {
             _arena.Abort(pending.Upload);
             _upload = null;
         }
         _missingPages.Clear();
         _demands.Clear();
         foreach (var pair in _wanted) {
-            if (_resident.ContainsKey(pair.Key)) continue;
+            if (!IsAdmitted(pair.Key) || _resident.ContainsKey(pair.Key) || !RecoveryWants(pair.Key)) continue;
+            var priority = _relocationReservation is { } reserved && reserved.Key == pair.Key ? float.MaxValue : pair.Value;
             if (_missingPages.TryGetValue(pair.Key.Page, out var group))
-                _missingPages[pair.Key.Page] = (System.Math.Max(group.Priority, pair.Value), group.Remaining + 1);
-            else _missingPages.Add(pair.Key.Page, (pair.Value, 1));
+                _missingPages[pair.Key.Page] = (System.Math.Max(group.Priority, priority), group.Remaining + 1);
+            else _missingPages.Add(pair.Key.Page, (priority, 1));
         }
         foreach (var pair in _missingPages)
             _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].DecodedBytes, pair.Value.Priority));
         _requests.Update(_demands);
+        if (_recovery is { Started: true } recovery && _requests.Statistics.Failed != recovery.Failures) {
+            AbortRecovery(true);
+            EndBudgetFrame();
+            return;
+        }
         foreach (var id in _prepared.Keys.Where(id => !_requests.ReadyIds.Contains(id, StringComparer.Ordinal)).ToArray()) _prepared.Remove(id);
         // Sort only the bounded ready set, rather than every demanded page each upload.
         _ready.Clear();
@@ -414,8 +447,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         uint order = 0;
         if (_readyPages.Count != 0) {
             foreach (var pair in _wanted) {
-                if (_readyPages.TryGetValue(pair.Key.Page, out var pageOrder) && !_resident.ContainsKey(pair.Key))
-                    _ready.Add(new(pair.Key, pair.Value, ((long)pageOrder << 32) | order));
+                if (RecoveryWants(pair.Key) && _readyPages.TryGetValue(pair.Key.Page, out var pageOrder) && !_resident.ContainsKey(pair.Key))
+                    _ready.Add(new(pair.Key, _relocationReservation is { } reserved && reserved.Key == pair.Key ? float.MaxValue : pair.Value,
+                        ((long)pageOrder << 32) | order));
                 order++;
             }
         }
@@ -433,8 +467,14 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     var id = _pages[candidate.Key.Page].Id;
                     if (_resident.ContainsKey(candidate.Key) || !_requests.TryGetReady(id, out var record))
                         continue;
-                    if (!_prepared.TryGetValue(id, out var page)) { page = _source.UsePage(id, record!); _prepared.Add(id, page); }
-                    if (!Reserve(page, out var allocation)) continue;
+                    if (!_prepared.TryGetValue(id, out var page)) {
+                        try { page = _source.UsePage(id, record!); _prepared.Add(id, page); }
+                        catch { if (_recovery is { Started: true }) AbortRecovery(true); throw; }
+                    }
+                    if (!Reserve(candidate.Key, page, out var allocation)) {
+                        if (_relocation is not null || _recovery is { Started: false }) break;
+                        continue;
+                    }
                     var transform = float4x4.identity;
                     var material = 1;
                     if (!_settings.GpuTraversal) {
@@ -446,13 +486,18 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
                             _settings.GpuTraversal ? 0u : (uint)candidate.Key.Instance, material));
                     }
-                    catch { _arena.Free(allocation); throw; }
+                    catch {
+                        _arena.Free(allocation);
+                        if (_recovery is { Started: true }) AbortRecovery(true);
+                        throw;
+                    }
                     break;
                 }
                 if (_upload is null) break;
             }
             var active = _upload;
-            _uploaded += _arena.Advance(active.Upload, _settings.UploadBytesPerFrame - _uploaded);
+            try { _uploaded += _arena.Advance(active.Upload, _settings.UploadBytesPerFrame - _uploaded); }
+            catch { if (_recovery is { Started: true }) AbortRecovery(true); throw; }
             if (!active.Upload.Complete) break;
             _resident.Add(active.Key, new(active.Upload.Allocation, false, _clock));
             _installs++;
@@ -465,6 +510,12 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 _prepared.Remove(_pages[active.Key.Page].Id);
             }
         }
+        if (_relocation is not null) {
+            AdvanceRelocation();
+            EndBudgetFrame();
+            return;
+        }
+        CompleteRecoveryFrame();
         if (_requests.Statistics.Completed != completed) {
             _demands.Clear();
             foreach (var pair in _missingPages)
@@ -472,16 +523,29 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].DecodedBytes, pair.Value.Priority));
             _requests.Update(_demands);
         }
+        EndBudgetFrame();
     }
 
-    private bool Reserve(StreamGeometryPage page, out StreamPageAllocation allocation)
+    private bool Reserve(Key key, StreamGeometryPage page, out StreamPageAllocation allocation)
     {
+        if (_recovery is { Started: true, RestoredEpoch: 0 } recovery) {
+            if (recovery.Reservations.Remove(key, out allocation)) return true;
+            allocation = default;
+            return false;
+        }
+        if (_relocationReservation is { } held && held.Key == key) {
+            _relocationReservation = null;
+            allocation = held.Allocation;
+            return true;
+        }
         if (_arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out allocation)) return true;
         _evictionCandidates.Clear();
         foreach (var pair in _resident)
             if (!pair.Value.Root && !_used.Contains(pair.Key) && !_wanted.ContainsKey(pair.Key))
-                _evictionCandidates.Add(new(pair.Key, pair.Value, _evictionCandidates.Count));
+                _evictionCandidates.Add(new(pair.Key, pair.Value, _evictionCandidates.Count, IsAdmitted(pair.Key)));
         _evictionCandidates.Sort(static (a, b) => {
+            var admitted = a.Admitted.CompareTo(b.Admitted);
+            if (admitted != 0) return admitted;
             var age = a.Page.LastUsed.CompareTo(b.Page.LastUsed);
             return age != 0 ? age : a.Order.CompareTo(b.Order);
         });
@@ -497,6 +561,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             }
         }
         _evictionCandidates.Clear();
+        if (!reserved) {
+            TryBeginRelocation(key, page);
+            if (_relocation is null) TryBeginRecovery(key);
+        }
         return reserved;
     }
 
@@ -511,10 +579,14 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     private async Task StopAsync()
     {
+        _stopped = true;
         await _requests.DisposeAsync();
         _prepared.Clear();
         if (_upload is { } p) _arena.Abort(p.Upload);
         _upload = null;
-        _stopped = true;
+        AbortRelocation();
+        AbortRecovery(false);
+        if (_relocationReservation is { } reserved) _arena.Free(reserved.Allocation);
+        _relocationReservation = null;
     }
 }

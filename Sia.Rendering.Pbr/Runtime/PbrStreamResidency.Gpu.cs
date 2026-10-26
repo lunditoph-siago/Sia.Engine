@@ -8,6 +8,7 @@ namespace Sia.Engine.Rendering.Pbr;
 internal sealed partial class PbrStreamResidency
 {
     private Key[] _gpuKeys = [];
+    private ChildRequest[] _gpuNodes = [];
     private Dictionary<Key, int>? _gpuSlots;
     private readonly HashSet<int> _gpuDirty = [];
 
@@ -33,6 +34,7 @@ internal sealed partial class PbrStreamResidency
         if (((ulong)nodeCount * 64) + (((ulong)partCount + (ulong)rootCount) * 16) > _settings.HierarchyBytes)
             throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget.");
         var nodes = new List<PbrGpuHierarchy.Node>(nodeCount);
+        var nodeRequests = new List<ChildRequest>(nodeCount);
         var parts = new List<uint4>(checked(partCount + rootCount));
         var roots = new List<uint4>(rootCount);
         var geometries = new Dictionary<int, (int First, ulong Triangles, ulong Nodes, ulong Records)>(assets.Count);
@@ -63,6 +65,7 @@ internal sealed partial class PbrStreamResidency
                         new((uint)(geometry.First + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
                         new(node.Parent < 0 ? uint.MaxValue : (uint)(geometry.First + node.Parent),
                             0, 0, 0)));
+                    nodeRequests.Add(new(-1, info.AssetIndex, n));
                     if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + rootCount) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
                         throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
                 }
@@ -79,7 +82,8 @@ internal sealed partial class PbrStreamResidency
         var mapping = new uint4[keys.Count];
         for (var i = 0; i < keys.Count; i++) {
             if (!_resident.TryGetValue(keys[i], out var page)) continue;
-            mapping[i] = new(page.Allocation.Triangles.Offset, page.Allocation.Triangles.Count, page.Root ? 1u : 0u, 1);
+            mapping[i] = new(page.Allocation.Triangles.Offset, page.Allocation.Triangles.Count, page.Root ? 1u : 0u,
+                IsAdmitted(keys[i]) ? 1u : 0u);
         }
         if (single + twice > uint.MaxValue / (3ul * PbrGpuHierarchy.WorkBlockTriangles)
             || triangles > uint.MaxValue || single + twice + selectedNodes * 3 > uint.MaxValue)
@@ -88,6 +92,7 @@ internal sealed partial class PbrStreamResidency
             CollectionsMarshal.AsSpan(parts), mapping, (uint)rootBase, (uint)roots.Count,
             checked((uint)single), checked((uint)twice), checked((uint)selectedNodes), instances);
         _gpuKeys = [.. keys];
+        _gpuNodes = [.. nodeRequests];
         _gpuSlots = slots;
         return Hierarchy = hierarchy;
     }
@@ -95,24 +100,36 @@ internal sealed partial class PbrStreamResidency
     internal void RefreshGpuResidency()
     {
         if (Hierarchy is null) return;
+        Hierarchy.FeedbackFrame = _clock;
+        Hierarchy.RecoveryEpoch = _recoveryEpoch;
         foreach (var slot in _gpuDirty) {
             var data = _resident.TryGetValue(_gpuKeys[slot], out var page)
-                ? new uint4(page.Allocation.Triangles.Offset, page.Allocation.Triangles.Count, page.Root ? 1u : 0u, 1) : default;
+                ? new uint4(page.Allocation.Triangles.Offset, page.Allocation.Triangles.Count, page.Root ? 1u : 0u, IsAdmitted(_gpuKeys[slot]) ? 1u : 0u) : default;
             Hierarchy.Publish(slot, data);
         }
         _gpuDirty.Clear();
     }
 
-    internal void ApplyGpuFeedback(ReadOnlySpan<uint> words, ReadOnlySpan<int> active)
+    internal void ApplyGpuFeedback(ReadOnlySpan<uint> words, ReadOnlySpan<int> activePages, ReadOnlySpan<int> activeChildren, long ownerFrame = -1)
     {
-        if (words.Length != _gpuKeys.Length * 2) throw new InvalidDataException("GPU feedback length mismatch.");
-        foreach (var i in active) {
-            if (words[(i * 2) + 1] != 0) Touch(_gpuKeys[i]);
-            if (words[i * 2] == 0) continue;
-            var priority = BitConverter.UInt32BitsToSingle(words[i * 2]);
+        if (words.Length != checked(_gpuKeys.Length + _gpuNodes.Length))
+            throw new InvalidDataException("GPU feedback length mismatch.");
+        EnableBudgetAdmission();
+        foreach (var i in activePages) {
+            if ((uint)i >= (uint)_gpuKeys.Length) throw new InvalidDataException("GPU feedback page index is invalid.");
+            if (words[i] != 0) Touch(_gpuKeys[i]);
+        }
+        foreach (var n in activeChildren) {
+            if ((uint)n >= (uint)_gpuNodes.Length) throw new InvalidDataException("GPU feedback child index is invalid.");
+            var word = words[_gpuKeys.Length + n];
+            if (word == 0) continue;
+            var priority = BitConverter.UInt32BitsToSingle(word);
             if (!float.IsFinite(priority) || priority <= 0)
                 throw new InvalidDataException("GPU feedback priority is invalid.");
-            Demand(_gpuKeys[i], priority);
+            var child = _gpuNodes[n];
+            if (_source.Hierarchies[child.Asset].Nodes[child.Node].Parent < 0)
+                throw new InvalidDataException("GPU feedback cannot request a hierarchy root as a child.");
+            RequestChild(child, priority, ownerFrame < 0 || _clock - ownerFrame <= 8);
         }
     }
 

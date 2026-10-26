@@ -17,7 +17,7 @@
 
 @compute @workgroup_size(64)
 fn reset_feedback(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < selection.table.z * 2u) { atomicStore(&feedback[id.x], 0u); }
+    if (id.x < selection.table.z + arrayLength(&nodes)) { atomicStore(&feedback[id.x], 0u); }
 }
 
 @compute @workgroup_size(1)
@@ -31,7 +31,7 @@ fn reset_draws() {
 fn touch(n: Node) {
     for (var i = 0u; i < n.links.w; i++) {
         let part = parts[n.links.z + i];
-        if (residency[part.x].z == 0u) { atomicOr(&feedback[part.x * 2u + 1u], 1u); }
+        if (residency[part.x].z == 0u) { atomicOr(&feedback[part.x], 1u); }
     }
 }
 
@@ -47,17 +47,22 @@ fn node_visible(n: Node, instance: Instance) -> bool {
 
 fn children_ready(n: Node, instance: Instance, priority: f32) -> bool {
     var ready = true;
+    var importance = priority;
+    if (selection.screen.z > 0.0) { importance /= selection.screen.z; }
+    if (!(importance > 0.0)) { importance = 1.0e-20; }
+    importance = clamp(importance, 1.0e-20, 1.0e30);
     for (var c = 0u; c < n.links.y; c++) {
-        let child = nodes[n.links.x + c];
+        let child_id = n.links.x + c;
+        let child = nodes[child_id];
         if (!node_visible(child, instance)) { continue; }
+        atomicMax(&feedback[selection.table.z + child_id], bitcast<u32>(importance));
         for (var p = 0u; p < child.links.w; p++) {
             let part = parts[child.links.z + p];
             let page = residency[part.x];
             if (page.w == 0u) {
-                atomicMax(&feedback[part.x * 2u], bitcast<u32>(max(priority, 1.0e-20)));
                 ready = false;
             }
-            else if (page.z == 0u) { atomicOr(&feedback[part.x * 2u + 1u], 1u); }
+            else if (page.z == 0u) { atomicOr(&feedback[part.x], 1u); }
         }
     }
     return ready;
