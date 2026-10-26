@@ -112,6 +112,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     internal bool IsStopped => _stopTask is { IsCompletedSuccessfully: true };
     internal int SelectionNodeLimit { get; }
+    internal bool SharedInstances { get; }
 
     public PbrStreamResidency(PbrSceneStream source, StreamPageArena arena, PbrStreamingSettings settings, int[] materialBatches)
     {
@@ -120,6 +121,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         if (settings.MaximumSelectionNodesPerView != 0 && settings.MaximumSelectionNodesPerView < 1024)
             throw new ArgumentOutOfRangeException(nameof(settings), "Selection must allow at least one complete packed root group.");
         (_source, _arena, _settings) = (source, arena, settings);
+        SharedInstances = settings.GpuTraversal || source.RequiresInstancing;
         long selectionNodes = 0;
         foreach (var instance in source.Instances.Span)
             selectionNodes = checked(selectionNodes + source.Hierarchies[instance.AssetIndex].Nodes.Length);
@@ -159,9 +161,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         if (!arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out var allocation))
                             throw new InvalidOperationException("Resident roots cannot fit in the geometry arena.");
                         var upload = arena.Prepare(page, allocation,
-                            settings.GpuTraversal ? float4x4.identity : instance.Transform,
-                            settings.GpuTraversal ? 0u : (uint)i,
-                            settings.GpuTraversal ? 1 : instance.MaterialIndex + 1);
+                            SharedInstances ? float4x4.identity : instance.Transform,
+                            SharedInstances ? 0u : (uint)i,
+                            SharedInstances ? 1 : instance.MaterialIndex + 1);
                         while (!upload.Complete) arena.Advance(upload, uint.MaxValue);
                         _resident.Add(key, new(allocation, true, 0));
                         _rootBytes += page.UploadBytes;
@@ -180,6 +182,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _leafRoots = new LeafRoot[_source.Instances.Length][];
         for (var i = 0; i < _source.Instances.Length; i++) {
             var instance = _instances[i];
+            if (instance.MaterialIndex < 0) {
+                _branches[i] = [];
+                _leafRoots[i] = [];
+                continue;
+            }
             var tree = _source.Hierarchies[instance.AssetIndex];
             _bounds[i] ??= [.. tree.Nodes.Select(n => BoundsTransform.Apply(PbrSceneStream.NodeBounds(n), instance.Transform))];
             _branches[i] = [.. Enumerable.Range(0, tree.Roots).Where(n => tree.Nodes[n].ChildCount > 0)
@@ -228,7 +235,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         var result = new List<PbrGpuScene.Draw>();
         foreach (var draw in draws.OrderBy(d => d.First)) {
             if (result.Count > 0 && result[^1].First + result[^1].Count == draw.First)
-                result[^1] = result[^1] with { Count = result[^1].Count + draw.Count };
+                result[^1] = result[^1] with {
+                    Count = result[^1].Count + draw.Count,
+                    Bounds = Aabb.Union(result[^1].Bounds, draw.Bounds)
+                };
             else result.Add(draw);
         }
         return [.. result];
@@ -274,6 +284,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         Dictionary<BranchGroup, Cut>? groupCuts = null;
         if (cacheGroups && !_groupCuts.TryGetValue(view, out groupCuts)) _groupCuts.Add(view, groupCuts = []);
         for (var i = 0; i < _source.Instances.Length; i++) {
+            if (_instances[i].MaterialIndex < 0) continue;
             if (!culler.Intersects(_instanceBounds[i])) continue;
             var instance = _instances[i];
             var tree = _source.Hierarchies![instance.AssetIndex];
@@ -362,7 +373,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 for (var c = node.Children; c < node.Children + node.ChildCount; c++) {
                     if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
                     visibleChildren++;
-                    RequestChild(new(_settings.GpuTraversal ? -1 : instanceIndex, instance.AssetIndex, c), priority);
+                    RequestChild(new(SharedInstances ? -1 : instanceIndex, instance.AssetIndex, c), priority);
                     foreach (var part in tree.Nodes[c].Pages) {
                         var key = PageKey(instanceIndex, part.Id);
                         if (!IsAdmitted(key)) { complete = false; continue; }
@@ -381,7 +392,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         }
     }
 
-    private Key PageKey(int instance, string id) => new(_settings.GpuTraversal ? -1 : instance, _pageIndices[id]);
+    private Key PageKey(int instance, string id) => new(SharedInstances ? -1 : instance, _pageIndices[id]);
 
     private void Touch(Key key)
     {
@@ -477,14 +488,14 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     }
                     var transform = float4x4.identity;
                     var material = 1;
-                    if (!_settings.GpuTraversal) {
+                    if (!SharedInstances) {
                         var instance = _source.Instances.Span[candidate.Key.Instance];
                         transform = instance.Transform;
                         material = instance.MaterialIndex + 1;
                     }
                     try {
                         _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
-                            _settings.GpuTraversal ? 0u : (uint)candidate.Key.Instance, material));
+                            SharedInstances ? 0u : (uint)candidate.Key.Instance, material));
                     }
                     catch {
                         _arena.Free(allocation);

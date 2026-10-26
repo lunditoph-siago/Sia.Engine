@@ -15,10 +15,14 @@ struct RasterVertex {
 fn raster_vertex(@builtin(vertex_index) index: u32,
 #if RESIDENT_INSTANCES
     @location(3) draw_instance: vec2<u32>,
+#elif CPU_STREAM_INSTANCES
+    @builtin(instance_index) instance_id: u32,
 #endif
 ) -> RasterVertex {
 #if RESIDENT_INSTANCES
     let ordinal = instances[draw_instance.x].material.z + draw_instance.y + index / 3u;
+#elif CPU_STREAM_INSTANCES
+    let ordinal = instances[instance_id].material.z + index / 3u;
 #else
     let ordinal = index / 3u;
 #endif
@@ -115,6 +119,9 @@ fn shadow_vertex(
 #if RESIDENT_INSTANCES
     let world = instances[draw_instance.x >> 3u].transform * position;
     return shadow_matrix(draw_instance.x & 7u) * world;
+#elif CPU_STREAM_INSTANCES
+    let world = instances[packed >> 3u].transform * position;
+    return shadow_matrix(packed & 7u) * world;
 #else
     return shadow_matrix(packed & 7u) * position;
 #endif

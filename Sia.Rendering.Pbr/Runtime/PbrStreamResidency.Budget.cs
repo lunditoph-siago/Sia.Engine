@@ -86,7 +86,7 @@ internal sealed partial class PbrStreamResidency
         MergeRecoveryRequests();
         if (!_budgetEnabled || _budgetPending || SameBudgetRequests()) return;
         if (!_budgetHasRootShape) {
-            var shape = PbrGpuScene.RootShape(_source, _settings.GpuTraversal);
+            var shape = PbrGpuScene.RootShape(_source, SharedInstances);
             _budgetRootVertices = shape.Vertices;
             _budgetRootTriangles = shape.Triangles;
             _budgetRootKeys = [.. _resident.Where(pair => pair.Value.Root).Select(pair => pair.Key)];

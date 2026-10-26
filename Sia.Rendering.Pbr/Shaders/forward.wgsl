@@ -48,6 +48,14 @@ fn forward_vertex(
         (instance.normal_transform * vec4<f32>(resident_normal(n.y), 0.0)).xyz,
         vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, t.w), vec2<f32>(p.w, bitcast<f32>(n.x)),
         instance.material.x, b, vec2<u32>(select(0u, 1u, (words.y & 2u) != 0u), instance.material.y));
+#elif STREAM_INSTANCES
+    let instance = instances[instance_id];
+    let position = instance.transform * world;
+    return ForwardVertex(frame.vp * position, position.xyz,
+        (instance.normal_transform * vec4<f32>(stream_direction(n.x, n.y), 0.0)).xyz,
+        vec4<f32>((instance.transform * vec4<f32>(stream_direction(t.x, t.y), 0.0)).xyz, sign(bitcast<f32>(t.z))),
+        vec2<f32>(p.w, bitcast<f32>(n.z)), instance.material.x, bitcast<vec2<f32>>(vec2<u32>(n.w, t.w)),
+        vec2<u32>(select(0u, 1u, (b & 0x80000000u) != 0u), instance_id));
 #else
     return ForwardVertex(frame.vp * world, world.xyz,
         stream_direction(n.x, n.y),
