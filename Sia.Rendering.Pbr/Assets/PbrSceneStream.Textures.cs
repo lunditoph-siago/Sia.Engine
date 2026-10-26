@@ -59,4 +59,16 @@ public sealed partial class PbrSceneStream
         token.ThrowIfCancellationRequested();
         return result;
     }
+
+    internal async Task<ReadOnlyMemory<byte>> ReadTextureMipAsync(PbrTextureData source, int mip, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var info = TextureSources[source];
+        if ((uint)mip >= (uint)info.TailMip) throw new ArgumentOutOfRangeException(nameof(mip));
+        if (!_textureMips.TryGetValue(source, out var index)) return _fullTextures[source].MipLevels.Span[mip];
+        var record = await _prepareMip!(index.Mips[mip], token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        index.ValidateMip(mip, record);
+        return record.Data.MipLevels.Span[0];
+    }
 }

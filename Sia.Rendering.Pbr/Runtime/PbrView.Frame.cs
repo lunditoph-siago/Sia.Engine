@@ -118,6 +118,13 @@ internal sealed unsafe partial class PbrView
         Wgpu.WriteBuffer<float4>(_gpu.Queue, _lightData.GetWgpu<WGPUBuffer>(), 0, _sceneData);
         var culler = new FrustumCuller(camera.Frustum);
         var projection = ProjectedGeometryError.PrepareLodProjection(camera.ViewProj, _width, _height);
+        var streamMaterials = _owner.Materials.IsStreaming;
+        if (streamMaterials) Array.Clear(_materialPixels);
+        void TextureDemand(PbrGpuScene.Draw draw)
+        {
+            var pixels = ProjectedGeometryError.ProjectError(draw.Bounds, math.length(draw.Bounds.Max - draw.Bounds.Min), camera.ViewProj, _width, _height);
+            _materialPixels[draw.Material] = System.Math.Max(_materialPixels[draw.Material], float.IsFinite(pixels) ? pixels : System.Math.Max(_width, _height));
+        }
         _opaque.Clear();
         _transparent.Clear();
         if (_owner.Scene.Streaming is { } streaming) {
@@ -126,13 +133,18 @@ internal sealed unsafe partial class PbrView
                     (uint)streaming.SelectionNodeLimit);
             else {
                 streaming.Select(camera.ViewProj, _width, _height, _owner.Settings.TargetPixelError, culler, _opaque);
+                // Draw compaction retains one representative material for a shared
+                // binding group. Collect every visible layer's demand before merging.
+                if (streamMaterials) foreach (var draw in _opaque) TextureDemand(draw);
                 CompactStreamDraws(_opaque, UseForward);
             }
         }
         else {
             foreach (var draw in _owner.Scene.Opaque) {
-                if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds))
+                if (_owner.Scene.IsInstanceEnabled(draw.Instance) && culler.Intersects(draw.Bounds)) {
+                    if (streamMaterials) TextureDemand(draw);
                     AddRange(_opaque, SelectRasterLod(draw, camera.ViewProj, projection, _width, _height, _owner.Settings.TargetPixelError), UseForward);
+                }
             }
         }
         foreach (var draw in _owner.Scene.Transparent)
@@ -147,14 +159,7 @@ internal sealed unsafe partial class PbrView
             _needsSnapshot |= _owner.Materials.Transmission[draw.Material];
         }
         VisibleTriangles = checked(opaqueTriangles + transparentTriangles);
-        if (_owner.Materials.IsStreaming) {
-            Array.Clear(_materialPixels);
-            void TextureDemand(PbrGpuScene.Draw draw)
-            {
-                var pixels = ProjectedGeometryError.ProjectError(draw.Bounds, math.length(draw.Bounds.Max - draw.Bounds.Min), camera.ViewProj, _width, _height);
-                _materialPixels[draw.Material] = System.Math.Max(_materialPixels[draw.Material], float.IsFinite(pixels) ? pixels : System.Math.Max(_width, _height));
-            }
-            foreach (var draw in _opaque) TextureDemand(draw);
+        if (streamMaterials) {
             if (_selection is not null) {
                 var stream = _owner.Scene.Streaming!;
                 for (var i = 0; i < stream.Source.Instances.Length; i++) {

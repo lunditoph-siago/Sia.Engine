@@ -390,6 +390,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     public void EndFrame()
     {
         if (_stopped) return;
+        var completed = _requests.Statistics.Completed;
         if (_upload is { } pending && !_wanted.ContainsKey(pending.Key)) {
             _arena.Abort(pending.Upload);
             _upload = null;
@@ -463,6 +464,13 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 _requests.Acknowledge(_pages[active.Key.Page].Id);
                 _prepared.Remove(_pages[active.Key.Page].Id);
             }
+        }
+        if (_requests.Statistics.Completed != completed) {
+            _demands.Clear();
+            foreach (var pair in _missingPages)
+                if (pair.Value.Remaining > 0)
+                    _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].DecodedBytes, pair.Value.Priority));
+            _requests.Update(_demands);
         }
     }
 
