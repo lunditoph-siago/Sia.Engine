@@ -38,13 +38,14 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _options = options;
         _pipeline = options.Pipeline;
         _referenceScene = references;
+        _authoredCamera = SelectAuthoredCamera(options.Camera, references?.Scene.Data);
         _preparedLighting = lighting;
         _preparedLightmaps = lightmaps;
         _preparedCaptures = captures;
         _bunnyDebugMode = _pipeline == ScenePipeline.Bunny
             ? VisibilityDebugMode.Triangles : VisibilityDebugMode.Shaded;
         _bunnyDistance = 0;
-        _bunnyTour = _pipeline == ScenePipeline.Bunny;
+        _bunnyTour = _pipeline == ScenePipeline.Bunny && _authoredCamera is null;
     }
 
 #if !BROWSER

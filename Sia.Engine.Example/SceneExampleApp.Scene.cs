@@ -149,10 +149,14 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateScene(float deltaTime)
     {
+        if (_pipeline == ScenePipeline.Bunny) UpdateBunnyInspection(deltaTime);
+        if (ApplyAuthoredCamera()) {
+            _sceneStage!.Tick();
+            return;
+        }
         var eye = new float3(0, _orbitHeight, _orbitRadius);
         var target = float3.zero;
         if (_pipeline == ScenePipeline.Bunny) {
-            UpdateBunnyInspection(deltaTime);
             target = (_bunnyBounds.Min + _bunnyBounds.Max) * 0.5f;
             var aspect = (float)_framebufferWidth / System.Math.Max(1, _framebufferHeight);
             eye = BunnyEye(aspect, target);

@@ -11,6 +11,7 @@ internal sealed record SceneOptions
     internal string? ProbesPath { get; private init; }
     internal float ExposureCompensation { get; private init; }
     internal bool AutoExposure { get; private init; }
+    internal Guid? Camera { get; private init; }
 
     private SceneOptions() { }
 
@@ -21,6 +22,7 @@ internal sealed record SceneOptions
         RenderQuality? quality = null;
         float? exposure = null;
         var autoExposure = false;
+        Guid? camera = null;
         string? scene = null, environment = null, probes = null;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length;) {
@@ -43,6 +45,12 @@ internal sealed record SceneOptions
                 case "--scene": scene = value; break;
                 case "--environment": environment = value; break;
                 case "--probes": probes = value; break;
+                case "--camera":
+                    if (!((value.Length == 32 && Guid.TryParseExact(value, "N", out var id))
+                        || (value.Length == 36 && Guid.TryParseExact(value, "D", out id))) || id == Guid.Empty)
+                        throw new ArgumentException("Expected --camera nonempty UUID in N or D format.");
+                    camera = id;
+                    break;
                 case "--exposure-compensation":
                     if (!float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var stops)
                         || !float.IsFinite(stops) || stops is < -16 or > 16)
@@ -60,9 +68,9 @@ internal sealed record SceneOptions
                 default: throw new ArgumentException($"Unknown option: {option}.");
             }
         }
-        if (pipeline == ScenePipeline.Unlit && (quality is not null || scene is not null || environment is not null || probes is not null || exposure is not null || autoExposure))
+        if (pipeline == ScenePipeline.Unlit && (quality is not null || scene is not null || environment is not null || probes is not null || exposure is not null || autoExposure || camera is not null))
             throw new ArgumentException("Unlit does not use PBR scene or lighting options.");
         return new() { Pipeline = pipeline, Quality = quality ?? (pipeline == ScenePipeline.Bunny ? RenderQuality.High : RenderQuality.Low),
-            ScenePath = scene, EnvironmentPath = environment, ProbesPath = probes, ExposureCompensation = exposure ?? 0, AutoExposure = autoExposure };
+            ScenePath = scene, EnvironmentPath = environment, ProbesPath = probes, ExposureCompensation = exposure ?? 0, AutoExposure = autoExposure, Camera = camera };
     }
 }
