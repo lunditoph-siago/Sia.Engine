@@ -11,6 +11,9 @@ namespace Sia.Engine.Example;
 internal static partial class MeshCook
 {
     internal const int MaximumRecipeBytes = 64 * 1024;
+    [JsonConverter(typeof(JsonStringEnumConverter<TangentPolicy>))]
+    internal enum TangentPolicy { Preserve, ReferenceMikk }
+
     internal readonly record struct Result(AssetId Id, IReadOnlyList<string> Files)
     {
         // Exact offline metadata for the caller's subsequent light bake; never infer it by
@@ -23,6 +26,7 @@ internal static partial class MeshCook
         public required Guid Mesh { get; init; }
         public required Guid Source { get; init; }
         public required string Input { get; init; }
+        public TangentPolicy TangentPolicy { get; init; } = MeshCook.TangentPolicy.Preserve;
         public int? BakeResolution { get; init; }
         public int? MaximumBakeResolution { get; init; }
         public Guid? Raster { get; init; }
@@ -49,7 +53,8 @@ internal static partial class MeshCook
     private partial class RecipeJsonContext : JsonSerializerContext;
 
     internal static Result Cook(string recipePath, string outputDirectory,
-        ulong maximumBytes = 128ul * 1024 * 1024, CancellationToken cancellationToken = default)
+        ulong maximumBytes = 128ul * 1024 * 1024, CancellationToken cancellationToken = default,
+        string? mikkToolPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recipePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
@@ -62,10 +67,14 @@ internal static partial class MeshCook
         recipePath = Path.GetFullPath(recipePath);
         var recipe = ReadRecipe(recipePath);
         Validate(recipe);
+        if (recipe.TangentPolicy == TangentPolicy.ReferenceMikk)
+            ArgumentException.ThrowIfNullOrWhiteSpace(mikkToolPath);
         cancellationToken.ThrowIfCancellationRequested();
         var input = Path.GetFullPath(recipe.Input, Path.GetDirectoryName(recipePath)!);
         var record = FileLoader.Load<MeshSourceRecord, ulong>(input, maximumBytes);
         cancellationToken.ThrowIfCancellationRequested();
+        if (recipe.TangentPolicy == TangentPolicy.ReferenceMikk)
+            record = record with { Source = GenerateTangents(record.Source, mikkToolPath!, parent, maximumBytes, cancellationToken) };
 
         using var world = new World();
         world.AddAddon<AssetLibrary>();
@@ -170,6 +179,7 @@ internal static partial class MeshCook
     private static void Validate(Recipe recipe)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recipe.Input);
+        if (!Enum.IsDefined(recipe.TangentPolicy)) throw new InvalidDataException("Unknown canonical tangent policy.");
         if (recipe.BakeResolution is { } resolution && (resolution is < 8 or > 8192 || (resolution & (resolution - 1)) != 0))
             throw new InvalidDataException("Canonical bake layout resolution must be a power of two between 8 and 8192.");
         if (recipe.MaximumBakeResolution is { } maximum && (recipe.BakeResolution is not { } minimum
