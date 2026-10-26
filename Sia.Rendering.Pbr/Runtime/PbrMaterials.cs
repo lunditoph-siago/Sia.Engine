@@ -71,7 +71,7 @@ internal sealed partial class PbrMaterials : IDisposable
             var references = new Dictionary<PbrTextureData, (ArrayTexture Texture, uint Layer)>(ReferenceEqualityComparer.Instance);
             foreach (var shape in maps.SelectMany(m => m).Distinct<PbrTextureData>(ReferenceEqualityComparer.Instance)
                 .GroupBy(Shape)) {
-                var (Width, Height, Levels, Srgb, Sampler) = shape.Key;
+                var (Width, Height, Levels, Srgb, Sampler, _, _) = shape.Key;
                 var perLayer = TailBytes(Width, Height, Levels, 0);
                 var layerLimit = stream is null ? (int)_gpu.Limits.MaxTextureArrayLayers
                     : (int)System.Math.Min(_gpu.Limits.MaxTextureArrayLayers, System.Math.Max(1L, _streaming.DecodedBytes / perLayer));

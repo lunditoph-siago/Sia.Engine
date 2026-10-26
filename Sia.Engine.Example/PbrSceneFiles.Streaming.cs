@@ -19,6 +19,7 @@ internal static partial class PbrSceneFiles
     internal sealed class PageSource : IAsyncDisposable
     {
         private readonly Dictionary<AssetId, (MeshVirtualPagesData Index, int Page)> _pages = [];
+        private readonly Dictionary<AssetId, PbrTextureMipReference> _mips = [];
         private readonly AssetChunkCache _cache;
         internal AssetChunkCacheStatistics Statistics => _cache.Statistics;
 
@@ -49,7 +50,32 @@ internal static partial class PbrSceneFiles
                         : Path.Combine(root!, page.Id.Value.ToString("N") + ".siaasset"));
                 }
             }
+            foreach (var texture in prepared.Textures.Values) {
+                if (texture.Mips is not { } index) continue;
+                foreach (var mip in index.Mips) {
+                    if (claims.Contains(mip.Id) || _pages.ContainsKey(mip.Id))
+                        throw new InvalidAssetException("Texture mip aliases another scene asset.");
+                    if (!_mips.TryAdd(mip.Id, mip) && !SameMip(_mips[mip.Id], mip))
+                        throw new InvalidAssetException("Texture mip ID has conflicting revisions.");
+                    foreach (var chunk in mip.Content.Chunks)
+                        locations.TryAdd(chunk.Id, http ? new Uri(uri!, chunk.FileName).AbsoluteUri : Path.Combine(root!, chunk.FileName));
+                }
+            }
             _cache = new(async (chunk, token) => await AssetInput.OpenAsync(locations[chunk.Id], client, token), cacheBytes);
+        }
+
+        private static bool SameMip(PbrTextureMipReference a, PbrTextureMipReference b)
+            => a.Id == b.Id && a.ContentHash == b.ContentHash && a.EncodedBytes == b.EncodedBytes
+                && a.Content.Chunks.Length == b.Content.Chunks.Length
+                && a.Content.Chunks.Zip(b.Content.Chunks).All(pair => pair.First.Id == pair.Second.Id && pair.First.Length == pair.Second.Length);
+
+        internal async Task<PbrTextureRecord> ReadMipAsync(PbrTextureMipReference reference, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!_mips.TryGetValue(reference.Id, out var selected) || !SameMip(reference, selected))
+                throw new AssetNotFoundException("Unknown typed texture mip revision.");
+            return await ChunkLoader.LoadAsync<PbrTextureRecord, ulong>(selected.Content, _cache,
+                (ulong)selected.EncodedBytes, maximumBytes: selected.EncodedBytes, cancellationToken: token).ConfigureAwait(false);
         }
 
         internal async Task<MeshVirtualPageRecord> ReadAsync(PageReference reference, CancellationToken token)
@@ -97,10 +123,22 @@ internal static partial class PbrSceneFiles
             foreach (var page in prepared.Pages) world.AcquireAsset(page.Key, () => page.Value, acquired.Root);
             var stream = PbrSceneStream.Create(acquired.Scene,
                 r => r.Find(world)?.Get<MeshVirtualPageAsset>().Data ?? throw new AssetNotFoundException(), prepared.Source.ReadAsync,
-                (reference, record) => AcquirePage(world, reference, record), maximumRequiredBytes: prepared.MaximumRequiredBytes);
+                (reference, record) => AcquirePage(world, reference, record), maximumRequiredBytes: prepared.MaximumRequiredBytes,
+                textureMips: TextureMips(world, prepared), prepareMip: prepared.Source.ReadMipAsync);
             return (acquired.Root, stream);
         }
         catch { acquired.Root.Destroy(); throw; }
+    }
+
+    private static Func<PbrTextureData, PbrTextureMipsData?> TextureMips(World world, Prepared prepared)
+    {
+        var indices = new Dictionary<PbrTextureData, PbrTextureMipsData>(ReferenceEqualityComparer.Instance);
+        foreach (var id in prepared.Textures.Keys) {
+            var asset = new AssetRefer<PbrTextureRecord>.Id(id).Find(world)?.Get<PbrTextureAsset>() ?? throw new AssetNotFoundException();
+            if (asset.Mips is { } index && !indices.TryAdd(asset.Data, index) && !ReferenceEquals(indices[asset.Data], index))
+                throw new InvalidAssetException("One bootstrap texture has conflicting mip indices.");
+        }
+        return data => indices.GetValueOrDefault(data);
     }
 
     // Only the graphics owner's context invokes this short original Asset use.

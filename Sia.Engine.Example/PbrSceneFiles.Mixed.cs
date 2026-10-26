@@ -107,7 +107,8 @@ internal static partial class PbrSceneFiles
                 r => r.Find(w)?.Get<MeshRasterAsset>().Data ?? throw new AssetNotFoundException(),
                 r => r.Find(w)?.Get<MeshVirtualAsset>().Data ?? throw new AssetNotFoundException(), Material, Texture);
             var stream = PbrSceneStream.Create(mixed, r => r.Find(w)?.Get<MeshVirtualPageAsset>().Data ?? throw new AssetNotFoundException(),
-                prepared.Source.ReadAsync, (reference, record) => AcquirePage(w, reference, record), prepared.MaximumRequiredBytes);
+                prepared.Source.ReadAsync, (reference, record) => AcquirePage(w, reference, record), prepared.MaximumRequiredBytes,
+                textureMips: TextureMips(w, prepared), prepareMip: prepared.Source.ReadMipAsync);
             var trace = prepared.Bvhs.Count == 0 ? null : PbrSceneComposition.ResolveBvh(scene, Mesh,
                 r => r.Find(w)?.Get<MeshBvhAsset>().Data ?? throw new AssetNotFoundException(), Material, Texture);
             return (Stream: stream, Trace: trace);

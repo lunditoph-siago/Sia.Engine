@@ -37,11 +37,19 @@ public sealed partial class PbrTextureData
 
     /// <summary>Reads one bounded file, adopts decoded arrays and leaves the borrowed stream open.</summary>
     public static PbrTextureData Load(Stream stream, ulong maximumBytes = 128ul * 1024 * 1024)
+        => Load(stream, maximumBytes, default);
+
+    internal static PbrTextureData Load(Stream stream, ulong maximumBytes, ReadOnlySpan<byte> signature)
     {
         ArgumentNullException.ThrowIfNull(stream);
         if (maximumBytes < HeaderBytes) throw new InvalidDataException("Texture header exceeds the decode limit.");
         try {
-            Span<byte> header = stackalloc byte[HeaderBytes]; stream.ReadExactly(header);
+            Span<byte> header = stackalloc byte[HeaderBytes];
+            if (signature.IsEmpty) stream.ReadExactly(header);
+            else {
+                if (signature.Length != 8) throw new ArgumentException("Texture signature must contain eight bytes.", nameof(signature));
+                signature.CopyTo(header); stream.ReadExactly(header[8..]);
+            }
             if (!header[..8].SequenceEqual("SIATEXR1"u8) || header[16] > 1 || header[23] > 1)
                 throw new InvalidDataException("Invalid texture signature or boolean encoding.");
             var width = BinaryPrimitives.ReadUInt32LittleEndian(header[8..]);

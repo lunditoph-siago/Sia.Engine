@@ -42,6 +42,18 @@ public sealed partial class PbrTextureData
     internal static PbrTextureData FromValidatedMipChain(uint width, uint height, bool srgb,
         PbrTextureSampler sampler, ReadOnlyMemory<byte>[] levels) => new(width, height, srgb, sampler, levels);
 
+    /// <summary>Shares immutable pixels in a contiguous mip range; only the small level table is copied.</summary>
+    public PbrTextureData SliceMipChain(int firstMip, int? levelCount = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(firstMip);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(firstMip, MipLevels.Length);
+        var count = levelCount ?? MipLevels.Length - firstMip;
+        ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MipLevels.Length - firstMip);
+        return new(System.Math.Max(1u, Width >> firstMip), System.Math.Max(1u, Height >> firstMip),
+            Srgb, Sampler, MipLevels.Span.Slice(firstMip, count).ToArray());
+    }
+
     public static PbrTextureData Create(uint width, uint height, bool srgb, ReadOnlySpan<ReadOnlyMemory<byte>> levels,
         PbrTextureSampler? sampler = null)
     {

@@ -9,7 +9,7 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== scope.origin || (request.cache === 'only-if-cached' && request.mode !== 'same-origin')) return;
   const scene = request.method === 'GET' && url.pathname.startsWith(contentRoot) && !request.headers.has('Range')
-    && /^[a-f0-9]{64}\/[a-f0-9]{32}\.(siaasset|siascene)$/.test(url.pathname.slice(contentRoot.length))
+    && /^[a-f0-9]{64}\/(?:[a-f0-9]{32}\.(?:siaasset|siascene)|[A-F0-9]{64}\.chunk)$/.test(url.pathname.slice(contentRoot.length))
     && !url.search;
   const response = scene ? loadScene(request) : fetch(request).then(response => ({ response }));
   event.respondWith(response.then(result => isolatedResponse(result.response)));

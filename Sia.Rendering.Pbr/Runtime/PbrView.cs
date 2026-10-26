@@ -129,6 +129,7 @@ internal sealed unsafe partial class PbrView : IDisposable
         Buffer(owner.Materials.Table, RenderGraphBufferUsage.Storage);
         Buffer(owner.Scene.Vertices, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Vertex);
         Buffer(owner.Scene.Topology, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
+        if(owner.Scene.Attributes!=default) Buffer(owner.Scene.Attributes,RenderGraphBufferUsage.Storage);
         if (owner.Scene.Instances != default) Buffer(owner.Scene.Instances, RenderGraphBufferUsage.Storage);
         foreach (var entity in owner.Materials.Uniforms)
             Buffer(entity, RenderGraphBufferUsage.Uniform);

@@ -75,10 +75,10 @@ internal sealed unsafe partial class PbrView
             return;
         }
         Wgpu.SetBindGroup(pass, 0, _rasterGroup.GetWgpu<WGPUBindGroup>());
-        Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
-        if (shadow) Wgpu.SetVertexBuffer(pass, 0, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>());
+        Wgpu.SetBindGroup(pass, 1, _owner.Scene.RasterGroup.GetWgpu<WGPUBindGroup>());
+        if (shadow && _owner.Scene.VertexPackingMode==0) Wgpu.SetVertexBuffer(pass, 0, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>());
         if (shadow) Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-        BindDrawInstances(pass, shadow ? 1u : 0u);
+        BindDrawInstances(pass, shadow && _owner.Scene.VertexPackingMode==0 ? 1u : 0u);
         bool? doubleSided = null;
         foreach (var draw in shadow ? _shadowDraws[layer] : _opaque) {
             if (doubleSided != draw.DoubleSided) {

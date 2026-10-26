@@ -75,10 +75,10 @@ internal sealed partial class PbrMaterials
     internal bool IsStopped => _stream is null || _stopped;
     internal bool IsStreaming => _stream is not null;
 
-    private (uint Width, uint Height, int Levels, bool Srgb, PbrTextureSampler Sampler) Shape(PbrTextureData t)
+    private (uint Width, uint Height, int Levels, bool Srgb, PbrTextureSampler Sampler, int TailMip, bool Streamed) Shape(PbrTextureData t)
         => _stream is not null && _stream.TextureSources.TryGetValue(t, out var info)
-            ? (info.Width, info.Height, info.Levels, t.Srgb, t.Sampler)
-            : (t.Width, t.Height, t.MipLevels.Length, t.Srgb, t.Sampler);
+            ? (info.Width, info.Height, info.Levels, t.Srgb, t.Sampler, info.TailMip, true)
+            : (t.Width, t.Height, t.MipLevels.Length, t.Srgb, t.Sampler, 0, false);
 
     private static long TailBytes(uint width, uint height, int levels, int first)
     {

@@ -27,8 +27,9 @@ public static partial class Program
             var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
             await using var mixed = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi) : null;
-            PbrSceneFiles.Prepared? references = scenePath is null ? null : (PbrSceneFiles.Prepared?)mixed
-                ?? await PbrSceneFiles.PrepareRasterAsync(scenePath, streamHttp);
+            await using var raster = scenePath is not null && options.Quality == Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareRasterStreamingAsync(scenePath, streamHttp) : null;
+            PbrSceneFiles.Prepared? references = (PbrSceneFiles.Prepared?)mixed ?? raster;
             var lighting = await LightingFiles.PrepareAsync(options.EnvironmentPath ?? content?.Environment, options.ProbesPath, streamHttp);
             var capturePaths = content?.ReflectionCaptures ?? [];
             var captures = new ReflectionCaptureFiles.Prepared[capturePaths.Length];

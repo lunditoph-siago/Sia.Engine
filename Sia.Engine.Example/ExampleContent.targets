@@ -10,6 +10,7 @@
     <ItemGroup>
       <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.siaasset', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
       <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.siascene', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
+      <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.chunk', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
       <_ExampleContent>
         <RelativeContent>$([System.IO.Path]::GetRelativePath('$(_ExampleContentPayloads)', '%(_ExampleContent.Identity)'))</RelativeContent>
       </_ExampleContent>

@@ -15,6 +15,10 @@ struct GlassVertex {
 
 @vertex
 fn transparent_vertex(
+#if RASTER_POSITION_TABLES
+    @builtin(vertex_index) index: u32,
+    @location(3) draw_instance: vec2<u32>,
+#else
     @location(0) p: vec4<f32>,
 #if RESIDENT_INSTANCES
     @location(1) n: vec4<u32>,
@@ -25,8 +29,15 @@ fn transparent_vertex(
     @location(2) t: vec4<f32>,
     @location(3) b: vec4<f32>,
 #endif
+#endif
     @builtin(instance_index) instance_id: u32,
 ) -> GlassVertex {
+#if RASTER_POSITION_TABLES
+    let value = raster_vertex_value(index, draw_instance.x);
+    return GlassVertex(frame.vp * vec4<f32>(value.position, 1.0), value.position, value.normal,
+        value.tangent, value.uv, instances[draw_instance.x].material.x, value.bake_uv,
+        vec2<u32>(select(0u, 1u, value.bake_present), value.source_instance));
+#else
     let world = vec4<f32>(p.xyz, 1.0);
 #if RESIDENT_INSTANCES
     let instance = instances[draw_instance.x];
@@ -47,6 +58,7 @@ fn transparent_vertex(
 #else
     return GlassVertex(frame.vp * world, world.xyz, vec3<f32>(p.w, n.xy), t, n.zw, u32(abs(t.w)) - 1u,
         b.xy, vec2<u32>(u32(b.z), u32(b.w)));
+#endif
 #endif
 }
 

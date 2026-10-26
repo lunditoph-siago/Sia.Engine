@@ -1,5 +1,6 @@
 #if !BROWSER
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sia;
@@ -174,6 +175,44 @@ internal static partial class ScenePack
                     foreach (var reference in material.Data.TextureReferences) {
                         if (!textures.ContainsKey(reference.Value)) textures.Add(reference.Value, await Read(reference.Value,
                             Locate(textureInputs, reference.Value), (s, n) => PbrTextureRecord.Load(s, (ulong)maximumFileBytes, n)));
+                    }
+                }
+            }
+            // Detail products are explicit package members, but never retained as scene-wide decoded textures.
+            var textureChunks = new HashSet<string>(StringComparer.Ordinal);
+            using (var client = new HttpClient())
+            await using (var source = new PbrSceneFiles.PageSource(Path.Combine(stage, sceneId.Value.ToString("N") + ".siascene"), client,
+                new(sceneId, scene, meshes, virtuals, materials, textures))) {
+                // Authenticate copied chunks and decode against the staged root before publication.
+                foreach (var pair in textures) {
+                    if (pair.Value.Mips is not { } index) continue;
+                    var directory = Path.GetDirectoryName(Locate(textureInputs, pair.Key))!;
+                    for (var mip = 0; mip < index.TailMip; mip++) {
+                        var reference = index.Mips[mip]; Claim(reference.Id, typeof(PbrTextureRecord));
+                        if (reference.EncodedBytes > maximumFileBytes)
+                            throw new InvalidDataException("Texture detail exceeds its independent decode limit.");
+                        foreach (var chunk in reference.Content.Chunks) {
+                            if (!textureChunks.Add(chunk.Id)) continue;
+                            if (chunk.Length > maximumFileBytes || chunk.Length > maximumTotalBytes - total)
+                                throw new InvalidDataException("Texture detail chunks exceed scene publication admission.");
+                            total += chunk.Length; cancellationToken.ThrowIfCancellationRequested(); RequireStage();
+                            using var input = File.OpenRead(Path.Combine(directory, chunk.FileName));
+                            if (input.Length != chunk.Length) throw new InvalidDataException("Texture detail chunk length mismatch.");
+                            var target = Path.Combine(stage, chunk.FileName);
+                            using (var outputFile = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                                files.Add(target);
+                                var buffer = new byte[65536]; var remaining = chunk.Length;
+                                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                                while (remaining != 0) {
+                                    var count = await input.ReadAsync(buffer.AsMemory(0, System.Math.Min(buffer.Length, remaining)), cancellationToken);
+                                    if (count == 0) throw new InvalidDataException("Truncated texture detail chunk.");
+                                    hash.AppendData(buffer.AsSpan(0, count)); await outputFile.WriteAsync(buffer.AsMemory(0, count), cancellationToken); remaining -= count;
+                                }
+                                if (input.ReadByte() != -1 || Convert.ToHexString(hash.GetHashAndReset()) != chunk.Id)
+                                    throw new InvalidDataException("Texture detail chunk differs from its declared content.");
+                            }
+                        }
+                        index.ValidateMip(mip, await source.ReadMipAsync(reference, cancellationToken));
                     }
                 }
             }

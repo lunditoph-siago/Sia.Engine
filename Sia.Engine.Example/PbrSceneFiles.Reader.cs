@@ -226,13 +226,15 @@ internal static partial class PbrSceneFiles
                         token.ThrowIfCancellationRequested();
                         if (length is < 0 || length > maximumFileBytes)
                             throw new InvalidDataException("Asset payload exceeds its encoded file size limit.");
-                        if (index == _next) {
+                        // Unknown-length input reserves its upper bound until completion.
+                        // Wait for that exclusive owner before testing the next file's total.
+                        if (index == _next && !_exclusive) {
                             var limit = (int)System.Math.Min(maximumFileBytes, remainingBytes - _total);
                             if (length is < 0 || length > limit)
                                 throw new InvalidDataException("Asset payload exceeds its file or aggregate encoded size limit.");
                             var bytes = length ?? limit;
                             var exclusive = length is null || bytes > PayloadBytes;
-                            if (!_exclusive && (exclusive ? _pending == 0 : _pending + bytes <= PayloadBytes)) {
+                            if (exclusive ? _pending == 0 : _pending + bytes <= PayloadBytes) {
                                 _pending += bytes; _total += bytes; _exclusive = exclusive; _next++;
                                 Pulse();
                                 return new(limit, bytes, exclusive);

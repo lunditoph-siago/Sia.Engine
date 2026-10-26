@@ -66,19 +66,25 @@ public sealed partial class PbrSceneStream
     public static PbrSceneStream Create(PbrVirtualScene scene, Func<PageReference, MeshVirtualPageData> requiredPages,
         Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> prepare,
         Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire,
-        long maximumRequiredBytes = 256L * 1024 * 1024)
+        long maximumRequiredBytes = 256L * 1024 * 1024,
+        Func<PbrTextureData, PbrTextureMipsData?>? textureMips = null,
+        Func<PbrTextureMipReference, CancellationToken, Task<PbrTextureRecord>>? prepareMip = null)
     {
         ArgumentNullException.ThrowIfNull(scene); ArgumentNullException.ThrowIfNull(requiredPages);
         ArgumentNullException.ThrowIfNull(prepare); ArgumentNullException.ThrowIfNull(acquire);
         _ = RequiredPages(scene, maximumRequiredBytes);
-        return new(scene, requiredPages, prepare, acquire);
+        if ((textureMips is null) != (prepareMip is null)) throw new ArgumentException("Texture index and preparation callbacks must be provided together.");
+        return new(scene, requiredPages, prepare, acquire, textureMips, prepareMip);
     }
 
     private PbrSceneStream(PbrVirtualScene scene, Func<PageReference, MeshVirtualPageData> requiredPages,
         Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> prepare,
-        Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire)
+        Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire,
+        Func<PbrTextureData, PbrTextureMipsData?>? textureMips,
+        Func<PbrTextureMipReference, CancellationToken, Task<PbrTextureRecord>>? prepareMip)
     {
-        (_prepare, _acquire) = (prepare, acquire); Bounds = scene.Bounds; Identity = scene.TransportIdentity;
+        (_prepare, _acquire) = (prepare, acquire); (_findTextureMips, _prepareMip) = (textureMips, prepareMip);
+        Bounds = scene.Bounds; Identity = scene.TransportIdentity;
         SourceInstanceCount = scene.Instances.Length;
         var minimum = new float3(float.PositiveInfinity); var maximum = new float3(float.NegativeInfinity);
         long nodeCount = 0;

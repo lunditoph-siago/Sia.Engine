@@ -42,9 +42,10 @@ internal sealed unsafe partial class PbrView
         Wgpu.SetBindGroup(pass, 0, (depthOnly ? _rasterGroup : _frameGroup).GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
         Wgpu.SetIndexBuffer(pass, _owner.Scene.Topology.GetWgpu<WGPUBuffer>(), WGPUIndexFormat.Uint32);
-        for (uint plane = 0; plane < (depthOnly ? 1u : _owner.Scene.VertexPlanes); plane++)
+        var planes=_owner.Scene.VertexPackingMode!=0?0u:depthOnly?1u:_owner.Scene.VertexPlanes;
+        for (uint plane = 0; plane < planes; plane++)
             Wgpu.SetVertexBuffer(pass, plane, _owner.Scene.Vertices.GetWgpu<WGPUBuffer>(), (ulong)plane * _owner.Scene.VertexCount * 16);
-        BindDrawInstances(pass, depthOnly ? 1u : _owner.Scene.VertexPlanes);
+        BindDrawInstances(pass, planes);
         bool? sided = null;
         var batch = -1;
         foreach (var draw in _opaque) {
