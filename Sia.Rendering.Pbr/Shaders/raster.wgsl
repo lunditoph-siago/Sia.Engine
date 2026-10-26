@@ -96,14 +96,22 @@ fn stream_shadow_vertex(
 
 @vertex
 fn shadow_vertex(
+#if RASTER_POSITION_TABLES
+    @builtin(vertex_index) index: u32,
+#else
     @location(0) p: vec4<f32>,
+#endif
 #if RESIDENT_INSTANCES
     @location(3) draw_instance: vec2<u32>,
 #else
     @builtin(instance_index) packed: u32
 #endif
 ) -> @builtin(position) vec4<f32> {
+#if RASTER_POSITION_TABLES
+    let position = vec4<f32>(raster_position(index), 1.0);
+#else
     let position = vec4<f32>(p.xyz, 1.0);
+#endif
 #if RESIDENT_INSTANCES
     let world = instances[draw_instance.x >> 3u].transform * position;
     return shadow_matrix(draw_instance.x & 7u) * world;

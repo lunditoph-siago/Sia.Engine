@@ -11,18 +11,23 @@ public sealed partial class PbrSceneStream
     public static PbrSceneStream Create(PbrMixedScene scene, Func<PageReference, MeshVirtualPageData> requiredPages,
         Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> prepare,
         Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire,
-        long maximumRequiredBytes = 256L * 1024 * 1024)
+        long maximumRequiredBytes = 256L * 1024 * 1024,
+        Func<PbrTextureData, PbrTextureMipsData?>? textureMips = null,
+        Func<PbrTextureMipReference, CancellationToken, Task<PbrTextureRecord>>? prepareMip = null)
     {
         ArgumentNullException.ThrowIfNull(scene); ArgumentNullException.ThrowIfNull(requiredPages);
         ArgumentNullException.ThrowIfNull(prepare); ArgumentNullException.ThrowIfNull(acquire);
         _ = RequiredPages(scene.Virtual, maximumRequiredBytes);
-        return new(scene, requiredPages, prepare, acquire, maximumRequiredBytes);
+        if ((textureMips is null) != (prepareMip is null)) throw new ArgumentException("Texture index and preparation callbacks must be provided together.");
+        return new(scene, requiredPages, prepare, acquire, maximumRequiredBytes, textureMips, prepareMip);
     }
 
     private PbrSceneStream(PbrMixedScene scene, Func<PageReference, MeshVirtualPageData> requiredPages,
         Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> prepare,
-        Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire, long maximumRequiredBytes)
-        : this(scene.Virtual, requiredPages, prepare, acquire)
+        Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> acquire, long maximumRequiredBytes,
+        Func<PbrTextureData, PbrTextureMipsData?>? textureMips,
+        Func<PbrTextureMipReference, CancellationToken, Task<PbrTextureRecord>>? prepareMip)
+        : this(scene.Virtual, requiredPages, prepare, acquire, textureMips, prepareMip)
     {
         RequiresInstancing = true; Identity = scene.TransportIdentity;
         var raster = scene.Raster; SourceInstanceCount = checked(SourceInstanceCount + raster.Instances.Length);
@@ -40,7 +45,7 @@ public sealed partial class PbrSceneStream
             }
             rasterMaterials[i] = index;
         }
-        TextureSources.Clear(); _fullTextures.Clear();
+        TextureSources.Clear(); _fullTextures.Clear(); _textureMips.Clear();
         Materials = InitializeTextures(materials.ToArray());
         var hierarchies = Hierarchies.ToList(); var opaque = Instances.ToArray().ToList();
         var nodeCount = hierarchies.Sum(h => (long)h.Nodes.Length);

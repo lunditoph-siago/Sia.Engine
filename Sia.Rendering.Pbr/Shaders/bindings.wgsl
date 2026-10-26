@@ -46,6 +46,9 @@ struct Material {
 @group(1) @binding(0) var<storage, read> vertices: array<vec4<f32>>;
 #endif
 @group(1) @binding(1) var<storage, read> topology: array<u32>;
+#if RASTER_POSITION_TABLES
+@group(1) @binding(3) var<storage, read> vertex_attributes: array<u32>;
+#endif
 #if STREAM_INSTANCES || RESIDENT_INSTANCES
 #import pbr/instance_types
 @group(1) @binding(2) var<storage, read> instances: array<Instance>;
@@ -150,8 +153,40 @@ struct Vertex {
     source_instance: u32,
 }
 
+#if RASTER_POSITION_TABLES
+fn raster_position(index: u32) -> vec3<f32> {
+    var offset = index * 5u;
+    if (frame.geometry.y == 2u) { offset = frame.geometry.x * 3u + vertices[index * 3u] * 3u; }
+    return bitcast<vec3<f32>>(vec3<u32>(vertices[offset], vertices[offset + 1u], vertices[offset + 2u]));
+}
+
+fn raster_vertex_value(index: u32, row: u32) -> Vertex {
+    var uv_offset = index * 5u + 3u;
+    var attribute_offset = index * 5u;
+    if (frame.geometry.y == 2u) { uv_offset = index * 3u + 1u; attribute_offset = index * 4u; }
+    let normal = resident_normal(vertex_attributes[attribute_offset]);
+    let flags = vertex_attributes[attribute_offset + 2u];
+    let tangent = resident_tangent(vec2<u32>(vertex_attributes[attribute_offset + 1u], flags));
+    var bake = vec2<u32>(0u);
+    if (frame.geometry.y == 2u) {
+        let packed = vertex_attributes[attribute_offset + 3u]; let base = frame.geometry.x * 4u;
+        bake = vec2<u32>(vertex_attributes[base + (packed & 65535u)], vertex_attributes[base + (packed >> 16u)]);
+    }
+    else { bake = vec2<u32>(vertex_attributes[attribute_offset + 3u], vertex_attributes[attribute_offset + 4u]); }
+    let instance = instances[row];
+    return Vertex((instance.transform * vec4<f32>(raster_position(index), 1.0)).xyz,
+        (instance.normal_transform * vec4<f32>(normal, 0.0)).xyz,
+        bitcast<vec2<f32>>(vec2<u32>(vertices[uv_offset], vertices[uv_offset + 1u])),
+        vec4<f32>((instance.transform * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w),
+        bitcast<vec2<f32>>(bake), (flags & 2u) != 0u, instance.material.y);
+}
+#endif
+
 fn vertex_data(triangle: u32, corner: u32) -> Vertex {
     let index = vertex_index(triangle, corner);
+#if RASTER_POSITION_TABLES
+    return raster_vertex_value(index, resident_instance(triangle));
+#else
     let p = vertex_plane(index);
 #if RESIDENT_INSTANCES
     let n = resident_vec4(frame.geometry.x * 4u + index * 4u);
@@ -182,11 +217,16 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
         bake.xy, bake.z != 0.0, u32(bake.w));
 #endif
 #endif
+#endif
 }
 
 fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
 #if RESIDENT_INSTANCES
+#if RASTER_POSITION_TABLES
+    return instances[resident_instance(triangle)].transform * vec4<f32>(raster_position(vertex_index(triangle, corner)), 1.0);
+#else
     return instances[resident_instance(triangle)].transform * vec4<f32>(vertex_plane(vertex_index(triangle, corner)).xyz, 1.0);
+#endif
 #else
     return vec4<f32>(vertices[vertex_index(triangle, corner)].xyz, 1.0);
 #endif

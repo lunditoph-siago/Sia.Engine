@@ -13,6 +13,16 @@ public static partial class Program
     private static async Task<bool> RunOfflineAsync(string[] args)
     {
         switch (args) {
+            case ["--cook-material", var recipe, "--output", var output]: {
+                var material = MaterialCook.Cook(recipe, output);
+                Console.WriteLine($"Cooked material {material.Value:N}: {Path.GetFullPath(output)}");
+                return true;
+            }
+            case ["--cook-texture", var recipe, "--output", var output]: {
+                var texture = TextureCook.Cook(recipe, output);
+                Console.WriteLine($"Cooked texture {texture.Value:N}: {Path.GetFullPath(output)}");
+                return true;
+            }
             case ["--bake-reflection-capture", var recipe, "--output", var output]: {
                 var capture = await ReflectionCaptureCook.CookAsync(recipe, output);
                 Console.WriteLine($"Baked reflection capture {capture.Id.Value:N}: {capture.Files.Count} files, {capture.EncodedBytes} bytes, {Path.GetFullPath(output)}");

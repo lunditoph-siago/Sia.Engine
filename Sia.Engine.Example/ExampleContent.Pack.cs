@@ -55,6 +55,7 @@ internal static partial class ExampleContent
             var raster = await PbrSceneFiles.PrepareRasterAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var virtuals = await PbrSceneFiles.PrepareVirtualAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
             var bvh = await PbrSceneFiles.PrepareBvhAsync(scene, client, maximumFileBytes, maximumBundleBytes, cancellationToken);
+            var textureChunks = new Dictionary<string, AssetChunk>(StringComparer.Ordinal);
             await using (var pageSource = new PbrSceneFiles.PageSource(scene, client, virtuals)) {
                 long total = virtuals.EncodedBytes;
                 foreach (var product in virtuals.Products.Values) {
@@ -68,11 +69,30 @@ internal static partial class ExampleContent
                         _ = await pageSource.ReadAsync(page.Reference, cancellationToken);
                     }
                 }
+                foreach (var texture in virtuals.Textures.Values) {
+                    if (texture.Mips is not { } index) continue;
+                    for (var mip = 0; mip < index.TailMip; mip++) {
+                        var reference = index.Mips[mip];
+                        if (reference.EncodedBytes > maximumFileBytes)
+                            throw new InvalidDataException("Selected texture detail exceeds its independent decode limit.");
+                        foreach (var chunk in reference.Content.Chunks) {
+                            if (!textureChunks.TryAdd(chunk.Id, chunk)) {
+                                if (textureChunks[chunk.Id].Length != chunk.Length) throw new InvalidDataException("Conflicting texture chunk lengths.");
+                                continue;
+                            }
+                            if (chunk.Length > maximumFileBytes || chunk.Length > maximumBundleBytes - total)
+                                throw new InvalidDataException("Texture detail chunks exceed package admission.");
+                            total += chunk.Length;
+                        }
+                        index.ValidateMip(mip, await pageSource.ReadMipAsync(reference, cancellationToken));
+                    }
+                }
             }
             var ids = raster.Meshes.Keys.Concat(raster.Materials.Keys).Concat(raster.Textures.Keys)
                 .Concat(raster.Products.Keys).Concat(virtuals.Products.Keys).Concat(bvh.Products.Keys)
                 .Concat(virtuals.Products.Values.SelectMany(p => p.Data.Pages.ToArray()).Select(p => p.Id));
-            var names = ids.Select(id => id.Value.ToString("N") + ".siaasset").Append(raster.Id.Value.ToString("N") + ".siascene")
+            var names = ids.Select(id => id.Value.ToString("N") + ".siaasset").Concat(textureChunks.Values.Select(c => c.FileName))
+                .Append(raster.Id.Value.ToString("N") + ".siascene")
                 .Distinct(StringComparer.Ordinal).ToDictionary(name => name, name => Path.Combine(Path.GetDirectoryName(scene)!, name), StringComparer.Ordinal);
             long encoded = 0;
             void Admit(long bytes) {

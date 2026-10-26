@@ -5,6 +5,9 @@ public sealed partial class PbrSceneStream
     internal sealed record TextureInfo(uint Width, uint Height, int Levels, int TailMip);
     internal Dictionary<PbrTextureData, TextureInfo> TextureSources { get; } = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<PbrTextureData, PbrTextureData> _fullTextures = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<PbrTextureData, PbrTextureMipsData> _textureMips = new(ReferenceEqualityComparer.Instance);
+    private readonly Func<PbrTextureData, PbrTextureMipsData?>? _findTextureMips;
+    private readonly Func<PbrTextureMipReference, CancellationToken, Task<PbrTextureRecord>>? _prepareMip;
     private static PbrTextureData?[] TextureMaps(PbrMaterialAsset material)
         => [material.BaseColor, material.Normal, material.MetallicRoughness, material.Occlusion, material.Emissive];
     private static PbrMaterialAsset WithTextures(PbrMaterialAsset material, PbrTextureData?[] maps)
@@ -20,12 +23,16 @@ public sealed partial class PbrSceneStream
             for (var m = 0; m < maps.Length; m++) {
                 if (maps[m] is not { } source) continue;
                 if (!tails.TryGetValue(source, out var tail)) {
+                    var index = _findTextureMips?.Invoke(source);
+                    if (index is not null && !ReferenceEquals(index.Tail, source))
+                        throw new InvalidDataException("Texture index must describe the acquired bootstrap tail.");
                     var first = 0;
                     while (first + 1 < source.MipLevels.Length && System.Math.Max(source.Width >> first, source.Height >> first) > 64) first++;
-                    tail = PbrTextureData.FromValidatedMipChain(System.Math.Max(1u, source.Width >> first), System.Math.Max(1u, source.Height >> first),
-                        source.Srgb, source.Sampler, source.MipLevels.Span[first..].ToArray());
+                    tail = source.SliceMipChain(first);
                     tails.Add(source, tail); _fullTextures.Add(tail, source);
-                    TextureSources.Add(tail, new(source.Width, source.Height, source.MipLevels.Length, first));
+                    if (index is not null) _textureMips.Add(tail, index);
+                    TextureSources.Add(tail, index is null ? new(source.Width, source.Height, source.MipLevels.Length, first)
+                        : new(index.Width, index.Height, index.Levels, index.TailMip + first));
                 }
                 maps[m] = tail;
             }
@@ -34,11 +41,22 @@ public sealed partial class PbrSceneStream
         return result;
     }
 
-    internal Task<ReadOnlyMemory<byte>[]> ReadTextureTailAsync(PbrTextureData source, int firstMip, CancellationToken token)
+    internal async Task<ReadOnlyMemory<byte>[]> ReadTextureTailAsync(PbrTextureData source, int firstMip, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var full = _fullTextures[source];
         if (firstMip < 0 || firstMip > TextureSources[source].TailMip) throw new ArgumentOutOfRangeException(nameof(firstMip));
-        return Task.FromResult(full.MipLevels.Span[firstMip..].ToArray());
+        if (!_textureMips.TryGetValue(source, out var index)) return full.MipLevels.Span[firstMip..].ToArray();
+        var result = new ReadOnlyMemory<byte>[index.Levels - firstMip];
+        for (var mip = firstMip; mip < index.TailMip; mip++) {
+            var record = await _prepareMip!(index.Mips[mip], token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            index.ValidateMip(mip, record);
+            result[mip - firstMip] = record.Data.MipLevels.Span[0];
+        }
+        var firstTail = System.Math.Max(firstMip, index.TailMip);
+        full.MipLevels.Span[(firstTail - index.TailMip)..].CopyTo(result.AsSpan(firstTail - firstMip));
+        token.ThrowIfCancellationRequested();
+        return result;
     }
 }

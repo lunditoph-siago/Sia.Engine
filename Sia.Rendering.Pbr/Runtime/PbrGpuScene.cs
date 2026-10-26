@@ -41,6 +41,10 @@ internal sealed partial class PbrGpuScene : IDisposable
     public Entity Topology { get; }
     public Entity Instances { get; }
     public Entity Group { get; }
+    public Entity Attributes { get; }
+    private readonly Entity _rasterGroup;
+    public Entity RasterGroup => _rasterGroup == default ? Group : _rasterGroup;
+    public uint VertexPackingMode { get; }
 
     public uint VertexCount { get; }
     public uint VertexPlanes { get; } = StreamGeometryPage.VertexPlanes;
