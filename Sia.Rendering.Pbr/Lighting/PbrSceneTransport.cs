@@ -8,8 +8,13 @@ public static partial class PbrSceneTransport
 {
     internal static (float4 Albedo, float4 Emission) Surface(PbrMaterialAsset material)
     {
-        var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
-        return (new(material.Parameters.BaseColor * Average(material.BaseColor) * (1 - MathF.Min(1, MathF.Max(0, metal))), material.DoubleSided ? 1 : 0),
+        float3 diffuse;
+        if (material.DiffuseMoments is { } moments) diffuse = moments.Diffuse(material);
+        else {
+            var metal = material.Parameters.Metallic * Average(material.MetallicRoughness).z;
+            diffuse = material.Parameters.BaseColor * Average(material.BaseColor) * (1 - MathF.Min(1, MathF.Max(0, metal)));
+        }
+        return (new(diffuse, material.DoubleSided ? 1 : 0),
             new(material.Parameters.EmissiveColor * material.Parameters.EmissiveStrength * Average(material.Emissive), material.AlphaBlend ? 1 : 0));
     }
 

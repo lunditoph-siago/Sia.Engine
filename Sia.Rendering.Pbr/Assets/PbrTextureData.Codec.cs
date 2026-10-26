@@ -70,7 +70,7 @@ public sealed partial class PbrTextureData
         catch (EndOfStreamException error) { throw new InvalidDataException("Truncated texture file.", error); }
     }
 
-    private static (uint Width, uint Height, int Count, PbrTextureSampler Sampler) ReadHeader(ReadOnlySpan<byte> header, ulong maximumBytes)
+    internal static (uint Width, uint Height, int Count, PbrTextureSampler Sampler) ReadHeader(ReadOnlySpan<byte> header, ulong maximumBytes)
     {
         if (!header[..8].SequenceEqual("SIATEXR1"u8) || header[16] > 1 || header[23] > 1)
             throw new InvalidDataException("Invalid texture signature or boolean encoding.");

@@ -51,7 +51,10 @@ public sealed partial class PbrTextureData
         ArgumentOutOfRangeException.ThrowIfLessThan(count, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(count, MipLevels.Length - firstMip);
         return new(System.Math.Max(1u, Width >> firstMip), System.Math.Max(1u, Height >> firstMip),
-            Srgb, Sampler, MipLevels.Span.Slice(firstMip, count).ToArray());
+            Srgb, Sampler, MipLevels.Span.Slice(firstMip, count).ToArray()) {
+                _sourceLevel0Hash = _sourceLevel0Hash ?? _level0Hash,
+                _level0Hash = firstMip == 0 ? _level0Hash : null
+            };
     }
 
     public static PbrTextureData Create(uint width, uint height, bool srgb, ReadOnlySpan<ReadOnlyMemory<byte>> levels,
