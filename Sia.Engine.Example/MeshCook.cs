@@ -126,7 +126,8 @@ internal static partial class MeshCook
             Write(recipe.Source, source.Save);
             var raster = recipe.Raster is { } rasterId
                 ? Product<MeshRasterAsset, MeshRasterRecord>(rasterId,
-                    () => new() { Data = MeshRasterData.Build(source) }, a => a.Data.BuildKey, (a, s) => a.Data.Save(s)) : null;
+                    () => new() { Data = MeshRasterData.Build(source, maximumBytes: maximumBytes, cancellationToken: cancellationToken) },
+                    a => a.Data.BuildKey, (a, s) => a.Data.Save(s)) : null;
             MeshProductReference<MeshVirtualRecord>? virtualData = null;
             if (recipe.Virtual is { } virtualRecipe) {
                 var derived = MeshVirtualPagesData.Build(source, new(virtualRecipe.Id), virtualRecipe.Settings, maximumBytes, cancellationToken);
