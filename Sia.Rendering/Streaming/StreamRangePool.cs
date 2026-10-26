@@ -57,4 +57,18 @@ public sealed class StreamRangePool
 
     public bool Contains(StreamRange range)
         => _live.TryGetValue(range.Generation, out var live) && live == range;
+
+    internal bool CanAllocateAfterFree(StreamRange range, uint count)
+    {
+        ArgumentOutOfRangeException.ThrowIfZero(count);
+        if (!Contains(range)) throw new InvalidOperationException("Stale or foreign geometry range.");
+        ulong start = range.Offset, end = start + range.Count;
+        foreach (var free in _free) {
+            if (free.Count >= count) return true;
+            var freeEnd = (ulong)free.Offset + free.Count;
+            if (freeEnd == start) start = free.Offset;
+            else if (end == free.Offset) end = freeEnd;
+        }
+        return end - start >= count;
+    }
 }

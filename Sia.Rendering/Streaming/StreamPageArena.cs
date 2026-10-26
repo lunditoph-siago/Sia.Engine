@@ -79,6 +79,26 @@ public sealed class StreamPageArena : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Reserves a nonoverlapping replacement only when subsequently releasing
+    /// source would make the requested V/T pair allocatable. Source stays live;
+    /// the caller must commit its replacement before freeing it, or free the
+    /// destination to roll back. No intervening arena reservations are allowed.
+    /// </summary>
+    public bool TryReserveRelocation(StreamPageAllocation source, uint requiredVertices, uint requiredTriangles,
+        out StreamPageAllocation destination)
+    {
+        Validate(source);
+        ArgumentOutOfRangeException.ThrowIfZero(requiredVertices);
+        ArgumentOutOfRangeException.ThrowIfZero(requiredTriangles);
+        if (!TryReserve(source.Vertices.Count, source.Triangles.Count, out destination)) return false;
+        if (_vertices.CanAllocateAfterFree(source.Vertices, requiredVertices)
+            && _triangles.CanAllocateAfterFree(source.Triangles, requiredTriangles)) return true;
+        Free(destination);
+        destination = default;
+        return false;
+    }
+
     public Upload Prepare(StreamGeometryPage page, StreamPageAllocation allocation, float4x4 transform, uint sourceInstance, float tangentMagnitude = 1)
     {
         ArgumentNullException.ThrowIfNull(page);

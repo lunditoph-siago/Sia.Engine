@@ -42,12 +42,15 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public uint RootBase { get; }
     public uint RootCount { get; }
     public uint PageCount { get; }
+    public uint SourceNodeCount { get; }
     public uint SingleCapacity { get; }
     public uint DoubleCapacity { get; }
     public uint NodeCapacity { get; }
     public int Levels { get; }
 
     public ulong Bytes => _gpu.Bytes;
+    internal long FeedbackFrame { get; set; }
+    internal long RecoveryEpoch { get; set; }
 
     public PbrGpuHierarchy(in GpuFrame frame, ulong budget, ReadOnlySpan<Node> nodes, ReadOnlySpan<uint4> parts,
         ReadOnlySpan<uint4> mapping, uint rootBase, uint rootCount, uint singleCapacity, uint doubleCapacity,
@@ -57,6 +60,7 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
         Instances = instances;
         (RootBase, RootCount, PageCount, SingleCapacity, DoubleCapacity) =
             (rootBase, rootCount, (uint)mapping.Length, singleCapacity, doubleCapacity);
+        SourceNodeCount = checked((uint)nodes.Length);
         NodeCapacity = nodeCapacity;
         var depths = new int[nodes.Length];
         for (var i = 0; i < nodes.Length; i++) {
