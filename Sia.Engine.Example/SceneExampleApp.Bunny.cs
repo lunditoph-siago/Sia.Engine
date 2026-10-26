@@ -60,7 +60,9 @@ internal sealed partial class SceneExampleApp
                 };
             }
         });
-        Console.WriteLine("W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near.");
+        Console.WriteLine(_authoredCamera is null
+            ? "W/S or Up/Down: near/far. Space: pause/resume tour. M: triangles/shaded. R: return near."
+            : "Authored camera. M: triangles/shaded.");
 #endif
     }
 
@@ -68,7 +70,7 @@ internal sealed partial class SceneExampleApp
     {
 #if BROWSER
         var pressed = (uint)_browserCommands;
-        if ((pressed & 256) != 0) {
+        if (_authoredCamera is null && (pressed & 256) != 0) {
             var distance = _browserDistance;
             if (double.IsFinite(distance)) {
                 _bunnyDistance = (float)System.Math.Clamp(distance, 0, 1);
@@ -80,6 +82,14 @@ internal sealed partial class SceneExampleApp
         var pressed = _bunnyKeys;
         _bunnyKeys = 0;
 #endif
+        if (_authoredCamera is not null) {
+            if ((pressed & 2) != 0) {
+                _sceneRenderer!.DebugMode = _sceneRenderer.DebugMode == VisibilityDebugMode.Triangles
+                    ? VisibilityDebugMode.Shaded : VisibilityDebugMode.Triangles;
+            }
+            PublishBunnyStatus();
+            return;
+        }
         if ((pressed & 1) != 0) {
             _bunnyTour = !_bunnyTour;
             _bunnyTourPhase = MathF.Acos(1 - 2 * _bunnyDistance);
@@ -106,15 +116,22 @@ internal sealed partial class SceneExampleApp
             _bunnyTourPhase = (_bunnyTourPhase + deltaTime * (MathF.Tau / 36)) % MathF.Tau;
             _bunnyDistance = (1 - MathF.Cos(_bunnyTourPhase)) * 0.5f;
         }
+        PublishBunnyStatus();
+    }
+
+    private void PublishBunnyStatus()
+    {
         var triangles = _sceneRenderer!.FrameStatistics.Triangles;
         var status = ((int)(_bunnyDistance * 100), _bunnyTour, _sceneRenderer!.DebugMode, triangles);
         if (_bunnyStatus != status) {
             _bunnyStatus = status;
             var scene = $"{_materialInstanceCount} instances | {_options.Quality} | {triangles:N0} triangles";
-            var camera = $"Near 0 -- {(int)(_bunnyDistance * 100)} -- 100 Far | {(_bunnyTour ? "Tour" : "Paused")}";
+            var camera = _authoredCamera is { } source ? $"Camera {source.Id:N}"
+                : $"Near 0 -- {(int)(_bunnyDistance * 100)} -- 100 Far | {(_bunnyTour ? "Tour" : "Paused")}";
             Glfw.SetTitle(_window, $"Sia.Engine - {scene} | {_sceneRenderer.DebugMode} | {camera}");
 #if BROWSER
-            _browserInspection = (_bunnyDistance, _bunnyTour, _sceneRenderer.DebugMode == VisibilityDebugMode.Triangles, scene);
+            _browserInspection = (_bunnyDistance, _bunnyTour, _sceneRenderer.DebugMode == VisibilityDebugMode.Triangles,
+                _authoredCamera is null ? scene : $"{scene} | {camera}");
 #endif
         }
     }

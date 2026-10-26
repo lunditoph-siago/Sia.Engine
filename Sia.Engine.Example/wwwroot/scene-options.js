@@ -9,7 +9,7 @@ export function readSceneOptions(pageUrl) {
   if (!Object.hasOwn(scenes, pipeline)) throw new Error('Expected pipeline bunny|unlit.');
   const scene = scenes[pipeline];
   for (const name of parameters.keys()) {
-    if (!['pipeline', 'quality', 'scene', 'environment', 'probes', 'exposure-compensation', 'auto-exposure'].includes(name))
+    if (!['pipeline', 'quality', 'scene', 'environment', 'probes', 'exposure-compensation', 'auto-exposure', 'camera'].includes(name))
       throw new Error(`Unknown scene option: ${name}.`);
     if (parameters.getAll(name).length !== 1) throw new Error(`Duplicate scene option: ${name}.`);
     if (pipeline === 'unlit' && name !== 'pipeline') throw new Error('Unlit does not use PBR scene or lighting options.');
@@ -34,5 +34,14 @@ export function readSceneOptions(pageUrl) {
     if (value !== '0' && value !== '1') throw new Error('Expected auto-exposure 0|1.');
     if (value === '1') args.push('--auto-exposure');
   }
-  return { ...scene, pipeline, quality, sceneUrl: parameters.get('scene'), args };
+  let camera = null;
+  if (parameters.has('camera')) {
+    const value = parameters.get('camera');
+    if (!/^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(value)
+        || /^0+$/.test(value.replaceAll('-', '')))
+      throw new Error('Expected camera nonempty UUID in N or D format.');
+    camera = value.replaceAll('-', '').toLowerCase();
+    args.push('--camera', camera);
+  }
+  return { ...scene, pipeline, quality, sceneUrl: parameters.get('scene'), camera, args };
 }

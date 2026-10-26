@@ -65,24 +65,30 @@ public sealed partial class PbrSceneData
     public const int MaximumMaterialReferences = 65536;
     public const int MaximumAttributionBytes = 65536;
     public const int MaximumLights = 4096;
+    public const int MaximumCameras = 4096;
     private readonly PbrMeshBinding[] _bindings;
     private readonly PbrMeshInstance[] _instances;
     private readonly PbrSceneLight[]? _lights;
+    private readonly PbrSceneCamera[]? _cameras;
     public ReadOnlySpan<PbrMeshBinding> Bindings => _bindings;
     public ReadOnlySpan<PbrMeshInstance> Instances => _instances;
     public bool HasAuthoredLights => _lights is not null;
     public ReadOnlySpan<PbrSceneLight> Lights => _lights;
+    public bool HasAuthoredCameras => _cameras is not null;
+    public ReadOnlySpan<PbrSceneCamera> Cameras => _cameras;
     public string Attribution { get; }
     public int MaterialReferenceCount { get; }
-    public ulong MetadataArrayBytes => ArrayBytes(_bindings.Length, _instances.Length, MaterialReferenceCount, Lights.Length);
-    public ulong EncodedBytes => (HasAuthoredLights ? 72ul : 64ul) + (ulong)_bindings.Length * 20 + (ulong)MaterialReferenceCount * 20
-        + (ulong)_instances.Length * 84 + (ulong)Lights.Length * 76 + (ulong)s_utf8.GetByteCount(Attribution);
+    public ulong MetadataArrayBytes => ArrayBytes(_bindings.Length, _instances.Length, MaterialReferenceCount, Lights.Length, Cameras.Length);
+    public ulong EncodedBytes => (HasAuthoredCameras ? 80ul : HasAuthoredLights ? 72ul : 64ul) + (ulong)_bindings.Length * 20 + (ulong)MaterialReferenceCount * 20
+        + (ulong)_instances.Length * 84 + (ulong)Lights.Length * 76 + (ulong)Cameras.Length * 64 + (ulong)s_utf8.GetByteCount(Attribution);
 
-    private PbrSceneData(PbrMeshBinding[] bindings, PbrMeshInstance[] instances, string attribution, PbrSceneLight[]? lights = null)
+    private PbrSceneData(PbrMeshBinding[] bindings, PbrMeshInstance[] instances, string attribution, PbrSceneLight[]? lights = null,
+        PbrSceneCamera[]? cameras = null)
     {
         MaterialReferenceCount = Validate(bindings, instances, attribution);
         ValidateLights(lights);
-        _bindings = bindings; _instances = instances; Attribution = attribution; _lights = lights;
+        ValidateCameras(cameras);
+        _bindings = bindings; _instances = instances; Attribution = attribution; _lights = lights; _cameras = cameras;
     }
 
     public static PbrSceneData Create(ReadOnlySpan<PbrMeshBinding> bindings, ReadOnlySpan<PbrMeshInstance> instances, string attribution = "")
@@ -95,12 +101,20 @@ public sealed partial class PbrSceneData
     public PbrSceneData WithLights(ReadOnlySpan<PbrSceneLight> lights)
     {
         if (lights.Length > MaximumLights) throw new ArgumentException("Scene light count limit exceeded.", nameof(lights));
-        return new(_bindings, _instances, Attribution, lights.ToArray());
+        return new(_bindings, _instances, Attribution, lights.ToArray(), _cameras);
     }
 
-    internal static ulong ArrayBytes(int bindings, int instances, int slots, int lights = 0)
+    /// <summary>Snapshots explicitly authored cameras, including an empty set; existing metadata stays immutable.</summary>
+    public PbrSceneData WithCameras(ReadOnlySpan<PbrSceneCamera> cameras)
+    {
+        if (cameras.Length > MaximumCameras) throw new ArgumentException("Scene camera count limit exceeded.", nameof(cameras));
+        return new(_bindings, _instances, Attribution, _lights, cameras.ToArray());
+    }
+
+    internal static ulong ArrayBytes(int bindings, int instances, int slots, int lights = 0, int cameras = 0)
         => (ulong)bindings * (ulong)IntPtr.Size + (ulong)instances * (ulong)Unsafe.SizeOf<PbrMeshInstance>()
-            + (ulong)slots * (ulong)Unsafe.SizeOf<PbrMaterialSlot>() + (ulong)lights * (ulong)Unsafe.SizeOf<PbrSceneLight>();
+            + (ulong)slots * (ulong)Unsafe.SizeOf<PbrMaterialSlot>() + (ulong)lights * (ulong)Unsafe.SizeOf<PbrSceneLight>()
+            + (ulong)cameras * (ulong)Unsafe.SizeOf<PbrSceneCamera>();
 
     private static int Validate(ReadOnlySpan<PbrMeshBinding> bindings, ReadOnlySpan<PbrMeshInstance> instances, string attribution)
     {
