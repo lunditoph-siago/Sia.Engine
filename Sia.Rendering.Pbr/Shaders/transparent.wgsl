@@ -25,9 +25,9 @@ fn transparent_vertex(
     @location(2) words: vec2<u32>,
     @location(3) draw_instance: vec2<u32>,
 #else
-    @location(1) n: vec4<f32>,
-    @location(2) t: vec4<f32>,
-    @location(3) b: vec4<f32>,
+    @location(1) n: vec4<u32>,
+    @location(2) t: vec4<u32>,
+    @location(3) b: u32,
 #endif
 #endif
     @builtin(instance_index) instance_id: u32,
@@ -52,12 +52,15 @@ fn transparent_vertex(
     let instance = instances[instance_id];
     let position = instance.transform * world;
     return GlassVertex(frame.vp * position, position.xyz,
-        (instance.normal_transform * vec4<f32>(p.w, n.xy, 0.0)).xyz,
-        vec4<f32>((instance.transform * vec4<f32>(t.xyz, 0.0)).xyz, sign(t.w)), n.zw,
-        instance.material.x, b.xy, vec2<u32>(u32(b.z), instance_id));
+        (instance.normal_transform * vec4<f32>(stream_direction(n.x, n.y), 0.0)).xyz,
+        vec4<f32>((instance.transform * vec4<f32>(stream_direction(t.x, t.y), 0.0)).xyz, sign(bitcast<f32>(t.z))),
+        vec2<f32>(p.w, bitcast<f32>(n.z)), instance.material.x, bitcast<vec2<f32>>(vec2<u32>(n.w, t.w)),
+        vec2<u32>(select(0u, 1u, (b & 0x80000000u) != 0u), instance_id));
 #else
-    return GlassVertex(frame.vp * world, world.xyz, vec3<f32>(p.w, n.xy), t, n.zw, u32(abs(t.w)) - 1u,
-        b.xy, vec2<u32>(u32(b.z), u32(b.w)));
+    return GlassVertex(frame.vp * world, world.xyz, stream_direction(n.x, n.y),
+        vec4<f32>(stream_direction(t.x, t.y), bitcast<f32>(t.z)), vec2<f32>(p.w, bitcast<f32>(n.z)),
+        u32(abs(bitcast<f32>(t.z))) - 1u, bitcast<vec2<f32>>(vec2<u32>(n.w, t.w)),
+        vec2<u32>(select(0u, 1u, (b & 0x80000000u) != 0u), b & 0x7fffffffu));
 #endif
 #endif
 }

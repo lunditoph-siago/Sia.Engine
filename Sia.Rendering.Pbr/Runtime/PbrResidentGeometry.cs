@@ -65,12 +65,12 @@ internal sealed class PbrResidentGeometry : IDisposable
         catch { Dispose(); throw; }
     }
 
-    public void PackVertices(Span<float4> packed, int first, int count, float4x4 transform,
-        float4x4 normal, int material, uint sourceInstance, int planeStride = 0)
+    public void PackVertices(Span<uint> packed, int first, int count, float4x4 transform,
+        float4x4 normal, int material, uint sourceInstance, int planeStride = 0, int destination = 0)
     {
         var stride = planeStride == 0 ? count : planeStride;
-        if (first < 0 || count < 0 || first > VertexCount - count || stride < count || sourceInstance > 1u << 24
-            || packed.Length < checked(stride * 3 + count))
+        if (first < 0 || count < 0 || first > VertexCount - count || destination < 0 || stride < destination + count || sourceInstance > 1u << 24
+            || packed.Length < checked(stride * 12 + destination + count))
             throw new ArgumentOutOfRangeException(nameof(count));
         var vertices = _raster is not null ? _raster.Product.Vertices : default;
         var bakeUvs = _raster is not null ? _raster.Product.BakeUvs : default;
@@ -81,12 +81,9 @@ internal sealed class PbrResidentGeometry : IDisposable
             var position = math.mul(transform, new float4(vertex.Position, 1)).xyz;
             var n = math.mul(normal, new float4(vertex.Normal, 0)).xyz;
             var t = math.mul(transform, new float4(vertex.Tangent.xyz, 0)).xyz;
-            packed[v] = new(position, n.x);
-            packed[stride + v] = new(n.y, n.z, vertex.UV.x, vertex.UV.y);
-            packed[stride * 2 + v] = new(t, (vertex.Tangent.w < 0 ? -1 : 1) * (material + 1));
             var bakeUv = _page is { } bakedPage ? bakedPage.Page.GetBakeUv(source) : hasBake ? bakeUvs[source] : default;
-            packed[stride * 3 + v] = new(bakeUv.x, bakeUv.y, hasBake ? 1 : 0,
-                sourceInstance);
+            var value = new MeshVertex(position, n, vertex.UV) { Tangent = new(t, (vertex.Tangent.w < 0 ? -1 : 1) * (material + 1)) };
+            StreamVertexEncoding.PackVertex(packed, destination + v, stride, value, bakeUv, hasBake, sourceInstance);
         }
     }
 
