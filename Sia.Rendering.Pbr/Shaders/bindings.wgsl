@@ -49,11 +49,15 @@ struct Material {
 #import pbr/instance_types
 @group(1) @binding(2) var<storage, read> instances: array<Instance>;
 #endif
-#if RESIDENT_INSTANCES
+#if RESIDENT_INSTANCES || CPU_STREAM_INSTANCES
 // Rows are sorted by their nonoverlapping logical triangle intervals.
 fn resident_instance(triangle: u32) -> u32 {
     var first = 0u;
+#if CPU_STREAM_INSTANCES
+    var end = frame.geometry.z / frame.geometry.w;
+#else
     var end = arrayLength(&instances);
+#endif
     loop {
         if (first >= end) { break; }
         let middle = first + (end - first) / 2u;
@@ -139,6 +143,8 @@ fn vertex_index(triangle: u32, corner: u32) -> u32 {
 #elif RESIDENT_INSTANCES
     let instance = instances[resident_instance(triangle)];
     return topology[(instance.geometry.x + triangle - instance.material.z) * 3u + corner];
+#elif CPU_STREAM_INSTANCES
+    return topology[(triangle - instances[resident_instance(triangle)].material.z) * 3u + corner];
 #else
     return topology[triangle * 3u + corner];
 #endif
@@ -213,14 +219,19 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
         bitcast<vec2<f32>>(n.zw), (words.y & 2u) != 0u, instance.material.y);
 #else
     let value = stream_vertex_value(index);
-#if SHADING_WORK
-    let instance = instances[stream_triangle(triangle).y];
+#if SHADING_WORK || CPU_STREAM_INSTANCES
+#if CPU_STREAM_INSTANCES
+    let row = resident_instance(triangle);
+#else
+    let row = stream_triangle(triangle).y;
+#endif
+    let instance = instances[row];
     return Vertex(
         (instance.transform * vec4<f32>(value.position, 1.0)).xyz,
         (instance.normal_transform * vec4<f32>(value.normal, 0.0)).xyz,
         value.uv,
         vec4<f32>((instance.transform * vec4<f32>(value.tangent.xyz, 0.0)).xyz, value.tangent.w),
-        value.bake_uv, value.bake_present, stream_triangle(triangle).y);
+        value.bake_uv, value.bake_present, row);
 #else
     return value;
 #endif
@@ -229,7 +240,7 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
 }
 
 fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
-#if RESIDENT_INSTANCES
+#if RESIDENT_INSTANCES || CPU_STREAM_INSTANCES
 #if RASTER_POSITION_TABLES
     return instances[resident_instance(triangle)].transform * vec4<f32>(raster_position(vertex_index(triangle, corner)), 1.0);
 #else
@@ -243,7 +254,7 @@ fn world_corner(triangle: u32, corner: u32) -> vec4<f32> {
 fn triangle_material(triangle: u32) -> u32 {
 #if SHADING_WORK
     return instances[stream_triangle(triangle).y].material.x;
-#elif RESIDENT_INSTANCES
+#elif RESIDENT_INSTANCES || CPU_STREAM_INSTANCES
     return instances[resident_instance(triangle)].material.x;
 #else
     return u32(abs(bitcast<f32>(vertices[frame.geometry.x * 8u + vertex_index(triangle, 0u) * 4u + 2u]))) - 1u;

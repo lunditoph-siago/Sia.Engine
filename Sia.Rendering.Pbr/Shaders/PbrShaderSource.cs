@@ -5,21 +5,23 @@ namespace Sia.Engine.Rendering.Pbr;
 internal static partial class PbrShaderSource
 {
     internal static string Compile(World world, string entry, bool writableClusters = false, bool surfaceData = false,
-        bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false,bool rasterPositionTables=false)
+        bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false,bool rasterPositionTables=false,bool cpuStreamInstances=false)
     {
         ArgumentNullException.ThrowIfNull(world);
         return CompileWithLookup(module => {
             var source = module.StartsWith("rendering/", StringComparison.Ordinal)
                 ? RenderingShaderSource.AcquireModule(world, module) : AcquireModule(world, module);
             return source is { } entity ? entity.Get<WgslSourceResource>().Source : null;
-        }, entry, writableClusters, surfaceData, sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits,rasterPositionTables);
+        }, entry, writableClusters, surfaceData, sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits,rasterPositionTables,cpuStreamInstances);
     }
 
     private static string CompileWithLookup(Func<string, string?> read, string entry, bool writableClusters, bool surfaceData,
-        bool sceneGi, bool streamInstances, bool shadingWork, bool compatibilityUniformPadding, bool staticLightmap, bool residentInstances, bool reflectionCaptures, bool liveReflections, bool historyCommitHits,bool rasterPositionTables)
+        bool sceneGi, bool streamInstances, bool shadingWork, bool compatibilityUniformPadding, bool staticLightmap, bool residentInstances, bool reflectionCaptures, bool liveReflections, bool historyCommitHits,bool rasterPositionTables,bool cpuStreamInstances)
     {
         if(residentInstances && (streamInstances || shadingWork)) throw new ArgumentException("Resident instances and stream work are distinct geometry inputs.");
         if(rasterPositionTables && !residentInstances) throw new ArgumentException("Position tables require conventional Raster instances.");
+        if(cpuStreamInstances && (!streamInstances || shadingWork || residentInstances))
+            throw new ArgumentException("CPU stream instances require shared storage without GPU work addressing.");
         var definitions = new Dictionary<string, string> {
             ["RESIDENT_INSTANCES"] = residentInstances ? "true" : "false",
             ["RASTER_POSITION_TABLES"] = rasterPositionTables ? "true" : "false",
@@ -33,6 +35,7 @@ internal static partial class PbrShaderSource
             ["MAXIMUM_CAPTURE_REGIONS"] = PbrReflectionCaptureGpu.MaximumRegions.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["CAPTURE_REGION_ROWS"] = (PbrReflectionCaptureGpu.UniformBytes / 16).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["STREAM_INSTANCES"] = streamInstances ? "true" : "false",
+            ["CPU_STREAM_INSTANCES"] = cpuStreamInstances ? "true" : "false",
             ["SHADING_WORK"] = shadingWork ? "true" : "false",
             ["COMPATIBILITY_UNIFORM_PADDING"] = compatibilityUniformPadding ? "true" : "false",
             ["SHADOW_MATRIX_BASE"] = PbrView.ShadowMatrixBase.ToString(System.Globalization.CultureInfo.InvariantCulture),

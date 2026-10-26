@@ -51,6 +51,10 @@ internal sealed unsafe partial class PbrView
                 var batch = _owner.Materials.MaterialBatches[a.Material].CompareTo(_owner.Materials.MaterialBatches[b.Material]);
                 if (batch != 0) return batch;
             }
+            if (_owner.Scene.Instances != default) {
+                var instance = a.Instance.CompareTo(b.Instance);
+                if (instance != 0) return instance;
+            }
             return a.First.CompareTo(b.First);
         });
         var write = 0;
@@ -58,6 +62,7 @@ internal sealed unsafe partial class PbrView
             var draw = list[read];
             if (write > 0 && list[write - 1].DoubleSided == draw.DoubleSided
                 && list[write - 1].First + list[write - 1].Count == draw.First
+                && (_owner.Scene.Instances == default || list[write - 1].Instance == draw.Instance)
                 && (!matchBatch || _owner.Materials.MaterialBatches[list[write - 1].Material] == _owner.Materials.MaterialBatches[draw.Material]))
                 list[write - 1] = list[write - 1] with {
                     Count = list[write - 1].Count + draw.Count,
