@@ -16,12 +16,13 @@ internal sealed partial class PbrGpuScene
     {
         _gpu = new(frame, budget);
         try {
-            var shape = RootShape(source, streaming.GpuTraversal);
+            var sharedInstances = streaming.GpuTraversal || source.RequiresInstancing;
+            var shape = RootShape(source, sharedInstances);
             var required = checked(shape.Vertices * StreamGeometryPage.VertexBytes + shape.Triangles * 12 + shape.Instances);
             if (required > budget) throw new ArgumentException($"Stream roots/bootstrap/instances require {required} bytes, exceeding budget {budget}.");
             if (shape.Instances > _gpu.Limits.MaxStorageBufferBindingSize)
                 throw new NotSupportedException("Stream instance table exceeds storage binding limits.");
-            if (streaming.GpuTraversal) {
+            if (sharedInstances) {
                 var instances = new PbrInstanceGpu[checked(source.Instances.Length + source.TransparentInstances.Length)];
                 for (var i = 0; i < source.Instances.Length; i++) {
                     var instance = source.Instances.Span[i];
@@ -50,11 +51,29 @@ internal sealed partial class PbrGpuScene
             var maxBinding = _gpu.Limits.MaxStorageBufferBindingSize;
             var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes), maxBinding / StreamGeometryPage.VertexBytes);
             var triangleCapacity = System.Math.Min(rootsT + (detailBytes / 5 / 12), maxBinding / 12);
+            if (sharedInstances && !streaming.GpuTraversal && source.Instances.Length > 0)
+                triangleCapacity = System.Math.Min(triangleCapacity, (uint.MaxValue - 1ul) / (ulong)source.Instances.Length);
             if (vertexCapacity < rootsV || triangleCapacity < rootsT)
-                throw new NotSupportedException("Stream roots exceed WebGPU storage binding limits.");
+                throw new NotSupportedException("Stream roots exceed storage binding or CPU visibility addressing limits.");
             _arena = new(frame, checked((uint)System.Math.Max(1ul, vertexCapacity)), checked((uint)System.Math.Max(1ul, triangleCapacity)), arenaBudget);
             VertexCount = _arena.VertexCapacity;
             TriangleCount = OpaqueTriangles = _arena.TriangleCapacity;
+            if (sharedInstances && !streaming.GpuTraversal) {
+                var logicalTriangles = checked((ulong)source.Instances.Length * TriangleCount);
+                if (logicalTriangles >= uint.MaxValue)
+                    throw new NotSupportedException("CPU shared instance triangles exceed visibility ID addressing capacity.");
+                OpaqueTriangles = (uint)logicalTriangles;
+                var rows = _instanceMotion!.Rows;
+                for (var i = 0; i < source.Instances.Length; i++) {
+                    var material = rows[i].Material;
+                    material.z = checked((uint)((ulong)i * TriangleCount));
+                    material.w = TriangleCount;
+                    rows[i] = rows[i] with { Material = material };
+                }
+                if (source.Instances.Length != 0)
+                    Wgpu.WriteBuffer<PbrInstanceGpu>(_gpu.Queue, Instances.GetWgpu<WGPUBuffer>(), 0,
+                        rows.AsSpan(0, source.Instances.Length));
+            }
             Vertices = _arena.Vertices;
             Topology = _arena.Topology;
             if (bootstrap.VertexCount > 0 && bootstrap.TriangleCount > 0) {
@@ -79,7 +98,7 @@ internal sealed partial class PbrGpuScene
             if (Transparent.Length > 0)
                 Bounds = new(math.min(Bounds.Min, bootstrap.Bounds.Min), math.max(Bounds.Max, bootstrap.Bounds.Max));
             var entries = new List<WGPUBindGroupEntry> { GpuBinding.Buffer(0, Vertices), GpuBinding.Buffer(1, Topology) };
-            if (streaming.GpuTraversal) entries.Add(GpuBinding.Buffer(2, Instances));
+            if (sharedInstances) entries.Add(GpuBinding.Buffer(2, Instances));
             Group = GpuBinding.Group(_gpu, layout, CollectionsMarshal.AsSpan(entries));
         }
         catch {
