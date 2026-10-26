@@ -27,6 +27,7 @@ internal static partial class ScenePack
         public required Guid Scene { get; init; }
         public required string Input { get; init; }
         public bool Raster { get; init; } = true;
+        public bool RasterPages { get; init; }
         public bool Virtual { get; init; }
         public bool Bvh { get; init; }
         public Entry[] Meshes { get; init; } = [];
@@ -82,7 +83,8 @@ internal static partial class ScenePack
             }
             return result;
         }
-        if (!recipe.Raster && !recipe.Virtual && !recipe.Bvh) throw new InvalidDataException("Select at least one of Raster, Virtual or BVH.");
+        if (!recipe.Raster && !recipe.RasterPages && !recipe.Virtual && !recipe.Bvh)
+            throw new InvalidDataException("Select at least one of Raster, RasterPages, Virtual or BVH.");
         ArgumentException.ThrowIfNullOrWhiteSpace(recipe.Input);
         var sceneId = new AssetId(recipe.Scene); Claim(sceneId, typeof(PbrSceneRecord));
         var meshInputs = Entries(recipe.Meshes, typeof(MeshManifestRecord));
@@ -120,13 +122,15 @@ internal static partial class ScenePack
                 using var file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, FileOptions.Asynchronous);
                 files.Add(target); await file.WriteAsync(bytes, cancellationToken);
             }
-            async Task<T> Read<T>(AssetId id, string path, Func<Stream, string, T> decode, bool scene = false, bool publish = true) where T : class, IAssetRecord
+            async Task<T> Read<T>(AssetId id, string path, Func<Stream, string, T> decode, bool scene = false, bool publish = true,
+                int? maximumEncodedBytes = null) where T : class, IAssetRecord
             {
                 cancellationToken.ThrowIfCancellationRequested(); Claim(id, typeof(T));
                 using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
                 // Offline-only BVHs have the same per-file decoder bound but do not spend runtime package admission.
                 var available = publish ? (int)System.Math.Min(maximumFileBytes, maximumTotalBytes - total) : maximumFileBytes;
+                if (maximumEncodedBytes is { } encodedLimit) available = System.Math.Min(available, encodedLimit);
                 if (input.Length > available)
                     throw new InvalidDataException($"Scene input {id.Value:N} requires {input.Length} encoded bytes; remaining admission {available}, consumed {total}, total limit {maximumTotalBytes}.");
                 var bytes = await AssetInput.ReadBoundedAsync(input, available, cancellationToken);
@@ -156,6 +160,8 @@ internal static partial class ScenePack
             }
             var meshes = new Dictionary<AssetId, MeshManifestRecord>();
             var rasters = new Dictionary<AssetId, MeshRasterRecord>(); var virtuals = new Dictionary<AssetId, MeshVirtualRecord>();
+            var pagedRasters = new Dictionary<AssetId, MeshRasterPagesRecord>();
+            var publishedRasterPages = new HashSet<AssetId>();
             var bvhs = new Dictionary<AssetId, MeshBvhRecord>();
             var virtualPages = new Dictionary<AssetId, MeshVirtualPageRecord>();
             var materials = new Dictionary<AssetId, PbrMaterialRecord>(); var textures = new Dictionary<AssetId, PbrTextureRecord>();
@@ -175,12 +181,28 @@ internal static partial class ScenePack
                     mesh = await Read(meshId, path, MeshManifestRecord.Load); meshes.Add(meshId, mesh);
                     Claim(mesh.Data.Source, typeof(MeshSourceRecord));
                     if (mesh.Data.Raster is { } rasterReference) Claim(rasterReference.Id, typeof(MeshRasterRecord));
+                    if (mesh.Data.RasterPages is { } pagedReference) Claim(pagedReference.Id, typeof(MeshRasterPagesRecord));
                     if (mesh.Data.Virtual is { } virtualReference) Claim(virtualReference.Id, typeof(MeshVirtualRecord));
                     if (mesh.Data.Bvh is { } bvhReference) Claim(bvhReference.Id, typeof(MeshBvhRecord));
                     string Product(AssetId id) => Path.Combine(Path.GetDirectoryName(path)!, id.Value.ToString("N") + ".siaasset");
                     if (recipe.Raster) {
                         var id = mesh.Data.Raster?.Id ?? throw new InvalidDataException("Selected Mesh has no Raster product.");
                         if (!rasters.ContainsKey(id)) rasters.Add(id, await Read(id, Product(id), (s, n) => MeshRasterRecord.Load(s, (ulong)maximumFileBytes, n)));
+                    }
+                    if (recipe.RasterPages) {
+                        var id = mesh.Data.RasterPages?.Id ?? throw new InvalidDataException("Selected Mesh has no paged Raster product.");
+                        if (!pagedRasters.ContainsKey(id)) {
+                            var index = await Read(id, Product(id), (s, n) => MeshRasterPagesRecord.Load(s, (ulong)maximumFileBytes, n));
+                            if (index.Data.ProductId != id) throw new InvalidAssetException("Raster page index belongs to another logical product.");
+                            pagedRasters.Add(id, index);
+                            for (var pageIndex = 0; pageIndex < index.Data.Pages.Length; pageIndex++) {
+                                var page = index.Data.Pages[pageIndex];
+                                var record = await Read(page.Id, Product(page.Id),
+                                    (s, n) => MeshRasterPageRecord.Load(s, (ulong)maximumFileBytes, n),
+                                    publish: publishedRasterPages.Add(page.Id), maximumEncodedBytes: MeshRasterPageData.MaximumEncodedBytes);
+                                index.Data.ValidatePage(pageIndex, record.Data, cancellationToken);
+                            }
+                        }
                     }
                     if (recipe.Virtual) {
                         var id = mesh.Data.Virtual?.Id ?? throw new InvalidDataException("Selected Mesh has no Virtual product.");
@@ -218,7 +240,7 @@ internal static partial class ScenePack
             var textureChunks = new HashSet<string>(StringComparer.Ordinal);
             using (var client = new HttpClient())
             await using (var source = new PbrSceneFiles.PageSource(Path.Combine(stage, sceneId.Value.ToString("N") + ".siascene"), client,
-                new(sceneId, scene, meshes, virtuals, materials, textures))) {
+                new PbrSceneFiles.Prepared<MeshVirtualRecord>(sceneId, scene, meshes, virtuals, materials, textures))) {
                 // Authenticate copied chunks and decode against the staged root before publication.
                 foreach (var pair in textures) {
                     if (pair.Value.Mips is not { } index) continue;
@@ -255,6 +277,9 @@ internal static partial class ScenePack
             // Original generated acquisition plus pure domain composition validate selected file graphs.
             using (var world = new World()) {
                 world.AddAddon<AssetLibrary>();
+                if (recipe.RasterPages) PbrSceneComposition.ResolveRasterPages(scene.Data,
+                    r => meshes[r.Value].Data, r => pagedRasters[r.Value].Data,
+                    r => materials[r.Value].Data, r => textures[r.Value].Data);
                 if (scene.Data.HasAuthoredLights) LightingFiles.PublishSceneLights(world, scene.Data, null);
                 if (recipe.Raster) PbrSceneFiles.AcquireRaster(world, new(sceneId, scene, meshes, rasters, materials, textures)).Root.Destroy();
                 if (recipe.Virtual) {
