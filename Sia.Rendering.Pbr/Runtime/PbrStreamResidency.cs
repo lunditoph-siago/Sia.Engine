@@ -130,6 +130,15 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _instances = source.Instances.ToArray();
         _pages = [.. source.PageTable.Values];
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
+        if (SharedInstances) {
+            // Required Virtual roots are already authenticated and remain pinned for this owner.
+            var roots = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (id, page) in source.ResidentRoots) {
+                if (page.Data is not { } data) continue;
+                if (roots.TryGetValue(data.ContentHash, out var index)) _pageIndices[id] = index;
+                else roots.Add(data.ContentHash, _pageIndices[id]);
+            }
+        }
         _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes),
             2 * MeshVirtualPageData.MaximumEncodedBytes, settings.MaximumRequests, settings.DecodedBytes);
         _norms = new float[source.Instances.Length];
