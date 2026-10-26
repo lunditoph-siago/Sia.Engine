@@ -39,8 +39,9 @@ public static partial class Program
                 Console.WriteLine($"Packaged example content: {Path.GetFullPath(output)}");
                 return true;
             }
-            case ["--cook-content", var recipe, "--output", var output, ..] when args.Length is 4 or 6: {
-                var sceneId = await ContentCook.CookAsync(recipe, output, maximumTotalBytes: OfflineTotalBytes(args));
+            case ["--cook-content", var recipe, "--output", var output, ..] when args.Length is 4 or 6 or 8: {
+                var (maximumBytes, mikkTool) = ContentCookOptions(args);
+                var sceneId = await ContentCook.CookAsync(recipe, output, maximumTotalBytes: maximumBytes, mikkToolPath: mikkTool);
                 Console.WriteLine($"Cooked content {sceneId.Value:N}: {Path.GetFullPath(output)}");
                 return true;
             }
@@ -49,8 +50,14 @@ public static partial class Program
                 Console.WriteLine($"Packed scene {sceneId.Value:N}: {Path.GetFullPath(output)}");
                 return true;
             }
-            case ["--cook-mesh", var recipe, "--output", var output]: {
-                var mesh = MeshCook.Cook(recipe, output);
+            case ["--cook-mesh", var recipe, "--output", var output, ..] when args.Length is 4 or 6: {
+                string? mikkTool = null;
+                if (args.Length == 6) {
+                    if (args[4] != "--mikk-tool") throw new ArgumentException("Expected --mikk-tool <executable>.");
+                    ArgumentException.ThrowIfNullOrWhiteSpace(args[5]);
+                    mikkTool = args[5];
+                }
+                var mesh = MeshCook.Cook(recipe, output, mikkToolPath: mikkTool);
                 Console.WriteLine($"Cooked Mesh {mesh.Id.Value:N}: {Path.GetFullPath(output)}");
                 return true;
             }
@@ -86,13 +93,23 @@ public static partial class Program
         return (browser, maximumBytes);
     }
 
-    private static long OfflineTotalBytes(string[] args)
+    private static (long MaximumBytes, string? MikkTool) ContentCookOptions(string[] args)
     {
-        if (args.Length == 4) return 512L * 1024 * 1024;
-        if (args[4] != "--maximum-total-bytes" || !long.TryParse(args[5],
-            System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var bytes) || bytes <= 0)
-            throw new ArgumentException("Expected --maximum-total-bytes <positive integer>.");
-        return bytes;
+        var maximumBytes = 512L * 1024 * 1024;
+        string? mikkTool = null;
+        var options = new HashSet<string>(StringComparer.Ordinal);
+        for (var at = 4; at < args.Length; at += 2) {
+            if (!options.Add(args[at])) throw new ArgumentException("Duplicate content cook option.");
+            if (args[at] == "--mikk-tool") {
+                ArgumentException.ThrowIfNullOrWhiteSpace(args[at + 1]);
+                mikkTool = args[at + 1];
+            }
+            else if (args[at] == "--maximum-total-bytes" && long.TryParse(args[at + 1],
+                NumberStyles.None, CultureInfo.InvariantCulture, out var bytes) && bytes > 0)
+                maximumBytes = bytes;
+            else throw new ArgumentException("Expected --mikk-tool <executable> or --maximum-total-bytes <positive integer>.");
+        }
+        return (maximumBytes, mikkTool);
     }
 
     internal static async Task<SceneTraceData> PrepareReferenceProbeTraceAsync(string path, HttpClient client,
