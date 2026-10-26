@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Sia;
 using Sia.Asset;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
@@ -11,6 +12,7 @@ internal static partial class LightmapFiles
 {
     internal sealed record Prepared(AssetId Id, PbrLightmapSetRecord Set, ProductSource Source) : IAsyncDisposable
     {
+        internal IblEnvironmentRecord? Environment { get; init; }
         public ValueTask DisposeAsync() => Source.DisposeAsync();
     }
 
@@ -56,7 +58,17 @@ internal static partial class LightmapFiles
         };
         foreach (var product in virtuals) foreach (var page in product.Data.Pages) ids.Add(page.Id);
         cancellationToken.ThrowIfCancellationRequested();
-        return new(new(id), set, new(path, http, set.Data, cacheBytes, otherIds: ids));
+        var source = new ProductSource(path, http, set.Data, cacheBytes, otherIds: ids);
+        try { return new(new(id), set, source) { Environment = await source.ReadEnvironmentAsync(cancellationToken) }; }
+        catch { await source.DisposeAsync(); throw; }
+    }
+
+    internal static LightingFiles.Prepared Lighting(Prepared prepared, LightingFiles.Prepared lighting)
+    {
+        if (prepared.Set.Data.BakeSettings.Environment is not { } content) return lighting;
+        var environment = lighting.Environment ?? prepared.Environment ?? throw new InvalidDataException("Missing prepared HDR lightmap environment.");
+        prepared.Set.Data.BakeSettings.ValidateEnvironment(environment.Data);
+        return lighting with { Environment = environment, EnvironmentContent = content };
     }
 
     internal static Entity Acquire(World world, Prepared prepared, PbrSceneData scene, Entity owner)

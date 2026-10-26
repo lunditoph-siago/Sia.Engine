@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Sia.Math;
+using Sia.Asset;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -14,6 +15,11 @@ public readonly record struct PbrLightmapSurfaceTexel(float3 Position, float3 No
 public sealed partial record PbrLightmapBakeSettings
 {
     public ProceduralSky Sky { get; init; } = new();
+    /// <summary>Optional immutable single-chunk HDR miss source. The producer borrows its authenticated decoded value.</summary>
+    public AssetContent<IblEnvironmentRecord>? Environment { get; init; }
+    internal int InputBytes => Environment is null ? 104 : 152;
+    internal int EnvironmentBytes => Environment is null ? 0 : 48;
+    internal ulong EnvironmentPayloadBytes => Environment is null ? 0ul : 256ul;
     public float3 TowardLight { get; init; } = new(0, 1, 0);
     public float3 LightRadiance { get; init; }
     public int Samples { get; init; } = 128;
@@ -22,6 +28,10 @@ public sealed partial record PbrLightmapBakeSettings
 
     internal void Validate()
     {
+        if (Environment is { } environment && (environment.Name is not null || environment.Chunks.Length != 1
+            || environment.Length != IblEnvironmentAsset.EncodedBytes || environment.Chunks[0].Id is not { Length: 64 } hash
+            || hash.Any(c => c is not (>= '0' and <= '9') and not (>= 'A' and <= 'F'))))
+            throw new ArgumentException("HDR lightmap input requires one canonical typed environment chunk.");
         static bool Color(float3 color) => math.all(math.isfinite(color)) && math.all(color >= 0) && math.all(color <= 1e10f);
         static bool Direction(float3 direction) => math.all(math.isfinite(direction)) && float.IsFinite(math.lengthsq(direction)) && math.lengthsq(direction) > 1e-8f;
         if (Sky is null || !Color(Sky.Horizon) || !Color(Sky.Zenith) || !Color(Sky.Ground) || !Color(Sky.SunRadiance)
@@ -44,6 +54,7 @@ public sealed partial class PbrLightmapBaker
     private readonly record struct Surface(float3 Albedo, float3 Emission, bool DoubleSided);
     private readonly PbrBvhTrace _trace;
     private readonly PbrLightmapBakeSettings _settings;
+    private readonly IblEnvironmentAsset? _environment;
     private readonly Surface[] _surfaces;
     private readonly bool[] _opaqueMaterials;
     private readonly float3[] _directions;
@@ -54,6 +65,11 @@ public sealed partial class PbrLightmapBaker
 
     public PbrLightmapBaker(PbrBvhTrace trace, PbrLightmapBakeSettings? settings = null,
         ulong maximumWorkingBytes = 4ul * 1024 * 1024, CancellationToken cancellationToken = default)
+        : this(trace, settings, null, maximumWorkingBytes, cancellationToken) { }
+
+    /// <summary>Borrows a declared immutable HDR source; authenticates it before allocating integration scratch.</summary>
+    public PbrLightmapBaker(PbrBvhTrace trace, PbrLightmapBakeSettings? settings, IblEnvironmentAsset? environment,
+        ulong maximumWorkingBytes = 4ul * 1024 * 1024, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(trace); _settings = settings ?? new(); _settings.Validate();
         cancellationToken.ThrowIfCancellationRequested();
@@ -61,8 +77,20 @@ public sealed partial class PbrLightmapBaker
             + (ulong)_settings.Samples * (ulong)Unsafe.SizeOf<float3>()
             + PbrLightmapPageData.MaximumEdge * PbrLightmapPageData.MaximumEdge * (ulong)Unsafe.SizeOf<PbrLightmapCoefficients>();
         // Reserve one maximum output page as well; external surface inputs/trace and retained outputs are caller-owned.
-        if (bytes + PbrLightmapPageData.MaximumEncodedBytes > maximumWorkingBytes)
+        if (bytes + PbrLightmapPageData.MaximumEncodedBytes + (environment is null ? 0ul : (ulong)IblEnvironmentAsset.EncodedBytes) > maximumWorkingBytes)
             throw new ArgumentException("Lightmap producer scratch and one output page exceed the configured working budget.", nameof(maximumWorkingBytes));
+        _settings.ValidateEnvironment(environment);
+        if (environment is not null) {
+            var cube = environment.Cube.Span;
+            for (var at = 0; at < 6 * IblEnvironmentAsset.CubeSize * IblEnvironmentAsset.CubeSize * 4; at += 4) {
+                if ((at & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                for (var channel = 0; channel < 3; channel++) {
+                    var value = (double)(float)cube[at + channel] * environment.CubeRadianceScale;
+                    if (value < 0 || value > 1e18) throw new ArgumentException("HDR lightmap source exceeds nonnegative finite transport bounds.", nameof(environment));
+                }
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested(); _environment = environment;
         _trace = trace; PayloadBytes = bytes; _towardLight = math.normalize(_settings.TowardLight);
         _surfaces = new Surface[trace.Scene.Materials.Length]; _directions = new float3[_settings.Samples];
         _opaqueMaterials = new bool[trace.Scene.Materials.Length];
@@ -133,7 +161,7 @@ public sealed partial class PbrLightmapBaker
                 var normal = surface.Normal / MathF.Sqrt(length); var origin = surface.Position + normal * _settings.RayBias;
                 float3 constant = default, cy = default, cz = default, cx = default;
                 foreach (var direction in _directions) {
-                    cancellationToken.ThrowIfCancellationRequested(); var radiance = _settings.Sky.Evaluate(direction);
+                    cancellationToken.ThrowIfCancellationRequested(); var radiance = _environment?.SampleRadiance(direction) ?? _settings.Sky.Evaluate(direction);
                     if (TraceOpaque(origin, direction, out var hit, cancellationToken)) {
                         radiance = default; var material = _surfaces[hit.Material];
                         if (hit.FrontFace || material.DoubleSided) {

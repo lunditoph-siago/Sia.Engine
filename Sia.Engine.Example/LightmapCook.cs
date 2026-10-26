@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using Sia;
 using Sia.Asset;
 using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 
 namespace Sia.Engine.Example;
@@ -21,11 +22,16 @@ internal static partial class LightmapCook
         ulong maximumWorkingBytes = 64ul * 1024 * 1024, ulong maximumStagingBytes = 512ul * 1024 * 1024,
         CancellationToken cancellationToken = default, Func<string, Stream, Stream>? decorateOutput = null,
         ulong maximumEncodedBytes = ulong.MaxValue, ulong maximumFileBytes = ulong.MaxValue,
-        int maximumPageResolution = 64)
+        int maximumPageResolution = 64, IblEnvironmentRecord? environment = null)
     {
         ArgumentNullException.ThrowIfNull(input); ArgumentNullException.ThrowIfNull(layouts);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         cancellationToken.ThrowIfCancellationRequested();
+        var actualSettings = settings ?? new();
+        var environmentMetadataBytes = actualSettings.Environment is null ? 0ul : 48ul;
+        if (environment is not null && 2ul * IblEnvironmentAsset.EncodedBytes > maximumWorkingBytes)
+            throw new ArgumentException("Lightmap environment arrays and serialization exceed working admission.", nameof(maximumWorkingBytes));
+        actualSettings.ValidateEnvironment(environment?.Data);
         if (maximumPageResolution is < 2 or > 8192 || (maximumPageResolution & (maximumPageResolution - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(maximumPageResolution));
         if (!productId.IsValid) throw new ArgumentException("Lightmap product identity must be nonempty.", nameof(productId));
@@ -40,6 +46,8 @@ internal static partial class LightmapCook
         var claims = Claims(selected);
         if (claims.ContainsKey(productId)) throw new InvalidDataException("Lightmap output aliases an input asset identity.");
         claims.Add(productId,typeof(PbrLightmapSetRecord));
+        if (actualSettings.Environment is { } environmentContent && !claims.TryAdd(environmentContent.Id, typeof(IblEnvironmentRecord)))
+            throw new InvalidDataException("Lightmap environment aliases an input or output asset identity.");
         using var world = new World(); world.AddAddon<AssetLibrary>();
         var acquired = PbrSceneFiles.AcquireBvh(world, selected);
         AssetLibrary.RegisterAsset<MeshSourceAsset, MeshSourceRecord>();
@@ -67,11 +75,11 @@ internal static partial class LightmapCook
                     var tiles = CountTiles(layout.Resolution >> firstMip, out var rawBytes, out var encodedBytes);
                     var member=PbrLightmapSetData.ReceiverProductId(productId,instance.Id,material.Slot);
                     if (!claims.TryAdd(member,typeof(PbrLightmapRecord))) throw new InvalidDataException("Lightmap receiver product aliases an asset identity.");
-                    var metadataBytes=PbrLightmapData.RequiredBytes(1,count,tiles);
-                    var memberBytes=356ul+(ulong)count*48+(ulong)tiles*68;
+                    var metadataBytes=PbrLightmapData.RequiredBytes(1,count,tiles,actualSettings);
+                    var memberBytes=356ul+environmentMetadataBytes+(ulong)count*48+(ulong)tiles*68;
                     if (memberBytes>maximumFileBytes) throw new InvalidDataException("Lightmap receiver metadata exceeds per-file admission.");
                     receivers.Add(new(instance,layout,material.Slot,member,count,tiles,firstMip)); pageCount=checked(pageCount+tiles);
-                    _=PbrLightmapSetData.RequiredBytes(receivers.Count,receivers.Count);
+                    _=PbrLightmapSetData.RequiredBytes(receivers.Count,receivers.Count,actualSettings);
                     foreach (var tile in Tiles(layout.Resolution,firstMip)) {
                         var id=PbrLightmapData.PageId(member,instance.Id,material.Slot,tile.Level,tile.X,tile.Y);
                         if (!claims.TryAdd(id,typeof(PbrLightmapPageRecord))) throw new InvalidDataException("Lightmap page aliases an asset identity.");
@@ -81,12 +89,13 @@ internal static partial class LightmapCook
                     largestPages = System.Math.Max(largestPages, tiles); largestCharts = System.Math.Max(largestCharts, layout.Charts.Length);
                 }
             }
-            var rootMetadata=PbrLightmapSetData.RequiredBytes(receivers.Count,receivers.Count);
+            var rootMetadata=PbrLightmapSetData.RequiredBytes(receivers.Count,receivers.Count,actualSettings);
             var metadata=checked(rootMetadata+largestMetadata);
             if (metadata > maximumMetadataBytes) throw new ArgumentException("Lightmap manifest exceeds its metadata budget.", nameof(maximumMetadataBytes));
-            var indexBytes=232ul+(ulong)receivers.Count*236;
-            var outputBytes=checked(encodedProducts+indexBytes);
-            if (outputBytes > maximumEncodedBytes || indexBytes > maximumFileBytes || receivers.Any(receiver =>
+            var indexBytes=232ul+environmentMetadataBytes+(ulong)receivers.Count*236;
+            var environmentBytes=environment is null ? 0ul : (ulong)IblEnvironmentAsset.EncodedBytes;
+            var outputBytes=checked(encodedProducts+indexBytes+environmentBytes);
+            if (outputBytes > maximumEncodedBytes || indexBytes > maximumFileBytes || environmentBytes > maximumFileBytes || receivers.Any(receiver =>
                 92ul + (ulong)System.Math.Min(64, receiver.Layout.Resolution >> receiver.FirstMip) * (ulong)System.Math.Min(64, receiver.Layout.Resolution >> receiver.FirstMip) * 25 > maximumFileBytes))
                 throw new InvalidDataException("Lightmap output exceeds selected encoded publication admission.");
             var stagingBytes=checked(outputBytes+largestRaw);
@@ -97,13 +106,16 @@ internal static partial class LightmapCook
             var fixedBytes = checked(2 * metadata + (ulong)receivers.Capacity * (ulong)Unsafe.SizeOf<Receiver>()
                 + (ulong)largestPages * sizeof(long) + (ulong)largestCharts * (ulong)Unsafe.SizeOf<PbrLightmapCoefficients>()
                 + 4096ul * (ulong)Unsafe.SizeOf<PbrLightmapCoefficients>() + 12544 + 32768
-                + PbrLightmapPageData.MaximumEncodedBytes + 2 * 4096 + 128);
+                + PbrLightmapPageData.MaximumEncodedBytes + 2 * 4096 + 128 + 2 * environmentBytes);
             ulong Remaining(ulong used) => used <= maximumWorkingBytes ? maximumWorkingBytes - used
                 : throw new ArgumentException("Lightmap known working arrays exceed their budget.", nameof(maximumWorkingBytes));
             var trace = PbrBvhTrace.Build(acquired.Scene, Remaining(fixedBytes), cancellationToken);
-            var baker = new PbrLightmapBaker(trace, settings, Remaining(fixedBytes + trace.PayloadBytes), cancellationToken);
+            var baker = new PbrLightmapBaker(trace, actualSettings, environment?.Data, Remaining(fixedBytes + trace.PayloadBytes), cancellationToken);
             var baseBytes = fixedBytes + trace.PayloadBytes + baker.PayloadBytes;
-            var workingBytes = baseBytes;
+            // The HDR constructor also admits its source hash buffer and one page before
+            // integration. Report that transient peak, so this receipt can be readmitted.
+            var workingBytes = environment is null ? baseBytes
+                : checked(baseBytes + environmentBytes + PbrLightmapPageData.MaximumEncodedBytes);
             foreach (var receiver in receivers) {
                 var surface = new PbrLightmapSurface(receiver.Layout, receiver.Instance.Transform, receiver.Slot, Remaining(baseBytes), cancellationToken);
                 var producer = new PbrLightmapBake(surface, baker, Remaining(baseBytes + surface.PayloadBytes));
@@ -112,7 +124,6 @@ internal static partial class LightmapCook
 
             var references=new PbrLightmapProductReference[receivers.Count];
             var bindings=new PbrLightmapReceiverReference[receivers.Count];
-            var actualSettings = settings ?? new();
             var sceneIdentity = Convert.ToHexString(acquired.Scene.TransportIdentity.Span);
             var stage = Path.Combine(parent, ".lightmap-cook-" + Guid.NewGuid().ToString("N"));
             if (Path.Exists(stage)) throw new IOException("Lightmap staging path already exists.");
@@ -134,6 +145,12 @@ internal static partial class LightmapCook
                 if ((ulong)file.Length != bytes) throw new InvalidDataException("Lightmap output differs from its admitted encoded size.");
             }
             try {
+                if (environment is not null) {
+                    AssetLibrary.RegisterAsset<IblEnvironmentResource, IblEnvironmentRecord>();
+                    var entity = world.AcquireAsset(actualSettings.Environment!.Id, () => environment, acquired.Root);
+                    Write(actualSettings.Environment.Id.Value.ToString("N") + ".siaasset", environmentBytes,
+                        stream => entity.Get<IblEnvironmentResource>().Data.Write(stream));
+                }
                 var raw = new PbrLightmapCoefficients[4096];
                 for (var at = 0; at < receivers.Count; at++) {
                     cancellationToken.ThrowIfCancellationRequested(); var receiver = receivers[at];

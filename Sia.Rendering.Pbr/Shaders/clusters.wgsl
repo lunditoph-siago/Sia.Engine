@@ -29,7 +29,7 @@ fn cull(@builtin(global_invocation_id) id: vec3<u32>) {
         let light = scene_data[i * 4u];
         let position = (frame.view * vec4<f32>(light.xyz, 1.0)).xyz;
         let delta = position - clamp(position, minimum, maximum);
-        if (dot(delta, delta) > light.w * light.w) {
+        if (light.w > 0.0 && dot(delta, delta) > light.w * light.w) {
             continue;
         }
         if (matches >= frame.grid.w) {

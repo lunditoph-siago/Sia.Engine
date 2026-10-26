@@ -134,6 +134,7 @@ internal sealed partial class SceneExampleApp
     private PbrBvhScene? _traceScene;
     private int _materialInstanceCount;
     private PbrSceneFiles.Prepared? _referenceScene;
+    private PbrSceneData? _sceneLighting;
     private Entity _assetRoot;
     private Aabb _materialBounds;
 
@@ -163,6 +164,7 @@ internal sealed partial class SceneExampleApp
             default: throw new InvalidOperationException("Unsupported prepared scene product.");
         }
         AcquireLightmapAssets(prepared.Scene.Data);
+        _sceneLighting = prepared.Scene.Data;
         _referenceScene = null;
         Console.WriteLine(prepared.Scene.Data.Attribution);
         Console.WriteLine($"Reference PBR scene: {prepared.Scene.Data.Instances.Length} Mesh instances; {_materialInstanceCount} section instances.");
@@ -180,15 +182,8 @@ internal sealed partial class SceneExampleApp
         shadows.CascadeCount = 3;
         shadows.MaxShadowedSpotLights = 1;
         shadows.ShadowDistance = 30;
-        world.AcquireAddon<EnvironmentLighting>().Sky = _bakedEnvironment?.Sky ?? _lightmapInput?.Set.BakeSettings.Sky ?? new ProceduralSky { Intensity = .75f };
-        var sun = quaternion.LookRotation(math.normalize(new float3(-.8f, 1, .4f)), new(0, 1, 0));
-        world.Create(HList.From(new DirectionalLight(), new ShadowCaster(), new LightColor(new(1, .96f, .9f), 3),
-            new GlobalTransform(new AffineTransform(float3.zero, sun))));
-        CreatePointLight(world, new(3, 4, -4), new(1, .85f, .65f), 40, 15);
-        CreatePointLight(world, new(5, 4, -8), new(1, .85f, .65f), 24, 15);
-        var spot = quaternion.LookRotation(math.normalize(new float3(0, 1, -.3f)), new(0, 0, 1));
-        world.Create(HList.From(new SpotLight(12, .3f, .6f), new ShadowCaster(), new LightColor(new(1, .9f, .75f), 18),
-            new GlobalTransform(new AffineTransform(new(2, 6, -5), spot))));
+        LightingFiles.PublishSceneLights(world, _sceneLighting, _bakedEnvironment?.Sky ?? _lightmapInput?.Set.BakeSettings.Sky);
+        _sceneLighting = null;
     }
 
     private void InitializeMaterialRendering()
@@ -196,6 +191,7 @@ internal sealed partial class SceneExampleApp
         var frame = new GpuFrame(_sceneWorld!, _renderWorld!.Entities, _renderDevice, _renderQueue);
         var preset = _qualitySettings;
         var settings = preset with {
+            ExposureCompensation = _options.ExposureCompensation,
             BakedEnvironment = _bakedEnvironment,
             ReflectionCaptures = _captureInputs ?? [],
             Lightmaps = _lightmapInput,

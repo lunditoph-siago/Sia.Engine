@@ -69,7 +69,7 @@ fn reflection_local(index: u32, position: vec3<f32>, normal: vec3<f32>, albedo: 
     let p = scene_lights[index * 4u]; let d = scene_lights[index * 4u + 1u];
     let radiance = scene_lights[index * 4u + 2u].rgb; let cone = scene_lights[index * 4u + 3u];
     let delta = p.xyz - position; let distance = length(delta);
-    if (distance <= config[0].y * 2.0 || distance >= p.w || distance > config[0].x) { return vec3<f32>(0); }
+    if (distance <= config[0].y * 2.0 || (p.w > 0.0 && distance >= p.w) || distance > config[0].x) { return vec3<f32>(0); }
     let direction = delta / distance; var attenuation = rendering_range_attenuation(distance, p.w);
     if (d.w > 0.5) { attenuation *= rendering_spot_attenuation(dot(-direction, normalize(d.xyz)), cone.x, cone.y); }
     return albedo * radiance * (max(dot(normal, direction), 0.0) * attenuation / 3.14159265359);

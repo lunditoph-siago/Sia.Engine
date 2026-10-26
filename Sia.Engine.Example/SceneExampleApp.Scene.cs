@@ -147,14 +147,6 @@ internal sealed unsafe partial class SceneExampleApp
 
     }
 
-    private static void CreatePointLight(World world, float3 position, float3 color, float intensity, float range) =>
-        world.Create(HList.From(
-            new PointLight(range),
-            new LightColor(color, intensity),
-            new Transform(position, quaternion.identity, new float3(1, 1, 1)),
-            GlobalTransform.Identity,
-            new Node<SceneGraph>(null)));
-
     private void UpdateScene(float deltaTime)
     {
         var eye = new float3(0, _orbitHeight, _orbitRadius);
@@ -194,6 +186,7 @@ internal sealed unsafe partial class SceneExampleApp
         if (_assetRoot.IsValid) _assetRoot.Destroy();
         _assetRoot = default;
         _referenceScene = null;
+        _sceneLighting = null;
         _preparedLighting = null;
         _bakedEnvironment = null;
         _bakedProbes = null;

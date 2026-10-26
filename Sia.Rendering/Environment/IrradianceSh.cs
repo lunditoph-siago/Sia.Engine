@@ -10,6 +10,24 @@ public static class IrradianceSh
     public const int CoefficientCount = 9;
     private static readonly double s_GoldenAngle = System.Math.PI * (3.0 - System.Math.Sqrt(5.0));
 
+    /// <summary>Conservative absolute RGB irradiance for unit normals, from one physical nine-coefficient set. Ignores w; allocates nothing.</summary>
+    public static double Bound(ReadOnlySpan<float4> coefficients)
+    {
+        if (coefficients.Length != CoefficientCount) throw new ArgumentException("An irradiance bound requires nine coefficients.", nameof(coefficients));
+        foreach (var value in coefficients)
+            if (!math.all(math.isfinite(value.xyz))) throw new ArgumentException("SH coefficients must be finite.", nameof(coefficients));
+        double peak = 0;
+        for (var c = 0; c < 3; c++) {
+            var y = (double)coefficients[1][c]; var z = (double)coefficients[2][c]; var x = (double)coefficients[3][c];
+            var bound = .886228 * System.Math.Abs(coefficients[0][c]) + 1.023328 * System.Math.Sqrt(y * y + z * z + x * x)
+                + .429044 * (System.Math.Abs(coefficients[4][c]) + System.Math.Abs(coefficients[5][c])
+                    + System.Math.Abs(coefficients[7][c]) + System.Math.Abs(coefficients[8][c]))
+                + .495417 * System.Math.Abs(coefficients[6][c]);
+            peak = System.Math.Max(peak, bound);
+        }
+        return peak;
+    }
+
     public static float4[] Project(Func<float3, float3> radiance, int sampleCount = 4096)
     {
         var coefficients = new float3[CoefficientCount];

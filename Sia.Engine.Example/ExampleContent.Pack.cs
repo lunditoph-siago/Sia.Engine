@@ -101,6 +101,7 @@ internal static partial class ExampleContent
                 encoded += bytes;
             }
             foreach (var file in names.Values) { cancellationToken.ThrowIfCancellationRequested(); Admit(new FileInfo(file).Length); }
+            PbrLightmapSetData? lightmapSet = null;
             if (entry.Lightmaps is { } lightmaps) {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!lightmaps.EndsWith(".siaasset", StringComparison.OrdinalIgnoreCase)
@@ -112,6 +113,7 @@ internal static partial class ExampleContent
                 Admit(new FileInfo(lightmaps).Length);
                 var lighting = FileLoader.Load<PbrLightmapSetRecord, ulong>(lightmaps, PbrLightmapSetData.MaximumPayloadBytes);
                 var set = lighting.Data;
+                lightmapSet = set;
                 if (set.ProductId.Value != lightingId) throw new InvalidDataException("Lighting set belongs to another logical ID.");
                 set.ValidateScene(virtuals.Scene.Data, r => virtuals.Meshes[r.Value].Data,
                     r => virtuals.Materials[r.Value].Data, r => virtuals.Textures[r.Value].Data, cancellationToken);
@@ -139,7 +141,7 @@ internal static partial class ExampleContent
                     }
                 }
             }
-            await AddReflectionsAsync(entry, raster, client, names, Admit, maximumFileBytes, maximumBundleBytes - encoded, cancellationToken);
+            await AddReflectionsAsync(entry, raster, client, names, Admit, maximumFileBytes, maximumBundleBytes - encoded, cancellationToken, lightmapSet);
             return names;
         }
         try {

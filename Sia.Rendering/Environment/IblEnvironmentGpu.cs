@@ -15,6 +15,7 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
     private readonly Entity _cube, _lut;
     private ProceduralSky? _source;
     private readonly IblEnvironmentAsset? _baked;
+    private float _proceduralScale = 1;
 
     public Entity Cube => _cube;
 
@@ -24,6 +25,13 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
     public Entity LutView { get; }
     public Entity Sampler { get; }
     public Entity Sh { get; }
+    public float CubeRadianceScale => _baked?.CubeRadianceScale ?? _proceduralScale;
+    /// <summary>Conservative absolute physical cube radiance, including all filtered levels.</summary>
+    public double MaximumRadiance { get; private set; }
+    /// <summary>Conservative absolute physical diffuse irradiance for unit normals.</summary>
+    public double MaximumIrradiance { get; private set; }
+    /// <summary>Absolute dimensionless maxima of the two sampled BRDF coefficients.</summary>
+    public float2 BrdfBounds { get; private set; }
 
     public ulong Bytes => _gpu.Bytes;
 
@@ -93,6 +101,7 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
                     var offset = ((y * LutSize) + x) * 4;
                     lut[offset] = (Half)(scale / k_Samples);
                     lut[offset + 1] = (Half)(bias / k_Samples);
+                    BrdfBounds = math.max(BrdfBounds, new float2(MathF.Abs((float)lut[offset]), MathF.Abs((float)lut[offset + 1])));
                     lut[offset + 3] = (Half)1;
                 }
             Write(_lut, 0, 0, LutSize, lut);
@@ -103,10 +112,20 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
     public void Update(ProceduralSky sky)
     {
         if (sky == _source) return;
-        sky.Validate();
+        ArgumentNullException.ThrowIfNull(sky); sky.ValidateData();
         if (_baked is not null)
             throw new InvalidOperationException("Baked environment sky differs from scene lighting; select matching bake data or the procedural provider.");
+        var unscaled = (double)math.cmax(math.max(sky.Horizon, math.max(sky.Zenith, sky.Ground))) + math.cmax(sky.SunRadiance);
+        var peak = unscaled * sky.Intensity;
+        if (unscaled > float.MaxValue || !double.IsFinite(peak) || peak > float.MaxValue / 4096d)
+            throw new ArgumentException("Procedural environment exceeds finite Float32 projection admission.", nameof(sky));
+        var radianceScale = 1f;
+        while (peak / radianceScale > 32752) {
+            if (radianceScale >= MathF.ScaleB(1, 100)) throw new ArgumentException("Procedural environment exceeds the cube radiance scale range.", nameof(sky));
+            radianceScale *= 2;
+        }
         var coefficients = IrradianceSh.Project(sky.Evaluate);
+        var irradiance = IrradianceSh.Bound(coefficients);
         Wgpu.WriteBuffer<float4>(_gpu.Queue, Sh.GetWgpu<WGPUBuffer>(), 0, coefficients);
         for (var mip = 0; mip < Mips; mip++) {
             var size = Size >> mip;
@@ -137,19 +156,29 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
                         }
                         color /= MathF.Max(weight, 1e-6f);
                         var offset = ((y * size) + x) * 4;
-                        data[offset] = (Half)MathF.Min(color.x, 65504);
-                        data[offset + 1] = (Half)MathF.Min(color.y, 65504);
-                        data[offset + 2] = (Half)MathF.Min(color.z, 65504);
+                        data[offset] = (Half)(color.x / radianceScale);
+                        data[offset + 1] = (Half)(color.y / radianceScale);
+                        data[offset + 2] = (Half)(color.z / radianceScale);
                         data[offset + 3] = (Half)1;
                     }
                 Write(_cube, mip, face, size, data);
             }
         }
         _source = sky;
+        _proceduralScale = radianceScale; MaximumRadiance = peak; MaximumIrradiance = irradiance;
     }
 
     private void Upload(IblEnvironmentAsset asset)
     {
+        var peak = 0f;
+        var cube = asset.Cube.Span;
+        for (var at = 0; at < cube.Length; at += 4)
+            peak = MathF.Max(peak, MathF.Max(MathF.Abs((float)cube[at]), MathF.Max(MathF.Abs((float)cube[at + 1]), MathF.Abs((float)cube[at + 2]))));
+        MaximumRadiance = (double)peak * asset.CubeRadianceScale;
+        MaximumIrradiance = IrradianceSh.Bound(asset.Coefficients.Span);
+        var lut = asset.BrdfLut.Span;
+        for (var at = 0; at < lut.Length; at += 4)
+            BrdfBounds = math.max(BrdfBounds, new float2(MathF.Abs((float)lut[at]), MathF.Abs((float)lut[at + 1])));
         Wgpu.WriteBuffer<float4>(_gpu.Queue, Sh.GetWgpu<WGPUBuffer>(), 0, asset.Coefficients.Span);
         Write(_lut, 0, 0, LutSize, asset.BrdfLut.Span);
         var offset = 0;

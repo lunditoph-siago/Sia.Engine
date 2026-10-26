@@ -34,6 +34,7 @@ internal sealed unsafe partial class PbrView
             Import(ref graph, _streamDispatchKey, _selection.DispatchArguments,
                 RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination);
         Import(ref graph, _frameKey, _uniform, RenderGraphBufferUsage.Uniform);
+        Import(ref graph, _outputUniformKey, _outputUniform, RenderGraphBufferUsage.Uniform);
         Import(ref graph, _lightsKey, _lightData, RenderGraphBufferUsage.Storage);
         Import(ref graph, _clustersKey, _clusters, RenderGraphBufferUsage.Storage);
         if (_owner.Probes is { } probes) {
@@ -84,16 +85,14 @@ internal sealed unsafe partial class PbrView
         if (UseForward) {
             TimingMarker(ref graph, dependency, 3);
             TimingMarker(ref graph, dependency, 4);
-            graph.UsePass(new(_prefix + "prepass"), "pbr-prepass", dependency,
-                static (in d, p) => d.View.ReadFrame(p).Write(d.Depth, RenderGraphTextureUsage.RenderAttachment), Prepass);
+            graph.UsePass(new(_prefix + "forward"), "pbr-forward", dependency,
+                static (in d, p) => d.View.ReadLighting(p).Write(d.Depth, RenderGraphTextureUsage.RenderAttachment)
+                    .Write(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Forward);
             graph.UsePass(new(_prefix + "coverage"), "pbr-alpha-coverage", dependency,
                 static (in d, p) => d.View.ReadFrame(p).ReadWrite(d.Depth, RenderGraphTextureUsage.RenderAttachment), AlphaCoverage);
             graph.UsePass(new(_prefix + "background"), "pbr-background", dependency,
                 static (in d, p) => d.View.ReadFrame(p).Read(d.Depth, RenderGraphTextureUsage.TextureBinding)
-                    .Write(d.View._hdrKey, RenderGraphTextureUsage.StorageBinding), ForwardBackground, RenderGraphPassKind.Compute);
-            graph.UsePass(new(_prefix + "forward"), "pbr-forward", dependency,
-                static (in d, p) => d.View.ReadLighting(p).Read(d.Depth, RenderGraphTextureUsage.RenderAttachment)
-                    .ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Forward);
+                    .ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.StorageBinding), ForwardBackground, RenderGraphPassKind.Compute);
             TimingMarker(ref graph, dependency, 5);
             TimingMarker(ref graph, dependency, 6);
         }
@@ -130,7 +129,7 @@ internal sealed unsafe partial class PbrView
                 .Read(d.View._snapshotKey, RenderGraphTextureUsage.TextureBinding).ReadWrite(d.View._hdrKey, RenderGraphTextureUsage.RenderAttachment), Transparency);
         TimingMarker(ref graph, dependency, 10);
         graph.UsePass(new(_prefix + "output"), "pbr-output", dependency, static (in d, p) =>
-            d.View.ReadTiming(p).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
+            d.View.ReadTiming(p).Read(d.View._outputUniformKey, RenderGraphBufferUsage.Uniform).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
         TimingMarker(ref graph, dependency, 11);
     }
 
@@ -182,6 +181,8 @@ internal sealed unsafe partial class PbrView
     private RenderGraphPassDeclarationBuilder ReadProbeTrace(RenderGraphPassDeclarationBuilder pass)
     {
         pass.Read(_traceKey, RenderGraphBufferUsage.Storage);
+        if (_owner.Settings.BakedEnvironment is not null)
+            pass.Read(_environmentCubeKey, RenderGraphTextureUsage.TextureBinding);
         if (_owner.Probes!.TracingGeometry.IsValid)
             pass.Read(_traceGeometryKey, RenderGraphBufferUsage.Storage).Read(_traceInstancesKey, RenderGraphBufferUsage.Storage);
         if (_owner.Probes.SignedCorrection)

@@ -47,7 +47,7 @@ internal sealed unsafe class PbrReflectionCaptureGpu : IDisposable
                 layer = layers.Count; layers.Add(data.Environment.ContentHash, layer); environments.Add(input.Environment);
             }
             rows[1 + at * 3] = new(data.Position, layer * 6);
-            rows[2 + at * 3] = new(data.Bounds.Min, 0); rows[3 + at * 3] = new(data.Bounds.Max, 0);
+            rows[2 + at * 3] = new(data.Bounds.Min, input.Environment.CubeRadianceScale); rows[3 + at * 3] = new(data.Bounds.Max, 0);
         }
         _gpu = new(frame, maximumBytes);
         try {

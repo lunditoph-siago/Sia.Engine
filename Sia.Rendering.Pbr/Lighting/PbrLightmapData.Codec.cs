@@ -10,7 +10,8 @@ public sealed partial class PbrLightmapData
     public void Save(Stream stream, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
-        Span<byte> header = stackalloc byte[204]; "SIALMIDX"u8.CopyTo(header);
+        Span<byte> header = stackalloc byte[204 + BakeSettings.EnvironmentBytes];
+        (BakeSettings.Environment is null ? "SIALMIDX"u8 : "SIALMDX2"u8).CopyTo(header);
         ProductId.Value.TryWriteBytes(header.Slice(8, 16), bigEndian: true, out _);
         _ = Convert.FromHexString(SceneIdentity, header.Slice(24, 32), out _, out _);
         _ = Convert.FromHexString(BakeIdentity, header.Slice(56, 32), out _, out _);
@@ -59,11 +60,16 @@ public sealed partial class PbrLightmapData
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         if (maximumBytes < 236) throw new InvalidDataException("Lightmap manifest header exceeds its decode budget.");
         try {
-            Span<byte> header = stackalloc byte[204]; stream.ReadExactly(header);
-            if (!header[..8].SequenceEqual("SIALMIDX"u8)) throw new InvalidDataException("Invalid lightmap manifest signature.");
+            Span<byte> storage = stackalloc byte[252]; var header = storage[..204]; stream.ReadExactly(header);
+            var environment = header[..8].SequenceEqual("SIALMDX2"u8);
+            if (environment) {
+                if (maximumBytes < 284) throw new InvalidDataException("HDR lightmap header exceeds its decode budget.");
+                stream.ReadExactly(storage[204..]); header = storage;
+            }
+            else if (!header[..8].SequenceEqual("SIALMIDX"u8)) throw new InvalidDataException("Invalid lightmap manifest signature.");
             var receiverCount = BinaryPrimitives.ReadInt32LittleEndian(header[88..]);
             var pageCount = BinaryPrimitives.ReadInt32LittleEndian(header[92..]);
-            var chartCount = BinaryPrimitives.ReadInt32LittleEndian(header[96..]); Admit(receiverCount, chartCount, pageCount, maximumBytes);
+            var chartCount = BinaryPrimitives.ReadInt32LittleEndian(header[96..]); Admit(receiverCount, chartCount, pageCount, maximumBytes, environment);
             var id = new AssetId(new Guid(header.Slice(8, 16), bigEndian: true));
             if (!id.IsValid) throw new InvalidDataException("Lightmap manifest needs a logical product identity.");
             var scene = Convert.ToHexString(header.Slice(24, 32)); var bake = Convert.ToHexString(header.Slice(56, 32));

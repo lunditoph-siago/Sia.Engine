@@ -14,41 +14,6 @@ struct ForwardVertex {
 }
 
 @vertex
-fn prepass_vertex(
-#if RASTER_POSITION_TABLES
-    @builtin(vertex_index) index: u32,
-#else
-    @location(0) p: vec4<f32>,
-#endif
-#if RESIDENT_INSTANCES
-    @location(3) draw_instance: vec2<u32>,
-#else
-    @builtin(instance_index) instance_id: u32,
-#endif
-) -> @builtin(position) @invariant vec4<f32> {
-#if RASTER_POSITION_TABLES
-    let world = vec4<f32>(raster_position(index), 1.0);
-#else
-    let world = vec4<f32>(p.xyz, 1.0);
-#endif
-#if RESIDENT_INSTANCES
-    let position = instances[draw_instance.x].transform * world;
-#if RASTER_POSITION_TABLES
-    return frame.vp * vec4<f32>(position.xyz, 1.0);
-#else
-    return frame.vp * position;
-#endif
-#else
-    return frame.vp * world;
-#endif
-}
-
-@fragment
-fn prepass_fragment_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
-    return position.z;
-}
-
-@vertex
 fn forward_vertex(
 #if RASTER_POSITION_TABLES
     @builtin(vertex_index) index: u32,
@@ -91,15 +56,29 @@ fn forward_vertex(
 #endif
 }
 
-@fragment
-fn forward_fragment(
+fn forward_color(
     input: ForwardVertex,
-    @builtin(front_facing) front: bool,
-) -> @location(0) vec4<f32> {
+    front: bool,
+) -> vec4<f32> {
     var surface = sample_material(materials[input.material], input.world, input.normal,
         input.tangent, input.uv, dpdx(input.uv), dpdy(input.uv), front);
     surface.bake_uv = input.bake_uv;
     surface.bake_uv_dx = dpdx(input.bake_uv); surface.bake_uv_dy = dpdy(input.bake_uv);
     surface.bake_present = input.bake.x != 0u; surface.source_instance = input.bake.y;
-    return vec4<f32>(min(shade(surface, input.position.xy), vec3<f32>(65504)), 1.0);
+    return vec4<f32>(min(shade(surface, input.position.xy) * frame.depth.z, vec3<f32>(65504)), 1.0);
+}
+
+@fragment
+fn forward_fragment(input: ForwardVertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return forward_color(input, front);
+}
+
+struct ForwardDepthOutput {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn forward_fragment_depth(input: ForwardVertex, @builtin(front_facing) front: bool) -> ForwardDepthOutput {
+    return ForwardDepthOutput(forward_color(input, front), input.position.z);
 }

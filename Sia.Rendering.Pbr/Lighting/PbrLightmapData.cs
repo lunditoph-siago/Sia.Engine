@@ -43,9 +43,9 @@ public sealed partial class PbrLightmapData
     public ReadOnlySpan<PbrLightmapReceiver> Receivers => _receivers;
     public ReadOnlySpan<PbrLightmapPageDescriptor> Pages => _pages;
     public ReadOnlySpan<PbrLightmapChart> Charts => _charts;
-    public ulong EncodedBytes => 236ul + (ulong)_receivers.Length * 120 + (ulong)_charts.Length * 48 + (ulong)_pages.Length * 68;
+    public ulong EncodedBytes => 236ul + (ulong)BakeSettings.EnvironmentBytes + (ulong)_receivers.Length * 120 + (ulong)_charts.Length * 48 + (ulong)_pages.Length * 68;
     /// <summary>Array elements and hash characters; excludes object headers, temporary validation sets and external pages.</summary>
-    public ulong PayloadBytes => OwnedBytes(_receivers.Length, _charts.Length, _pages.Length);
+    public ulong PayloadBytes => OwnedBytes(_receivers.Length, _charts.Length, _pages.Length) + BakeSettings.EnvironmentPayloadBytes;
 
     private PbrLightmapData(AssetId productId, string sceneIdentity, PbrLightmapBakeSettings bakeSettings,
         PbrLightmapReceiver[] receivers, PbrLightmapChart[] charts, PbrLightmapPageDescriptor[] pages, CancellationToken token)
@@ -61,7 +61,7 @@ public sealed partial class PbrLightmapData
         ulong maximumBytes = MaximumEncodedBytes, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(bakeSettings); bakeSettings.Validate();
-        Admit(receivers.Length, charts.Length, pages.Length, maximumBytes); cancellationToken.ThrowIfCancellationRequested();
+        Admit(receivers.Length, charts.Length, pages.Length, maximumBytes, bakeSettings.Environment is not null); cancellationToken.ThrowIfCancellationRequested();
         var copied = charts.ToArray();
         for (var at = 0; at < copied.Length; at++) {
             if ((at & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
@@ -146,18 +146,24 @@ public sealed partial class PbrLightmapData
 
     /// <summary>Pre-admits counts and returns the larger encoded/owned payload reservation before output exists.</summary>
     public static ulong RequiredBytes(int receivers, int charts, int pages)
+        => RequiredBytes(receivers, charts, pages, false);
+
+    public static ulong RequiredBytes(int receivers, int charts, int pages, PbrLightmapBakeSettings? settings)
+        => RequiredBytes(receivers, charts, pages, settings?.Environment is not null);
+
+    private static ulong RequiredBytes(int receivers, int charts, int pages, bool environment)
     {
         if (receivers is < 1 or > MaximumReceivers || charts < receivers || charts > MaximumCharts || pages is < 1 or > MaximumPages)
             throw new ArgumentException("Invalid lightmap manifest counts.");
-        var encoded = 236ul + (ulong)receivers * 120 + (ulong)charts * 48 + (ulong)pages * 68;
+        var encoded = 236ul + (environment ? 48ul : 0) + (ulong)receivers * 120 + (ulong)charts * 48 + (ulong)pages * 68;
         if (encoded > MaximumEncodedBytes)
             throw new ArgumentException("Lightmap manifest exceeds its encoded/owned payload budget.");
-        return System.Math.Max(encoded, OwnedBytes(receivers, charts, pages));
+        return System.Math.Max(encoded, OwnedBytes(receivers, charts, pages) + (environment ? 256ul : 0));
     }
 
-    private static void Admit(int receivers, int charts, int pages, ulong maximumBytes)
+    private static void Admit(int receivers, int charts, int pages, ulong maximumBytes, bool environment = false)
     {
-        if (RequiredBytes(receivers, charts, pages) > maximumBytes)
+        if (RequiredBytes(receivers, charts, pages, environment) > maximumBytes)
             throw new ArgumentException("Lightmap manifest exceeds its encoded/owned payload budget.");
     }
 
@@ -169,6 +175,8 @@ public sealed partial class PbrLightmapData
         if (!ProductId.IsValid || !ValidHash(SceneIdentity))
             throw new ArgumentException("Invalid lightmap manifest identity.");
         var ids = new HashSet<AssetId>(); var receivers = new HashSet<(Guid, int)>(); var pageIndex = 0; var chartIndex = 0;
+        if (BakeSettings.Environment is { } environment && (environment.Id == ProductId || !ids.Add(environment.Id)))
+            throw new ArgumentException("Lightmap environment aliases its product identity.");
         for (var r = 0; r < _receivers.Length; r++) {
             token.ThrowIfCancellationRequested(); var receiver = _receivers[r];
             if (receiver.InstanceId == Guid.Empty || receiver.MaterialSlot < 0 || !ValidHash(receiver.SourceHash)

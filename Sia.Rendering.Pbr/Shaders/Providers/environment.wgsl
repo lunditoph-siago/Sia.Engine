@@ -20,7 +20,7 @@ fn scene_probe_irradiance(position: vec3<f32>, normal: vec3<f32>, correction: bo
 #endif
 
 fn get_environment_specular(position: vec3<f32>, direction: vec3<f32>, roughness: f32) -> vec3<f32> {
-    let sky = sample_prefiltered_specular(environment, environment_sampler, direction, roughness, f32(textureNumLevels(environment)));
+    let sky = sample_prefiltered_specular(environment, environment_sampler, direction, roughness, f32(textureNumLevels(environment))) * frame.depth.w;
 #if REFLECTION_CAPTURES
     return capture_specular(position, direction, roughness, sky);
 #else

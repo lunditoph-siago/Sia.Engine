@@ -57,6 +57,7 @@ internal sealed unsafe partial class PbrView
         if (HasReflections)
             graph.UsePass(new(_prefix + "reflection-compose"), "pbr-reflection-compose", dependency, static (in d, p) =>
                 p.Read(d.View._opaqueHdrKey, RenderGraphTextureUsage.TextureBinding)
+                    .Read(d.View._outputUniformKey, RenderGraphBufferUsage.Uniform)
                     .Read(d.View._reflectionSpecularKey, RenderGraphTextureUsage.TextureBinding)
                     .Read(d.View.CompositionSignalKey, RenderGraphTextureUsage.TextureBinding)
                     .Write(d.View._hdrKey, RenderGraphTextureUsage.StorageBinding), ComposeReflections, RenderGraphPassKind.Compute);

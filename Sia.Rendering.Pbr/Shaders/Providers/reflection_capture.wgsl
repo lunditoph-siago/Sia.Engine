@@ -84,5 +84,5 @@ fn capture_specular(position: vec3<f32>, direction: vec3<f32>, roughness: f32, s
     let level = clamp(roughness, 0.0, 1.0) * f32(textureNumLevels(capture_environment) - 1u);
     let first = i32(floor(level)); let last = min(first + 1, i32(textureNumLevels(capture_environment)) - 1);
     let radiance = mix(capture_mip(projected, i32(center.w), first), capture_mip(projected, i32(center.w), last), fract(level));
-    return mix(sky, radiance, influence);
+    return mix(sky, radiance * capture_regions[2u + selected * 3u].w, influence);
 }

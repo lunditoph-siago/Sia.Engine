@@ -42,6 +42,7 @@ public static partial class Program
             var lightmapsPath = content?.Lightmaps;
             await using var lightmaps = lightmapsPath is null ? null
                 : await LightmapFiles.PrepareAsync(lightmapsPath, streamHttp, references!);
+            if (lightmaps is not null) lighting = LightmapFiles.Lighting(lightmaps, lighting);
             var app = new SceneExampleApp(options, references, lighting, lightmaps, captures);
             references = null;
             lighting = null;

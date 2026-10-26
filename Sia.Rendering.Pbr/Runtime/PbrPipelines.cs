@@ -45,8 +45,6 @@ internal sealed unsafe class PbrPipelines : IDisposable
 
     public Entity Forward { get; }
     public Entity ForwardDouble { get; }
-    public Entity Prepass { get; }
-    public Entity PrepassDouble { get; }
     public Entity ForwardBackground { get; }
 
     public Entity Raster { get; }
@@ -240,12 +238,9 @@ internal sealed unsafe class PbrPipelines : IDisposable
             if (opaquePath == PbrOpaquePath.ForwardPlus) {
                 var forward = Module("forward.wgsl");
                 var forwardLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout);
-                var prepassLayout=GpuBinding.PipelineLayout(_gpu,RasterFrameLayout,GeometryLayout);
-                var prepassFragment = core ? null : "prepass_fragment_depth";
-                Forward = Render(forward, forwardLayout, "forward_vertex", "forward_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, depthRead: true);
-                ForwardDouble = Render(forward, forwardLayout, "forward_vertex", "forward_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, depthRead: true);
-                Prepass = Render(forward, prepassLayout, "prepass_vertex", prepassFragment, null, true, WGPUCullMode.Back);
-                PrepassDouble = Render(forward, prepassLayout, "prepass_vertex", prepassFragment, null, true, WGPUCullMode.None);
+                var forwardFragment = core ? "forward_fragment" : "forward_fragment_depth";
+                Forward = Render(forward, forwardLayout, "forward_vertex", forwardFragment, WGPUTextureFormat.RGBA16Float, true, WGPUCullMode.Back);
+                ForwardDouble = Render(forward, forwardLayout, "forward_vertex", forwardFragment, WGPUTextureFormat.RGBA16Float, true, WGPUCullMode.None);
             }
             var clusterShader = Module("clusters.wgsl", writableClusters: true);
             Cluster = Compute(clusterShader, GpuBinding.PipelineLayout(_gpu, ClusterLayout), "cull");
@@ -286,7 +281,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
                     GpuBinding.Texture(0, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
                     GpuBinding.Texture(1, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
                     GpuBinding.Texture(2, WGPUTextureSampleType.Float, WGPUShaderStage.Compute, WGPUTextureViewDimension._2DArray),
-                    GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float)
+                    GpuBinding.StorageTexture(3, WGPUTextureFormat.RGBA16Float),
+                    GpuBinding.Buffer(4, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute, 16)
                 ]);
                 ReflectionTrace = Compute(Module("reflection_trace.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionTraceLayout), "trace_reflections");
                 ReflectionCompose = Compute(Module("reflection_compose.wgsl"), GpuBinding.PipelineLayout(_gpu, ReflectionComposeLayout), "compose_reflections");
@@ -367,7 +363,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
         }
     }
 
-    private Entity Render(Entity shader, Entity layout, string vertex, string? fragment, WGPUTextureFormat? format, bool depthWrite, WGPUCullMode cull, bool blend = false, bool depthRead = false, bool shadowBias = false)
+    private Entity Render(Entity shader, Entity layout, string vertex, string? fragment, WGPUTextureFormat? format, bool depthWrite, WGPUCullMode cull, bool blend = false, bool shadowBias = false)
     {
         var vs = Encoding.UTF8.GetBytes(vertex);
         var fs = Encoding.UTF8.GetBytes(fragment ?? "");
@@ -380,8 +376,8 @@ internal sealed unsafe class PbrPipelines : IDisposable
                 Data = v,
                 Length = (nuint)vs.Length
             };
-            var attributeCount = _rasterPositionTables?0:vertex is "forward_vertex" or "transparent_vertex" ? (_residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes) : vertex is "prepass_vertex" or "shadow_vertex" ? 1 : 0;
-            var instanceInput = _residentInstances && (vertex is "forward_vertex" or "transparent_vertex" or "prepass_vertex" or "shadow_vertex" or "raster_vertex");
+            var attributeCount = _rasterPositionTables?0:vertex is "forward_vertex" or "transparent_vertex" ? (_residentInstances?PbrRasterVertex.Planes:StreamGeometryPage.VertexPlanes) : vertex is "shadow_vertex" ? 1 : 0;
+            var instanceInput = _residentInstances && (vertex is "forward_vertex" or "transparent_vertex" or "shadow_vertex" or "raster_vertex");
             if (instanceInput) attributeCount++;
             var attributes = stackalloc WGPUVertexAttribute[StreamGeometryPage.VertexPlanes];
             var buffers = stackalloc WGPUVertexBufferLayout[StreamGeometryPage.VertexPlanes];
@@ -420,13 +416,13 @@ internal sealed unsafe class PbrPipelines : IDisposable
             var depth = WGPUDepthStencilState.Default;
             depth.Format = WGPUTextureFormat.Depth32Float;
             depth.DepthWriteEnabled = depthWrite ? WGPUOptionalBool.True : WGPUOptionalBool.False;
-            depth.DepthCompare = depthRead ? WGPUCompareFunction.Equal : blend ? WGPUCompareFunction.LessEqual : WGPUCompareFunction.Less;
+            depth.DepthCompare = blend ? WGPUCompareFunction.LessEqual : WGPUCompareFunction.Less;
             if (shadowBias) {
                 depth.DepthBias = 2;
                 depth.DepthBiasSlopeScale = 2;
             }
 
-            if (depthWrite || blend || depthRead) descriptor.DepthStencil = &depth;
+            if (depthWrite || blend) descriptor.DepthStencil = &depth;
             return _gpu.Own(Wgpu.CreateRenderPipeline(_gpu.Device, descriptor));
         }
     }

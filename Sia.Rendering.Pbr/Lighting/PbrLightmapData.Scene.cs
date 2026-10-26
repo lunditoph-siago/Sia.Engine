@@ -21,7 +21,7 @@ public sealed partial class PbrLightmapData
     public bool SameRevision(PbrLightmapData? other)
         => other is not null && (ReferenceEquals(this, other) || ProductId == other.ProductId
             && SceneIdentity == other.SceneIdentity && BakeIdentity == other.BakeIdentity
-            && BakeSettings == other.BakeSettings
+            && BakeSettings.SameInputs(other.BakeSettings)
             && _receivers.AsSpan().SequenceEqual(other._receivers) && _charts.AsSpan().SequenceEqual(other._charts)
             && _pages.AsSpan().SequenceEqual(other._pages));
 }

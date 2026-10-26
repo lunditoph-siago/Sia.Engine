@@ -1,6 +1,7 @@
 using Sia;
 using Sia.Asset;
 using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 using ProductReference = Sia.Asset.AssetRefer<Sia.Engine.Rendering.Pbr.PbrLightmapRecord>.Id;
 
@@ -51,6 +52,11 @@ internal static partial class LightmapFiles
                     throw new ArgumentException("Lighting member cannot fit the encoded cache admission.", nameof(cacheBytes));
                 _products.Add(product.Id, at);
             }
+            if (set.BakeSettings.Environment is { } environment) {
+                if (!_otherIds.Add(environment.Id)) throw new InvalidAssetException("Lightmap environment aliases a selected scene asset.");
+                if (IblEnvironmentAsset.EncodedBytes + 1L > cacheBytes)
+                    throw new ArgumentException("Lightmap environment cannot fit encoded cache admission.", nameof(cacheBytes));
+            }
             var remote = AssetInput.TryGetHttpUri(setPath, out var uri);
             _uri = remote ? uri : null;
             _directory = remote ? "" : Path.GetDirectoryName(Path.GetFullPath(setPath))!;
@@ -64,11 +70,23 @@ internal static partial class LightmapFiles
                 : throw new AssetNotFoundException("Lighting member is not declared by this set.");
         }
 
+        internal async Task<IblEnvironmentRecord?> ReadEnvironmentAsync(CancellationToken token = default)
+        {
+            token.ThrowIfCancellationRequested();
+            if (Set.BakeSettings.Environment is not { } environment) return null;
+            var chunk = environment.Chunks[0]; Register(chunk.Id, environment.Id, IblEnvironmentAsset.EncodedBytes);
+            try {
+                return await ChunkLoader.LoadAsync(environment, _cache, maximumBytes: IblEnvironmentAsset.EncodedBytes,
+                    cancellationToken: token).ConfigureAwait(false);
+            }
+            finally { Release(chunk.Id); }
+        }
+
         internal async Task<PbrLightmapRecord> ReadAsync(ProductReference reference, CancellationToken token = default)
         {
             token.ThrowIfCancellationRequested(); var at = FindProduct(reference); var expected = Set.Products[at];
             var counts = Set.ProductCounts(at);
-            if (PbrLightmapData.RequiredBytes(counts.Receivers, counts.Charts, counts.Pages) > _maximumProductBytes)
+            if (PbrLightmapData.RequiredBytes(counts.Receivers, counts.Charts, counts.Pages, Set.BakeSettings) > _maximumProductBytes)
                 throw new InvalidDataException("Lighting member exceeds the decoded metadata admission.");
             Register(expected.ContentHash, expected.Id, expected.EncodedBytes);
             try {
@@ -121,7 +139,8 @@ internal static partial class LightmapFiles
         private string Location(AssetId id)
         {
             var filename = id.Value.ToString("N") + ".siaasset";
-            return _uri is null ? Path.Combine(_directory, filename) : new Uri(_uri, filename).AbsoluteUri;
+            return _uri is null ? Path.Combine(_directory, filename)
+                : new UriBuilder(new Uri(_uri, filename)) { Query = _uri.Query.TrimStart('?') }.Uri.AbsoluteUri;
         }
 
         // Routes exist only while original ChunkLoader calls are alive. A shared

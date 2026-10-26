@@ -9,9 +9,11 @@ namespace Sia.Engine.Example;
 internal static partial class ExampleContent
 {
     private static async Task AddReflectionsAsync(Entry entry, PbrSceneFiles.Prepared scene, HttpClient client,
-        Dictionary<string, string> files, Action<long> admit, int maximumFileBytes, long remainingBytes, CancellationToken token)
+        Dictionary<string, string> files, Action<long> admit, int maximumFileBytes, long remainingBytes, CancellationToken token,
+        PbrLightmapSetData? lightmaps = null)
     {
-        if ((entry.Environment is not null || entry.ReflectionCaptures.Length != 0) && maximumFileBytes < IblEnvironmentAsset.EncodedBytes)
+        if ((entry.Environment is not null || entry.ReflectionCaptures.Length != 0 || lightmaps?.BakeSettings.Environment is not null)
+            && maximumFileBytes < IblEnvironmentAsset.EncodedBytes)
             throw new InvalidDataException("Selected environments exceed per-file admission.");
         var sceneIds = ReflectionCaptureFiles.SceneIds(scene);
         var environments = new Dictionary<AssetId, string>(); var captures = new HashSet<AssetId>();
@@ -46,6 +48,14 @@ internal static partial class ExampleContent
                 throw new InvalidDataException("Selected environment exceeds its encoded admission.");
             var record = FileLoader.Load<IblEnvironmentRecord>(environmentPath); sourceHash = record.Data.Write(Stream.Null);
             await EnvironmentFile(id, sourceHash, environmentPath);
+        }
+        if (lightmaps?.BakeSettings.Environment is { } source) {
+            var hash = source.Chunks[0].Id;
+            if (sourceHash is not null && sourceHash != hash)
+                throw new InvalidAssetException("Lightmaps require the selected source environment.");
+            sourceHash = hash;
+            await EnvironmentFile(source.Id, hash,
+                Path.Combine(Path.GetDirectoryName(entry.Lightmaps!)!, source.Id.Value.ToString("N") + ".siaasset"));
         }
         foreach (var path in entry.ReflectionCaptures) {
             token.ThrowIfCancellationRequested(); var id = Id(path);
