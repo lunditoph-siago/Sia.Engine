@@ -26,7 +26,7 @@ internal static partial class ContentCook
 
     internal static async Task<AssetId> CookAsync(string recipePath, string outputDirectory,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? mikkToolPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recipePath); ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes); ArgumentOutOfRangeException.ThrowIfNegative(maximumTotalBytes);
@@ -83,7 +83,7 @@ internal static partial class ContentCook
             foreach (var input in meshInputs) {
                 cancellationToken.ThrowIfCancellationRequested(); RequireStage();
                 var bundle = Path.Combine(stage, input.Id.Value.ToString("N"));
-                var cooked = MeshCook.Cook(input.Path, bundle, (ulong)maximumFileBytes, cancellationToken);
+                var cooked = MeshCook.Cook(input.Path, bundle, (ulong)maximumFileBytes, cancellationToken, mikkToolPath);
                 foreach (var file in cooked.Files) input.Files.Add(file);
                 if (cooked.Id != input.Id) throw new InvalidDataException("Mesh recipe identity changed during preparation.");
                 if (cooked.BakeLayout is { } layout) layouts.Add(cooked.Id, layout);
