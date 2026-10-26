@@ -19,16 +19,19 @@ public sealed partial class MeshManifest
     public MeshProductReference<MeshRasterRecord>? Raster { get; }
     public MeshProductReference<MeshBvhRecord>? Bvh { get; }
     public MeshProductReference<MeshVirtualRecord>? Virtual { get; }
+    public MeshProductReference<MeshRasterPagesRecord>? RasterPages { get; }
 
     private MeshManifest(AssetId sourceId, string sourceHash, Aabb bounds, int vertexCount,
         int triangleCount, bool hasBakeUvs, int[] materialSlots,
         MeshProductReference<MeshRasterRecord>? raster, MeshProductReference<MeshBvhRecord>? bvh,
-        MeshProductReference<MeshVirtualRecord>? virtualGeometry)
+        MeshProductReference<MeshVirtualRecord>? virtualGeometry, MeshProductReference<MeshRasterPagesRecord>? rasterPages = null)
     {
         if (!sourceId.IsValid) throw new ArgumentException("Source identity must be nonempty.", nameof(sourceId));
         if (raster?.Id == sourceId || bvh?.Id == sourceId || virtualGeometry?.Id == sourceId
             || (raster is not null && bvh?.Id == raster.Id)
-            || (virtualGeometry is not null && (virtualGeometry.Id == raster?.Id || virtualGeometry.Id == bvh?.Id)))
+            || (virtualGeometry is not null && (virtualGeometry.Id == raster?.Id || virtualGeometry.Id == bvh?.Id))
+            || (rasterPages is not null && (rasterPages.Id == sourceId || rasterPages.Id == raster?.Id
+                || rasterPages.Id == bvh?.Id || rasterPages.Id == virtualGeometry?.Id)))
             throw new ArgumentException("Source and independently typed products must use distinct identities.");
         if (sourceHash.Length != 64 || sourceHash.Any(c => !char.IsAsciiHexDigit(c)))
             throw new ArgumentException("Source hash must contain a SHA256 hexadecimal digest.", nameof(sourceHash));
@@ -54,11 +57,12 @@ public sealed partial class MeshManifest
         Raster = raster;
         Bvh = bvh;
         Virtual = virtualGeometry;
+        RasterPages = rasterPages;
     }
 
     public static MeshManifest Create(AssetId sourceId, MeshSource source,
         MeshProductReference<MeshRasterRecord>? raster = null, MeshProductReference<MeshBvhRecord>? bvh = null,
-        MeshProductReference<MeshVirtualRecord>? virtualGeometry = null)
+        MeshProductReference<MeshVirtualRecord>? virtualGeometry = null, MeshProductReference<MeshRasterPagesRecord>? rasterPages = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         var slots = new HashSet<int>();
@@ -69,6 +73,14 @@ public sealed partial class MeshManifest
         var materialSlots = slots.ToArray();
         Array.Sort(materialSlots);
         return new(sourceId, source.ContentHash, source.Bounds, source.Vertices.Length,
-            source.Indices.Length / 3, source.HasBakeUvs, materialSlots, raster, bvh, virtualGeometry);
+            source.Indices.Length / 3, source.HasBakeUvs, materialSlots, raster, bvh, virtualGeometry, rasterPages);
+    }
+
+    /// <summary>Snapshots an independently produced page index while retaining the original source/product inventory.</summary>
+    public MeshManifest WithRasterPages(MeshProductReference<MeshRasterPagesRecord> rasterPages)
+    {
+        ArgumentNullException.ThrowIfNull(rasterPages);
+        return new(Source, SourceHash, Bounds, VertexCount, TriangleCount, HasBakeUvs, _materialSlots,
+            Raster, Bvh, Virtual, rasterPages);
     }
 }

@@ -19,12 +19,22 @@ internal static partial class PbrSceneFiles
     internal sealed class PageSource : IAsyncDisposable
     {
         private readonly Dictionary<AssetId, (MeshVirtualPagesData Index, int Page)> _pages = [];
+        private readonly Dictionary<AssetId, (MeshRasterPagesData Index, int Page)> _rasterPages = [];
         private readonly Dictionary<AssetId, PbrTextureMipReference> _mips = [];
         private readonly AssetChunkCache _cache;
         internal AssetChunkCacheStatistics Statistics => _cache.Statistics;
 
         internal PageSource(string scenePath, HttpClient client, Prepared<MeshVirtualRecord> prepared,
             long cacheBytes = 32L * 1024 * 1024)
+            : this(scenePath, client, prepared, prepared.Products, new Dictionary<AssetId, MeshRasterPagesRecord>(), cacheBytes) { }
+
+        internal PageSource(string scenePath, HttpClient client, Prepared<MeshRasterPagesRecord> prepared,
+            long cacheBytes = 32L * 1024 * 1024)
+            : this(scenePath, client, prepared, new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Products, cacheBytes) { }
+
+        private PageSource(string scenePath, HttpClient client, Prepared prepared,
+            IReadOnlyDictionary<AssetId, MeshVirtualRecord> virtualProducts,
+            IReadOnlyDictionary<AssetId, MeshRasterPagesRecord> rasterProducts, long cacheBytes)
         {
             var http = AssetInput.TryGetHttpUri(scenePath, out var uri);
             var root = http ? null : Path.GetDirectoryName(Path.GetFullPath(scenePath));
@@ -32,11 +42,12 @@ internal static partial class PbrSceneFiles
             foreach (var mesh in prepared.Meshes.Values) {
                 claims.Add(mesh.Data.Source);
                 if (mesh.Data.Raster is { } raster) claims.Add(raster.Id);
+                if (mesh.Data.RasterPages is { } rasterPages) claims.Add(rasterPages.Id);
                 if (mesh.Data.Virtual is { } virtuals) claims.Add(virtuals.Id);
                 if (mesh.Data.Bvh is { } bvh) claims.Add(bvh.Id);
             }
             var locations = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var product in prepared.Products) {
+            foreach (var product in virtualProducts) {
                 var index = product.Value.Data;
                 if (index.ProductId != product.Key) throw new InvalidAssetException("Virtual index belongs to another logical product.");
                 for (var p = 0; p < index.Pages.Length; p++) {
@@ -49,17 +60,33 @@ internal static partial class PbrSceneFiles
                     locations.TryAdd(page.ContentHash, page.Id.Value.ToString("N") + ".siaasset");
                 }
             }
+            foreach (var product in rasterProducts) {
+                var index = product.Value.Data;
+                if (index.ProductId != product.Key) throw new InvalidAssetException("Raster page index belongs to another logical product.");
+                for (var pageIndex = 0; pageIndex < index.Pages.Length; pageIndex++) {
+                    var page = index.Pages[pageIndex];
+                    if (claims.Contains(page.Id) || _pages.ContainsKey(page.Id))
+                        throw new InvalidAssetException("Raster page aliases another asset kind.");
+                    if (!_rasterPages.TryAdd(page.Id, (index, pageIndex))) {
+                        var previous = _rasterPages[page.Id];
+                        var prior = previous.Index.Pages[previous.Page];
+                        if (prior.ContentHash != page.ContentHash || prior.EncodedBytes != page.EncodedBytes)
+                            throw new InvalidAssetException("Raster page ID has conflicting revisions.");
+                    }
+                    locations.TryAdd(page.ContentHash, page.Id.Value.ToString("N") + ".siaasset");
+                }
+            }
             foreach (var texture in prepared.Textures.Values) {
                 if (texture.Mips is not { } index) continue;
                 foreach (var mip in index.Mips) {
-                    if (claims.Contains(mip.Id) || _pages.ContainsKey(mip.Id))
+                    if (claims.Contains(mip.Id) || _pages.ContainsKey(mip.Id) || _rasterPages.ContainsKey(mip.Id))
                         throw new InvalidAssetException("Texture mip aliases another scene asset.");
                     if (!_mips.TryAdd(mip.Id, mip) && !SameMip(_mips[mip.Id], mip))
                         throw new InvalidAssetException("Texture mip ID has conflicting revisions.");
                 }
             }
             _cache = new(async (chunk, token) => {
-                // Only legacy geometry needs an ID-to-file mapping. Authenticated typed
+                // Geometry products use an ID-to-file mapping. Authenticated typed
                 // mip references already carry content IDs; resolve their location on demand.
                 var name = locations.TryGetValue(chunk.Id, out var page) ? page : chunk.FileName;
                 var path = http ? new Uri(uri!, name).AbsoluteUri : Path.Combine(root!, name);
@@ -89,6 +116,19 @@ internal static partial class PbrSceneFiles
             var descriptor = use.Index.Pages[use.Page];
             var record = await ChunkLoader.LoadAsync(descriptor.Content, _cache,
                 maximumBytes: MeshVirtualPageData.MaximumEncodedBytes, cancellationToken: token).ConfigureAwait(false);
+            use.Index.ValidatePage(use.Page, record.Data, token);
+            return record;
+        }
+
+        internal async Task<MeshRasterPageRecord> ReadRasterAsync(AssetRefer<MeshRasterPageRecord>.Id reference, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!_rasterPages.TryGetValue(reference.Value, out var use)) throw new AssetNotFoundException("Unknown typed Raster page.");
+            var descriptor = use.Index.Pages[use.Page];
+            // The synchronous codec's contiguous input is independently capped at one 256 KiB leaf.
+            var record = await ChunkLoader.LoadAsync<MeshRasterPageRecord, ulong>(descriptor.Content, _cache,
+                MeshRasterPageData.DefaultMaximumBytes, maximumBytes: descriptor.EncodedBytes,
+                cancellationToken: token).ConfigureAwait(false);
             use.Index.ValidatePage(use.Page, record.Data, token);
             return record;
         }

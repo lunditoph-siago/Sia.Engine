@@ -30,6 +30,7 @@ internal static partial class MeshCook
         public int? BakeResolution { get; init; }
         public int? MaximumBakeResolution { get; init; }
         public Guid? Raster { get; init; }
+        public Guid? RasterPages { get; init; }
         public VirtualProduct? Virtual { get; init; }
         public BvhProduct? Bvh { get; init; }
     }
@@ -133,10 +134,23 @@ internal static partial class MeshCook
             }
 
             Write(recipe.Source, source.Save);
-            var raster = recipe.Raster is { } rasterId
-                ? Product<MeshRasterAsset, MeshRasterRecord>(rasterId,
-                    () => new() { Data = MeshRasterData.Build(source, maximumBytes: maximumBytes, cancellationToken: cancellationToken) },
-                    a => a.Data.BuildKey, (a, s) => a.Data.Save(s)) : null;
+            MeshRasterData? rasterData = null;
+            MeshProductReference<MeshRasterRecord>? raster = null;
+            if (recipe.Raster is { } rasterId) {
+                var built = MeshRasterData.Build(source, maximumBytes: maximumBytes, cancellationToken: cancellationToken);
+                rasterData = built;
+                raster = Product<MeshRasterAsset, MeshRasterRecord>(rasterId,
+                    () => new() { Data = built }, a => a.Data.BuildKey, (a, s) => a.Data.Save(s));
+            }
+            MeshProductReference<MeshRasterPagesRecord>? rasterPages = null;
+            if (recipe.RasterPages is { } pagedId) {
+                var index = MeshRasterPagesData.Build(rasterData!, raster!.Id, new(pagedId),
+                    (id, page) => Product<MeshRasterPageAsset, MeshRasterPageRecord>(id.Value,
+                        () => new() { Data = page }, a => a.Data.ContentHash, (a, s) => a.Data.Save(s, cancellationToken)),
+                    maximumBytes, cancellationToken);
+                rasterPages = Product<MeshRasterPagesAsset, MeshRasterPagesRecord>(pagedId,
+                    () => new() { Data = index }, a => a.Data.BuildKey, (a, s) => a.Data.Save(s, cancellationToken));
+            }
             MeshProductReference<MeshVirtualRecord>? virtualData = null;
             if (recipe.Virtual is { } virtualRecipe) {
                 var derived = MeshVirtualPagesData.Build(source, new(virtualRecipe.Id), virtualRecipe.Settings, maximumBytes, cancellationToken);
@@ -151,7 +165,7 @@ internal static partial class MeshCook
                 ? Product<MeshBvhAsset, MeshBvhRecord>(bvhRecipe.Id,
                     () => new() { Data = MeshBvhData.Build(source, bvhRecipe.Settings, maximumBytes, cancellationToken) },
                     a => a.Data.BuildKey, (a, s) => a.Data.Save(s)) : null;
-            var manifest = MeshManifest.Create(new(recipe.Source), source, raster, bvh, virtualData);
+            var manifest = MeshManifest.Create(new(recipe.Source), source, raster, bvh, virtualData, rasterPages);
             var mesh = world.AcquireAsset(new AssetId(recipe.Mesh), () => new MeshManifestRecord { Data = manifest });
             Write(recipe.Mesh, mesh.Get<MeshManifestAsset>().Data.Save);
             cancellationToken.ThrowIfCancellationRequested();
@@ -193,6 +207,10 @@ internal static partial class MeshCook
         }
         Claim(recipe.Mesh); Claim(recipe.Source);
         if (recipe.Raster is { } raster) Claim(raster);
+        if (recipe.RasterPages is { } rasterPages) {
+            if (recipe.Raster is null) throw new InvalidDataException("Raster pages require an explicitly selected Raster product.");
+            Claim(rasterPages);
+        }
         if (recipe.Virtual is { } virtualData) Claim(virtualData.Id);
         if (recipe.Bvh is { } bvh) Claim(bvh.Id);
     }

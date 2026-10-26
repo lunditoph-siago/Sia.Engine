@@ -28,7 +28,7 @@ internal static class MeshDataIO
             Vector(value.Position); Vector(value.Normal); Float(value.UV.x); Float(value.UV.y);
             Float(value.Tangent.x); Float(value.Tangent.y); Float(value.Tangent.z); Float(value.Tangent.w);
         }
-        public void Bytes(ReadOnlySpan<byte> bytes)
+        public void Bytes(scoped ReadOnlySpan<byte> bytes)
         {
             while (!bytes.IsEmpty) {
                 if (_used == _buffer.Length) Flush();
@@ -69,7 +69,7 @@ internal static class MeshDataIO
             for (var i = 0; i < result.Length; i++) result[i] = UInt();
             return result;
         }
-        public void Bytes(Span<byte> bytes)
+        public void Bytes(scoped Span<byte> bytes)
         {
             while (!bytes.IsEmpty) {
                 Ensure(1);
