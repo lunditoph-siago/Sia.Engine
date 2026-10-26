@@ -20,7 +20,7 @@ internal sealed partial class PbrGpuScene
             var tree = source.Hierarchies[instance.AssetIndex];
             var ids = tree.Nodes.Take(tree.Roots).SelectMany(node => node.Pages).Select(page => page.Id).Distinct(StringComparer.Ordinal);
             foreach (var id in ids) {
-                if (instanced && !roots.Add(id)) continue;
+                if (instanced && !roots.Add(source.ResidentRoots[id].Data?.ContentHash ?? id)) continue;
                 var page = source.PageTable[id]; vertices += (uint)page.Vertices; triangles += (uint)page.Triangles;
             }
         }

@@ -246,14 +246,13 @@ public sealed partial class PbrRenderer :
         try {
             _queue = frame.Queue.GetWgpu<WGPUQueue>();
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
-            if (stream?.RequiresInstancing == true && !Settings.Streaming.GpuTraversal)
-                throw new NotSupportedException("Mixed scene input requires local shared GPU instance storage.");
+            var cpuStreamInstances = raster is null && stream?.RequiresInstancing == true && !Settings.Streaming.GpuTraversal;
             if (raster is null && stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             var rasterPositionTables=raster is not null && Wgpu.GetLimits(frame.Device.GetWgpu<WGPUDevice>()).MaxStorageBuffersPerShaderStage>=8;
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 raster is null && stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
-                Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables);
+                Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables,cpuStreamInstances);
             Materials = new(frame, (stream?.Materials ?? raster!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches,Pipelines.RasterGeometryLayout,rasterPositionTables)
                 : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);

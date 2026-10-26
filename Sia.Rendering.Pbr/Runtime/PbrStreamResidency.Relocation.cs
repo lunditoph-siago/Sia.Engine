@@ -86,13 +86,13 @@ internal sealed partial class PbrStreamResidency
                 var geometry = _source.UsePage(page.Id, record!);
                 var transform = float4x4.identity;
                 var material = 1;
-                if (!_settings.GpuTraversal) {
+                if (!SharedInstances) {
                     var instance = _source.Instances.Span[move.Key.Instance];
                     transform = instance.Transform;
                     material = instance.MaterialIndex + 1;
                 }
                 move.Upload = _arena.Prepare(geometry, move.Destination, transform,
-                    _settings.GpuTraversal ? 0u : (uint)move.Key.Instance, material);
+                    SharedInstances ? 0u : (uint)move.Key.Instance, material);
             }
             _uploaded += _arena.Advance(move.Upload, _settings.UploadBytesPerFrame - _uploaded);
             if (move.Upload.Complete) _requests.Acknowledge(page.Id);

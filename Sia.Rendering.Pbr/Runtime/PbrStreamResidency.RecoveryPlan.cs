@@ -18,7 +18,7 @@ internal sealed partial class PbrStreamResidency
             || !RecoveryKeyOwned(target) || _resident.ContainsKey(target) || !IsAdmitted(target)) return null;
         var required = _pages[target.Page];
         if (required.Vertices <= 0 || required.Triangles <= 0) return null;
-        var shape = PbrGpuScene.RootShape(_source, _settings.GpuTraversal);
+        var shape = PbrGpuScene.RootShape(_source, SharedInstances);
         if (shape.Vertices > _arena.VertexCapacity || shape.Triangles > _arena.TriangleCapacity) return null;
         var rootsV = new List<StreamRange>();
         var rootsT = new List<StreamRange>();
@@ -77,7 +77,7 @@ internal sealed partial class PbrStreamResidency
     }
 
     private bool RecoveryKeyOwned(Key key)
-        => (uint)key.Page < (uint)_pages.Length && (_settings.GpuTraversal
+        => (uint)key.Page < (uint)_pages.Length && (SharedInstances
             ? key.Instance == -1 : (uint)key.Instance < (uint)_instances.Length);
 
     private static bool RecoveryRangeValid(StreamRange range, uint capacity)

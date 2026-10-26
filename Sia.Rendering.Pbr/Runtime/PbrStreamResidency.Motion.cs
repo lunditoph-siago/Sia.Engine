@@ -8,7 +8,7 @@ internal sealed partial class PbrStreamResidency
     // Called with a fully validated snapshot before any view consumes this frame.
     internal void UpdateTransforms(ReadOnlySpan<PbrInstanceGpu> rows, ReadOnlySpan<Aabb> bounds)
     {
-        if (!_settings.GpuTraversal || rows.Length != _instances.Length || bounds.Length != _instances.Length)
+        if (!SharedInstances || rows.Length != _instances.Length || bounds.Length != _instances.Length)
             throw new ArgumentException("Motion requires matching local GPU instance storage.");
         var changed = false;
         for (var i = 0; i < rows.Length; i++) {
