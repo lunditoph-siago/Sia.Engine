@@ -51,8 +51,10 @@ internal sealed partial class PbrGpuScene
             var maxBinding = _gpu.Limits.MaxStorageBufferBindingSize;
             var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes), maxBinding / StreamGeometryPage.VertexBytes);
             var triangleCapacity = System.Math.Min(rootsT + (detailBytes / 5 / 12), maxBinding / 12);
+            if (sharedInstances && !streaming.GpuTraversal && source.Instances.Length > 0)
+                triangleCapacity = System.Math.Min(triangleCapacity, (uint.MaxValue - 1ul) / (ulong)source.Instances.Length);
             if (vertexCapacity < rootsV || triangleCapacity < rootsT)
-                throw new NotSupportedException("Stream roots exceed WebGPU storage binding limits.");
+                throw new NotSupportedException("Stream roots exceed storage binding or CPU visibility addressing limits.");
             _arena = new(frame, checked((uint)System.Math.Max(1ul, vertexCapacity)), checked((uint)System.Math.Max(1ul, triangleCapacity)), arenaBudget);
             VertexCount = _arena.VertexCapacity;
             TriangleCount = OpaqueTriangles = _arena.TriangleCapacity;
