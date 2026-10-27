@@ -43,7 +43,7 @@ public sealed partial class PbrLightmapData
     public ReadOnlySpan<PbrLightmapReceiver> Receivers => _receivers;
     public ReadOnlySpan<PbrLightmapPageDescriptor> Pages => _pages;
     public ReadOnlySpan<PbrLightmapChart> Charts => _charts;
-    public ulong EncodedBytes => 236ul + (ulong)BakeSettings.EnvironmentBytes + (ulong)_receivers.Length * 120 + (ulong)_charts.Length * 48 + (ulong)_pages.Length * 68;
+    public ulong EncodedBytes => 288ul + (ulong)_receivers.Length * 120 + (ulong)_charts.Length * 48 + (ulong)_pages.Length * 68;
     /// <summary>Array elements and hash characters; excludes object headers, temporary validation sets and external pages.</summary>
     public ulong PayloadBytes => OwnedBytes(_receivers.Length, _charts.Length, _pages.Length) + BakeSettings.EnvironmentPayloadBytes;
 
@@ -155,7 +155,7 @@ public sealed partial class PbrLightmapData
     {
         if (receivers is < 1 or > MaximumReceivers || charts < receivers || charts > MaximumCharts || pages is < 1 or > MaximumPages)
             throw new ArgumentException("Invalid lightmap manifest counts.");
-        var encoded = 236ul + (environment ? 48ul : 0) + (ulong)receivers * 120 + (ulong)charts * 48 + (ulong)pages * 68;
+        var encoded = 288ul + (ulong)receivers * 120 + (ulong)charts * 48 + (ulong)pages * 68;
         if (encoded > MaximumEncodedBytes)
             throw new ArgumentException("Lightmap manifest exceeds its encoded/owned payload budget.");
         return System.Math.Max(encoded, OwnedBytes(receivers, charts, pages) + (environment ? 256ul : 0));

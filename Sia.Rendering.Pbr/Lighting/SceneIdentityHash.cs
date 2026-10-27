@@ -32,7 +32,7 @@ internal sealed class SceneIdentityHash
         if (_count != 0) _hash.Append(_buffer.AsSpan(0, _count));
         _count = 0;
         var identity = new byte[32];
-        "SIA-XXH128-v1"u8.CopyTo(identity);
+        "SIA-XXH128"u8.CopyTo(identity);
         _hash.GetHashAndReset(identity.AsSpan(16));
         return identity;
     }

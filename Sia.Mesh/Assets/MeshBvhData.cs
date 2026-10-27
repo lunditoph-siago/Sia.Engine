@@ -48,7 +48,7 @@ public sealed partial class MeshBvhData
     private static string ComputeBuildKey(string geometryHash, MeshBvhBuildSettings settings)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIAMESHBVH2"u8);
+        hash.AppendData("SIAMESHBVH"u8);
         hash.AppendData(Convert.FromHexString(geometryHash));
         Span<byte> bytes = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(bytes, settings.MaxLeafTriangles);
@@ -77,7 +77,7 @@ public sealed partial class MeshBvhData
     private static string HashGeometry(MeshSource source, CancellationToken cancellationToken)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIAMESHLOCALGEOMETRY2"u8);
+        hash.AppendData("SIAMESHLOCALGEOMETRY"u8);
         Span<byte> bytes = stackalloc byte[16];
         BinaryPrimitives.WriteInt32LittleEndian(bytes, source.Vertices.Length);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], source.Indices.Length / 3);

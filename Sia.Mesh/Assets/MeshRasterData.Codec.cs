@@ -11,7 +11,7 @@ public sealed partial class MeshRasterData
     public void Save(Stream stream, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
-        Span<byte> header = stackalloc byte[137]; "SIAMSHR2"u8.CopyTo(header);
+        Span<byte> header = stackalloc byte[137]; "SIAMSHR\0"u8.CopyTo(header);
         Put(header, 8, _vertices.Length); Put(header, 12, _sourceIndexCount); Put(header, 16, _indices.Length);
         Put(header, 20, _sections.Length); Put(header, 24, _lods.Length); header[28] = (byte)(HasBakeUvs ? 1 : 0);
         Put(header, 29, Bounds.Min.x); Put(header, 33, Bounds.Min.y); Put(header, 37, Bounds.Min.z);
@@ -41,7 +41,7 @@ public sealed partial class MeshRasterData
         var vertices = Int(header, 8); var sourceCount = Int(header, 12); var indices = Int(header, 16); var sections = Int(header, 20); var lods = Int(header, 24); var flags = header[28];
         var settings = new MeshRasterBuildSettings(Int(header, 117), Int(header, 121), BitConverter.Int32BitsToSingle(Int(header, 125)),
             BitConverter.Int32BitsToSingle(Int(header, 129)), BitConverter.Int32BitsToSingle(Int(header, 133)));
-        if (!header[..8].SequenceEqual("SIAMSHR2"u8) || !settings.IsValid || flags > 1 || vertices <= 0
+        if (!header[..8].SequenceEqual("SIAMSHR\0"u8) || !settings.IsValid || flags > 1 || vertices <= 0
             || sourceCount <= 0 || sourceCount % 3 != 0 || indices < sourceCount || indices % 3 != 0
             || sections <= 0 || sections > sourceCount / 3 || lods < sections || (long)lods > (long)sections * settings.MaximumLods)
             throw new InvalidDataException("Invalid Raster LOD header.");

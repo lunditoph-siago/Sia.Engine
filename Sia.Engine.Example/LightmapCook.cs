@@ -28,7 +28,6 @@ internal static partial class LightmapCook
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         cancellationToken.ThrowIfCancellationRequested();
         var actualSettings = settings ?? new();
-        var environmentMetadataBytes = actualSettings.Environment is null ? 0ul : 48ul;
         if (environment is not null && 2ul * IblEnvironmentAsset.EncodedBytes > maximumWorkingBytes)
             throw new ArgumentException("Lightmap environment arrays and serialization exceed working admission.", nameof(maximumWorkingBytes));
         actualSettings.ValidateEnvironment(environment?.Data);
@@ -76,7 +75,7 @@ internal static partial class LightmapCook
                     var member=PbrLightmapSetData.ReceiverProductId(productId,instance.Id,material.Slot);
                     if (!claims.TryAdd(member,typeof(PbrLightmapRecord))) throw new InvalidDataException("Lightmap receiver product aliases an asset identity.");
                     var metadataBytes=PbrLightmapData.RequiredBytes(1,count,tiles,actualSettings);
-                    var memberBytes=356ul+environmentMetadataBytes+(ulong)count*48+(ulong)tiles*68;
+                    var memberBytes=408ul+(ulong)count*48+(ulong)tiles*68;
                     if (memberBytes>maximumFileBytes) throw new InvalidDataException("Lightmap receiver metadata exceeds per-file admission.");
                     receivers.Add(new(instance,layout,material.Slot,member,count,tiles,firstMip)); pageCount=checked(pageCount+tiles);
                     _=PbrLightmapSetData.RequiredBytes(receivers.Count,receivers.Count,actualSettings);
@@ -92,7 +91,7 @@ internal static partial class LightmapCook
             var rootMetadata=PbrLightmapSetData.RequiredBytes(receivers.Count,receivers.Count,actualSettings);
             var metadata=checked(rootMetadata+largestMetadata);
             if (metadata > maximumMetadataBytes) throw new ArgumentException("Lightmap manifest exceeds its metadata budget.", nameof(maximumMetadataBytes));
-            var indexBytes=232ul+environmentMetadataBytes+(ulong)receivers.Count*236;
+            var indexBytes=284ul+(ulong)receivers.Count*236;
             var environmentBytes=environment is null ? 0ul : (ulong)IblEnvironmentAsset.EncodedBytes;
             var outputBytes=checked(encodedProducts+indexBytes+environmentBytes);
             if (outputBytes > maximumEncodedBytes || indexBytes > maximumFileBytes || environmentBytes > maximumFileBytes || receivers.Any(receiver =>

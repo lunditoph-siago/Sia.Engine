@@ -6,7 +6,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial record PbrLightmapBakeSettings
 {
-    // Fixed procedural profile; HDR metadata appends one authenticated typed dependency.
+    // One fixed profile with explicit optional authenticated environment input.
     internal void Encode(Span<byte> bytes)
     {
         WriteVector(bytes, Sky.Horizon); WriteVector(bytes[12..], Sky.Zenith);
@@ -18,18 +18,23 @@ public sealed partial record PbrLightmapBakeSettings
         BinaryPrimitives.WriteInt32LittleEndian(bytes[92..], Samples);
         BinaryPrimitives.WriteSingleLittleEndian(bytes[96..], MaximumDistance);
         BinaryPrimitives.WriteSingleLittleEndian(bytes[100..], RayBias);
+        bytes.Slice(104, 52).Clear();
         if (Environment is { } environment) {
-            environment.Id.Value.TryWriteBytes(bytes.Slice(104, 16), bigEndian: true, out _);
-            _ = Convert.FromHexString(environment.Chunks[0].Id, bytes.Slice(120, 32), out _, out _);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes[104..], 1);
+            environment.Id.Value.TryWriteBytes(bytes.Slice(108, 16), bigEndian: true, out _);
+            _ = Convert.FromHexString(environment.Chunks[0].Id, bytes.Slice(124, 32), out _, out _);
         }
     }
 
     internal static PbrLightmapBakeSettings Decode(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length is not (104 or 152)) throw new InvalidDataException("Invalid fixed lightmap input profile length.");
+        if (bytes.Length != InputBytes) throw new InvalidDataException("Invalid fixed lightmap input profile length.");
+        var present = BinaryPrimitives.ReadUInt32LittleEndian(bytes[104..]);
+        if (present > 1 || present == 0 && bytes[108..].IndexOfAnyExcept((byte)0) >= 0)
+            throw new InvalidDataException("Invalid lightmap environment presence or reserved block.");
         var settings = new PbrLightmapBakeSettings {
-            Environment = bytes.Length == 104 ? null : new(new(new Guid(bytes.Slice(104, 16), bigEndian: true)),
-                [new AssetChunk(Convert.ToHexString(bytes.Slice(120, 32)), IblEnvironmentAsset.EncodedBytes)]),
+            Environment = present == 0 ? null : new(new(new Guid(bytes.Slice(108, 16), bigEndian: true)),
+                [new AssetChunk(Convert.ToHexString(bytes.Slice(124, 32)), IblEnvironmentAsset.EncodedBytes)]),
             Sky = new() {
                 Horizon = ReadVector(bytes), Zenith = ReadVector(bytes[12..]), Ground = ReadVector(bytes[24..]),
                 SunRadiance = ReadVector(bytes[36..]), SunDirection = ReadVector(bytes[48..]),
@@ -46,8 +51,7 @@ public sealed partial record PbrLightmapBakeSettings
 
     internal bool SameInputs(PbrLightmapBakeSettings other)
     {
-        if (InputBytes != other.InputBytes) return false;
-        Span<byte> first = stackalloc byte[152]; Span<byte> second = stackalloc byte[152];
+        Span<byte> first = stackalloc byte[InputBytes]; Span<byte> second = stackalloc byte[InputBytes];
         Encode(first); other.Encode(second); return first[..InputBytes].SequenceEqual(second[..InputBytes]);
     }
 

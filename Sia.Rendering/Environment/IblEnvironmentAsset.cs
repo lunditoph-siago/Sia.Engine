@@ -75,8 +75,8 @@ public sealed partial class IblEnvironmentAsset
         // Power-of-two scaling changes range without another rounding step before Half conversion.
         var bits = BitConverter.SingleToUInt32Bits(scale);
         if (scale < 1 || scale > MathF.ScaleB(1, 100) || !float.IsFinite(scale) || (bits & 0x7fffffu) != 0
-            || (scale != 1 && reserved != 0))
-            throw new InvalidDataException("Environment cube scale must be a power of two in [1, 2^100]; scaled data reserves SH[0].w.");
+            || reserved != 0)
+            throw new InvalidDataException("Environment cube scale must be a power of two in [1, 2^100]; SH[0].w is reserved.");
     }
 
     /// <summary>Writes the fixed payload and returns its complete encoded SHA-256 content identity.</summary>
@@ -84,7 +84,7 @@ public sealed partial class IblEnvironmentAsset
     {
         using var payload = new MemoryStream(k_PayloadBytes);
         using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true)) {
-            writer.Write(CubeRadianceScale == 1 ? "SIAENV\0\0"u8 : "SIAENV2\0"u8);
+            writer.Write("SIAIBL\0\0"u8);
             void Vector(float3 v)
             {
                 writer.Write(v.x);
@@ -103,7 +103,7 @@ public sealed partial class IblEnvironmentAsset
                 writer.Write(c.x);
                 writer.Write(c.y);
                 writer.Write(c.z);
-                writer.Write(coefficient++ == 0 && CubeRadianceScale != 1 ? CubeRadianceScale : c.w);
+                writer.Write(coefficient++ == 0 ? CubeRadianceScale : c.w);
             }
             foreach (var v in Cube.Span)
                 writer.Write(BitConverter.HalfToUInt16Bits(v));
@@ -121,27 +121,26 @@ public sealed partial class IblEnvironmentAsset
 
     public static IblEnvironmentAsset Read(Stream source)
     {
+        Span<byte> signature = stackalloc byte[8];
+        source.ReadExactly(signature);
+        if (!signature.SequenceEqual("SIAIBL\0\0"u8))
+            throw new InvalidDataException("Unsupported environment asset.");
         var bytes = new byte[k_PayloadBytes];
-        source.ReadExactly(bytes);
+        signature.CopyTo(bytes);
+        source.ReadExactly(bytes.AsSpan(8));
         Span<byte> checksum = stackalloc byte[32];
         source.ReadExactly(checksum);
         if (!CryptographicOperations.FixedTimeEquals(checksum, SHA256.HashData(bytes)) || source.ReadByte() != -1)
             throw new InvalidDataException("Environment checksum mismatch or trailing data.");
         using var reader = new BinaryReader(new MemoryStream(bytes, writable: false));
-        var signature = reader.ReadBytes(8);
-        var scaled = signature.AsSpan().SequenceEqual("SIAENV2\0"u8);
-        if (!scaled && !signature.AsSpan().SequenceEqual("SIAENV\0\0"u8))
-            throw new InvalidDataException("Unsupported environment asset.");
+        reader.BaseStream.Position = 8;
         float3 Vector() => new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         var sky = new ProceduralSky { Horizon = Vector(), Zenith = Vector(), Ground = Vector(), SunDirection = Vector(), SunRadiance = Vector(), SunExponent = reader.ReadSingle(), Intensity = reader.ReadSingle() };
         var sh = new float4[9];
         for (var i = 0; i < sh.Length; i++)
             sh[i] = new(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-        var scale = scaled ? sh[0].w : 1;
-        if (scaled) {
-            if (scale <= 1) throw new InvalidDataException("Scaled environment requires an explicit scale greater than one.");
-            sh[0].w = 0;
-        }
+        var scale = sh[0].w;
+        sh[0].w = 0;
         ValidateScale(scale, sh[0].w);
         Half[] Values(int count)
         {

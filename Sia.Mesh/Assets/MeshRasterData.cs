@@ -52,7 +52,7 @@ public sealed partial class MeshRasterData
     internal static string ComputeBuildKey(string sourceHash, MeshRasterBuildSettings settings)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIARASTERLOD1"u8); hash.AppendData(Convert.FromHexString(sourceHash));
+        hash.AppendData("SIARASTERLOD"u8); hash.AppendData(Convert.FromHexString(sourceHash));
         Span<byte> bytes = stackalloc byte[20];
         BinaryPrimitives.WriteInt32LittleEndian(bytes, settings.MaximumLods);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], settings.MinimumTriangles);

@@ -17,7 +17,7 @@ public sealed partial class PbrLightmapPageData
     private string Write(Stream stream, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
-        Span<byte> header = stackalloc byte[60]; "SIALMPG1"u8.CopyTo(header);
+        Span<byte> header = stackalloc byte[60]; "SIALMPG\0"u8.CopyTo(header);
         BinaryPrimitives.WriteInt32LittleEndian(header[8..], Edge);
         for (var component = 0; component < 4; component++)
             for (var channel = 0; channel < 3; channel++)
@@ -50,7 +50,7 @@ public sealed partial class PbrLightmapPageData
         if (maximumBytes < 92) throw new InvalidDataException("Lightmap header exceeds its decode budget.");
         try {
             Span<byte> header = stackalloc byte[60]; stream.ReadExactly(header);
-            if (!header[..8].SequenceEqual("SIALMPG1"u8)) throw new InvalidDataException("Invalid lightmap page signature.");
+            if (!header[..8].SequenceEqual("SIALMPG\0"u8)) throw new InvalidDataException("Invalid lightmap page signature.");
             var edge = BinaryPrimitives.ReadInt32LittleEndian(header[8..]); Admit(edge, maximumBytes);
             var count = edge * edge;
             if (stream.CanSeek && stream.Length - stream.Position != 32L + count * 25L)
