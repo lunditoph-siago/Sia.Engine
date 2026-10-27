@@ -128,7 +128,7 @@ public sealed partial class PbrReflectionCaptureData
     private string ComputeInputIdentity(CancellationToken token)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIAPBRREFLECTIONINPUT1"u8); hash.AppendData(Convert.FromHexString(SceneIdentity));
+        hash.AppendData("SIAPBRREFLECTIONINPUT"u8); hash.AppendData(Convert.FromHexString(SceneIdentity));
         hash.AppendData(Convert.FromHexString(SourceEnvironment.ContentHash));
         Span<byte> values = stackalloc byte[72]; Vector(values, Position); Vector(values[12..], Bounds.Min); Vector(values[24..], Bounds.Max);
         Settings.Encode(values[36..]); hash.AppendData(values);

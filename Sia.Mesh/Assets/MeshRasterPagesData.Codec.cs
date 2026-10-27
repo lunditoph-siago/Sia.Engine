@@ -19,7 +19,7 @@ public sealed partial class MeshRasterPagesData
 
     private string ComputeBuildKey(CancellationToken token)
     {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); hash.AppendData("SIARASTERPAGES1"u8);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); hash.AppendData("SIARASTERPAGES"u8);
         Span<byte> header = stackalloc byte[HeaderBytes]; WriteHeader(header, true); hash.AppendData(header);
         WriteBody(Stream.Null, hash, token); return Convert.ToHexString(hash.GetHashAndReset());
     }

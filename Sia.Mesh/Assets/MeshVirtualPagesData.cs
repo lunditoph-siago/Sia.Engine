@@ -180,7 +180,7 @@ public sealed partial class MeshVirtualPagesData
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData("SIAMESHVIRTUALPAGES"u8);
         using var derivation = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        derivation.AppendData("SIAMESHVIRTUAL1"u8);
+        derivation.AppendData("SIAMESHVIRTUAL"u8);
         derivation.AppendData(Convert.FromHexString(sourceHash));
         Span<byte> options = stackalloc byte[20];
         BinaryPrimitives.WriteInt32LittleEndian(options, settings.MaxLeafTriangles);

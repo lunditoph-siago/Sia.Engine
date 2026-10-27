@@ -15,24 +15,17 @@ public sealed partial class PbrSceneData
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         var attribution = s_utf8.GetBytes(Attribution);
-        Span<byte> framing = stackalloc byte[48];
-        var header = framing[..(HasAuthoredCameras ? 48 : HasAuthoredLights ? 40 : 32)];
-        (HasAuthoredCameras ? "SIASCNR3"u8 : HasAuthoredLights ? "SIASCNR2"u8 : "SIASCNR1"u8).CopyTo(header);
+        Span<byte> header = stackalloc byte[48];
+        "SIASCNR\0"u8.CopyTo(header);
         BinaryPrimitives.WriteInt32LittleEndian(header[8..], _bindings.Length);
         BinaryPrimitives.WriteInt32LittleEndian(header[12..], _instances.Length);
         BinaryPrimitives.WriteInt32LittleEndian(header[16..], MaterialReferenceCount);
         BinaryPrimitives.WriteInt32LittleEndian(header[20..], attribution.Length);
         BinaryPrimitives.WriteUInt64LittleEndian(header[24..], EncodedBytes - (ulong)header.Length - 32);
-        if (HasAuthoredCameras) {
-            BinaryPrimitives.WriteInt32LittleEndian(header[32..], Lights.Length);
-            BinaryPrimitives.WriteInt32LittleEndian(header[36..], Cameras.Length);
-            BinaryPrimitives.WriteUInt32LittleEndian(header[40..], HasAuthoredLights ? 1u : 0);
-            BinaryPrimitives.WriteUInt32LittleEndian(header[44..], 0);
-        }
-        else if (HasAuthoredLights) {
-            BinaryPrimitives.WriteInt32LittleEndian(header[32..], Lights.Length);
-            BinaryPrimitives.WriteUInt32LittleEndian(header[36..], 0);
-        }
+        BinaryPrimitives.WriteInt32LittleEndian(header[32..], Lights.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(header[36..], Cameras.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[40..], (HasAuthoredLights ? 1u : 0) | (HasAuthoredCameras ? 2u : 0));
+        BinaryPrimitives.WriteUInt32LittleEndian(header[44..], 0);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); WriteBlock(stream, header, hash);
         Span<byte> block = stackalloc byte[84];
         foreach (var binding in _bindings) {
@@ -61,36 +54,25 @@ public sealed partial class PbrSceneData
     public static PbrSceneData Load(Stream stream, ulong maximumBytes = 128ul * 1024 * 1024, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
-        if (maximumBytes < 64) throw new InvalidDataException("Scene framing exceeds its decode limit.");
+        if (maximumBytes < 80) throw new InvalidDataException("Scene framing exceeds its decode limit.");
         try {
-            Span<byte> framing = stackalloc byte[48]; stream.ReadExactly(framing[..32]);
-            var authoredCameras = framing[..8].SequenceEqual("SIASCNR3"u8);
-            var authored = framing[..8].SequenceEqual("SIASCNR2"u8);
-            if (!authoredCameras && !authored && !framing[..8].SequenceEqual("SIASCNR1"u8)) throw new InvalidDataException("Invalid reference-scene signature.");
-            if (authoredCameras) {
-                if (maximumBytes < 80) throw new InvalidDataException("Scene framing exceeds its decode limit.");
-                stream.ReadExactly(framing[32..]);
-                var flags = BinaryPrimitives.ReadUInt32LittleEndian(framing[40..]);
-                if ((flags & ~1u) != 0 || BinaryPrimitives.ReadUInt32LittleEndian(framing[44..]) != 0)
-                    throw new InvalidDataException("Unknown reference-scene header flags.");
-                authored = (flags & 1) != 0;
-            }
-            else if (authored) {
-                if (maximumBytes < 72) throw new InvalidDataException("Scene framing exceeds its decode limit.");
-                stream.ReadExactly(framing[32..40]);
-                if (BinaryPrimitives.ReadUInt32LittleEndian(framing[36..]) != 0)
-                    throw new InvalidDataException("Unknown reference-scene header flags.");
-            }
-            var header = framing[..(authoredCameras ? 48 : authored ? 40 : 32)];
-            var lightCount = authoredCameras || authored ? BinaryPrimitives.ReadInt32LittleEndian(header[32..]) : 0;
-            var cameraCount = authoredCameras ? BinaryPrimitives.ReadInt32LittleEndian(header[36..]) : 0;
+            Span<byte> header = stackalloc byte[48]; stream.ReadExactly(header);
+            if (!header[..8].SequenceEqual("SIASCNR\0"u8)) throw new InvalidDataException("Invalid reference-scene signature.");
+            var flags = BinaryPrimitives.ReadUInt32LittleEndian(header[40..]);
+            if ((flags & ~3u) != 0 || BinaryPrimitives.ReadUInt32LittleEndian(header[44..]) != 0)
+                throw new InvalidDataException("Unknown reference-scene header flags.");
+            var authored = (flags & 1u) != 0;
+            var authoredCameras = (flags & 2u) != 0;
+            var lightCount = BinaryPrimitives.ReadInt32LittleEndian(header[32..]);
+            var cameraCount = BinaryPrimitives.ReadInt32LittleEndian(header[36..]);
             var bindingCount = BinaryPrimitives.ReadInt32LittleEndian(header[8..]);
             var instanceCount = BinaryPrimitives.ReadInt32LittleEndian(header[12..]);
             var slotCount = BinaryPrimitives.ReadInt32LittleEndian(header[16..]);
             var attributionLength = BinaryPrimitives.ReadInt32LittleEndian(header[20..]);
             if (bindingCount is < 0 or > MaximumBindings || instanceCount is < 0 or > MaximumInstances
                 || slotCount is < 0 or > MaximumMaterialReferences || attributionLength is < 0 or > MaximumAttributionBytes
-                || lightCount is < 0 or > MaximumLights || cameraCount is < 0 or > MaximumCameras || !authored && lightCount != 0
+                || lightCount is < 0 or > MaximumLights || cameraCount is < 0 or > MaximumCameras
+                || !authored && lightCount != 0 || !authoredCameras && cameraCount != 0
                 || slotCount < bindingCount || slotCount > (long)bindingCount * Mesh.MeshManifest.MaximumMaterialSlots)
                 throw new InvalidDataException("Invalid reference-scene metadata counts.");
             var length = (ulong)bindingCount * 20 + (ulong)slotCount * 20 + (ulong)instanceCount * 84 + (ulong)lightCount * 76

@@ -9,7 +9,7 @@ public sealed partial class PbrDiffuseMoments
 {
     /// <summary>
     /// Integrates the finest-LOD diffuse texture functions over uniform UV using borrowed whole
-    /// SIATEXR1 streams. Inputs require equal dimensions or constant metallic B,
+    /// SIATEXR pixel streams. Inputs require equal dimensions or constant metallic B,
     /// repeat addressing and unambiguous filtering.
     /// The bound includes both complete encoded inputs and known array elements, not just working pixels.
     /// </summary>

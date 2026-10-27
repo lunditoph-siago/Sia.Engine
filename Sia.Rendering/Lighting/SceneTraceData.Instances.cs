@@ -97,7 +97,7 @@ public sealed partial class SceneTraceData
         if (!sceneIdentity.IsEmpty) Identity = sceneIdentity.ToArray();
         else {
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            hash.AppendData("SIAINSTANCEPROBETRACE1"u8);
+            hash.AppendData("SIAINSTANCEPROBETRACE"u8);
             hash.AppendData(MemoryMarshal.AsBytes(Geometry.Span)); hash.AppendData(MemoryMarshal.AsBytes(Instances.Span));
             hash.AppendData(MemoryMarshal.AsBytes(Packed.Span)); Identity = hash.GetHashAndReset();
         }

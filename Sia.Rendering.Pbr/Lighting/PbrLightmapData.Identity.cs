@@ -11,10 +11,10 @@ public sealed partial class PbrLightmapData
     private string ComputeBakeIdentity(CancellationToken token)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(BakeSettings.Environment is null ? "SIALIGHTMAP-AREAL1-1"u8 : "SIALIGHTMAP-AREAL1-HDR1"u8);
-        Span<byte> bytes = stackalloc byte[152];
+        hash.AppendData("SIALIGHTMAP-AREAL1"u8);
+        Span<byte> bytes = stackalloc byte[PbrLightmapBakeSettings.InputBytes];
         _ = Convert.FromHexString(SceneIdentity, bytes[..32], out _, out _); hash.AppendData(bytes[..32]);
-        BakeSettings.Encode(bytes); hash.AppendData(bytes[..BakeSettings.InputBytes]);
+        BakeSettings.Encode(bytes); hash.AppendData(bytes);
         BinaryPrimitives.WriteInt32LittleEndian(bytes, _receivers.Length); hash.AppendData(bytes[..4]);
         foreach (var receiver in _receivers) {
             token.ThrowIfCancellationRequested();

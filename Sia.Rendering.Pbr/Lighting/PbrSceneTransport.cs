@@ -48,7 +48,7 @@ public static partial class PbrSceneTransport
 
     internal static byte[] ReferenceIdentity(ReadOnlySpan<PbrMeshInstance> instances, Func<int, byte[]> binding, CancellationToken token)
     {
-        var hash = new SceneIdentityHash(); hash.AppendData("SIAPBRREFERENCETRACE1"u8);
+        var hash = new SceneIdentityHash(); hash.AppendData("SIAPBRREFERENCETRACE"u8);
         Span<byte> id = stackalloc byte[16]; Count(hash, instances.Length);
         foreach (var instance in instances) {
             token.ThrowIfCancellationRequested();

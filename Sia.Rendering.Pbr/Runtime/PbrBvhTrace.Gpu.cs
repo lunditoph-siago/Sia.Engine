@@ -117,7 +117,7 @@ public sealed partial class PbrBvhTrace
     private void WriteGeometryDigest(Span<uint4> output)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIABVHGPUTABLE2"u8);
+        hash.AppendData("SIABVHGPUTABLE"u8);
         foreach (var mesh in Scene.Geometry) hash.AppendData(Convert.FromHexString(mesh.BuildKey));
         Span<byte> digest = stackalloc byte[32]; hash.GetHashAndReset(digest);
         output[0] = Words(digest[..16]); output[1] = Words(digest[16..]);

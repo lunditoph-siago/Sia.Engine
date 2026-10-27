@@ -79,7 +79,7 @@ public sealed partial class PbrSceneData
     public string Attribution { get; }
     public int MaterialReferenceCount { get; }
     public ulong MetadataArrayBytes => ArrayBytes(_bindings.Length, _instances.Length, MaterialReferenceCount, Lights.Length, Cameras.Length);
-    public ulong EncodedBytes => (HasAuthoredCameras ? 80ul : HasAuthoredLights ? 72ul : 64ul) + (ulong)_bindings.Length * 20 + (ulong)MaterialReferenceCount * 20
+    public ulong EncodedBytes => 80ul + (ulong)_bindings.Length * 20 + (ulong)MaterialReferenceCount * 20
         + (ulong)_instances.Length * 84 + (ulong)Lights.Length * 76 + (ulong)Cameras.Length * 64 + (ulong)s_utf8.GetByteCount(Attribution);
 
     private PbrSceneData(PbrMeshBinding[] bindings, PbrMeshInstance[] instances, string attribution, PbrSceneLight[]? lights = null,
