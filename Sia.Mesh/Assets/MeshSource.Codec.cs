@@ -6,5 +6,5 @@ public sealed partial class MeshSource
         Vertices, Indices, Sections, BakeUvs, Bounds, ContentHash);
 
     public static MeshSource Load(Stream stream, ulong maximumBytes = 128ul * 1024 * 1024)
-        => MeshGeometryCodec.Read(stream, "SIAMSHS\0"u8, maximumBytes).Source;
+        => MeshGeometryCodec.Read(stream, "SIAMSHS\0"u8, maximumBytes);
 }

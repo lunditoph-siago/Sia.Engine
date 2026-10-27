@@ -7,8 +7,8 @@ namespace Sia.Engine.Rendering.Pbr;
 public sealed partial class PbrBvhTrace
 {
     // Runtime uint4 layouts, not serialized asset formats. See rendering/Geometry/instance_trace.
-    private const uint GeometryMagic = 0x32475453; // STG2
-    private const uint InstanceMagic = 0x31495453; // STI1
+    private const uint GeometryMagic = 0x00475453; // STG\0
+    private const uint InstanceMagic = 0x00495453; // STI\0
 
     /// <summary>Owned GPU rows; one local BVH per scene geometry entry, independent of transforms/material overrides.</summary>
     public uint4[] PackGpuGeometry(ulong maximumBytes = 128ul * 1024 * 1024, CancellationToken cancellationToken = default)

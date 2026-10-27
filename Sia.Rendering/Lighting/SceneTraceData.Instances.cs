@@ -31,7 +31,7 @@ public sealed partial class SceneTraceData
         if (((ulong)geometry.Length + (ulong)instances.Length + (ulong)surfaces.Length) * 16 > maximumBytes)
             throw new ArgumentException("Instance transport exceeds its owned-buffer budget.", nameof(maximumBytes));
         Require(geometry.Length >= 3 && instances.Length >= 5 && surfaces.Length % 2 == 0);
-        Require(geometry[0].w == 0x32475453 && instances[2].z == 0x31495453);
+        Require(geometry[0].w == 0x00475453 && instances[2].z == 0x00495453);
         Require(geometry[0].z == geometry.Length && instances[2].y == instances.Length);
         Require(geometry[1].Equals(instances[3]) && geometry[2].Equals(instances[4]));
         var meshes = geometry[0]; var top = instances[0]; var tables = instances[1];
