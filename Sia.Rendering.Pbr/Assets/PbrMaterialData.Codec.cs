@@ -18,7 +18,7 @@ public sealed partial class PbrMaterialData
         ArgumentNullException.ThrowIfNull(stream);
         Span<byte> storage = stackalloc byte[MaximumEncodedBytes];
         var bytes = storage[..EncodedSize]; bytes.Clear();
-        "SIAMATR3"u8.CopyTo(bytes);
+        "SIAMATR\0"u8.CopyTo(bytes);
         bytes[8] = (byte)((DoubleSided ? 1 : 0) | (AlphaBlend ? 2 : 0) | (DiffuseMoments is null ? 0 : 4));
         var p = Parameters;
         ReadOnlySpan<float> values = [p.BaseColor.x, p.BaseColor.y, p.BaseColor.z, p.Metallic, p.Roughness,
@@ -43,7 +43,7 @@ public sealed partial class PbrMaterialData
         ArgumentNullException.ThrowIfNull(stream);
         try {
             Span<byte> bytes = stackalloc byte[EncodedBytes]; stream.ReadExactly(bytes);
-            if (!bytes[..8].SequenceEqual("SIAMATR3"u8))
+            if (!bytes[..8].SequenceEqual("SIAMATR\0"u8))
                 throw new InvalidDataException("Invalid material signature.");
             if ((bytes[8] & ~7) != 0)
                 throw new InvalidDataException("Invalid material signature or flags.");

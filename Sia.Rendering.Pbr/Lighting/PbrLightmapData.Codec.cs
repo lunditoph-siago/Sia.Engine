@@ -11,7 +11,7 @@ public sealed partial class PbrLightmapData
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         Span<byte> header = stackalloc byte[256];
-        "SIALMDX3"u8.CopyTo(header);
+        "SIALMDX\0"u8.CopyTo(header);
         ProductId.Value.TryWriteBytes(header.Slice(8, 16), bigEndian: true, out _);
         _ = Convert.FromHexString(SceneIdentity, header.Slice(24, 32), out _, out _);
         _ = Convert.FromHexString(BakeIdentity, header.Slice(56, 32), out _, out _);
@@ -61,7 +61,7 @@ public sealed partial class PbrLightmapData
         if (maximumBytes < 288) throw new InvalidDataException("Lightmap manifest header exceeds its decode budget.");
         try {
             Span<byte> header = stackalloc byte[256]; stream.ReadExactly(header);
-            if (!header[..8].SequenceEqual("SIALMDX3"u8)) throw new InvalidDataException("Invalid lightmap manifest signature.");
+            if (!header[..8].SequenceEqual("SIALMDX\0"u8)) throw new InvalidDataException("Invalid lightmap manifest signature.");
             var settings = PbrLightmapBakeSettings.Decode(header[100..]);
             var receiverCount = BinaryPrimitives.ReadInt32LittleEndian(header[88..]);
             var pageCount = BinaryPrimitives.ReadInt32LittleEndian(header[92..]);

@@ -184,7 +184,7 @@ public sealed partial class MeshRasterPagesData
     {
         Span<byte> key = stackalloc byte[20]; product.Value.TryWriteBytes(key[..16], bigEndian: true, out _);
         BinaryPrimitives.WriteInt32LittleEndian(key[16..], ordinal);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); hash.AppendData("SIARASTERPAGESLOT1"u8); hash.AppendData(key);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); hash.AppendData("SIARASTERPAGESLOT"u8); hash.AppendData(key);
         var digest = hash.GetHashAndReset(); digest[6] = (byte)((digest[6] & 15) | 128); digest[8] = (byte)((digest[8] & 63) | 128);
         return new(new Guid(digest.AsSpan(0, 16), bigEndian: true));
     }

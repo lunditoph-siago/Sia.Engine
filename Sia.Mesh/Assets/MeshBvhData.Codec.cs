@@ -12,7 +12,7 @@ public sealed partial class MeshBvhData
     {
         ArgumentNullException.ThrowIfNull(stream);
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-        writer.Write("SIAMSHB1"u8);
+        writer.Write("SIAMSHB\0"u8);
         writer.Write(_positions.Length); writer.Write(_triangles.Length); writer.Write(_nodes.Length);
         writer.Write(Settings.MaxLeafTriangles);
         writer.Write(Convert.FromHexString(GeometryHash));
@@ -34,7 +34,7 @@ public sealed partial class MeshBvhData
         ArgumentNullException.ThrowIfNull(stream);
         Span<byte> bytes = stackalloc byte[32];
         stream.ReadExactly(bytes[..8]);
-        if (!bytes[..8].SequenceEqual("SIAMSHB1"u8)) throw new InvalidDataException("Unsupported Mesh BVH signature.");
+        if (!bytes[..8].SequenceEqual("SIAMSHB\0"u8)) throw new InvalidDataException("Unsupported Mesh BVH signature.");
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
         var vertexCount = reader.ReadInt32();
         var triangleCount = reader.ReadInt32();
@@ -130,7 +130,7 @@ public sealed partial class MeshBvhData
         ReadOnlySpan<MeshBvhNode> nodes)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIAMESHBVHPAYLOAD1"u8);
+        hash.AppendData("SIAMESHBVHPAYLOAD"u8);
         Span<byte> bytes = stackalloc byte[36];
         BinaryPrimitives.WriteInt32LittleEndian(bytes, positions.Length);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], triangles.Length);
@@ -157,7 +157,7 @@ public sealed partial class MeshBvhData
         ReadOnlySpan<MeshBvhTriangle> triangles, ReadOnlySpan<int> order)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIAMESHLOCALGEOMETRY2"u8);
+        hash.AppendData("SIAMESHLOCALGEOMETRY"u8);
         Span<byte> bytes = stackalloc byte[16];
         BinaryPrimitives.WriteInt32LittleEndian(bytes, positions.Length);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], triangles.Length);

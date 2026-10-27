@@ -90,7 +90,7 @@ public sealed class PbrTextureMipsData
     {
         ArgumentNullException.ThrowIfNull(stream);
         Span<byte> header = stackalloc byte[HeaderBytes]; header.Clear();
-        "SIATEXI2"u8.CopyTo(header);
+        "SIATEXI\0"u8.CopyTo(header);
         BinaryPrimitives.WriteUInt32LittleEndian(header[8..], Width);
         BinaryPrimitives.WriteUInt32LittleEndian(header[12..], Height);
         header[16] = (byte)Levels; header[17] = (byte)TailMip;
@@ -206,7 +206,7 @@ public sealed class PbrTextureMipsData
         var height = BinaryPrimitives.ReadUInt32LittleEndian(header[12..]);
         var levels = (int)header[16]; var first = (int)header[17];
         var chunks = BinaryPrimitives.ReadUInt16LittleEndian(header[18..]);
-        if (!header[..8].SequenceEqual("SIATEXI2"u8) || header[20..24].IndexOfAnyExcept((byte)0) >= 0
+        if (!header[..8].SequenceEqual("SIATEXI\0"u8) || header[20..24].IndexOfAnyExcept((byte)0) >= 0
             || width is 0 or > 8192 || height is 0 or > 8192 || levels is < 1 or > 14 || first >= levels
             || chunks < first
             || (levels > 1 && (width >> (levels - 2)) <= 1 && (height >> (levels - 2)) <= 1))

@@ -11,7 +11,7 @@ public sealed partial class PbrLightmapSetData
     {
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         Span<byte> header=stackalloc byte[252];
-        "SIALMSE3"u8.CopyTo(header);
+        "SIALMSE\0"u8.CopyTo(header);
         ProductId.Value.TryWriteBytes(header.Slice(8,16),bigEndian:true,out _);
         _=Convert.FromHexString(SceneIdentity,header.Slice(24,32),out _,out _);
         _=Convert.FromHexString(BakeIdentity,header.Slice(56,32),out _,out _);
@@ -44,7 +44,7 @@ public sealed partial class PbrLightmapSetData
         if (maximumBytes<284) throw new InvalidDataException("Lighting set header exceeds its decode budget.");
         try {
             Span<byte> header=stackalloc byte[252]; stream.ReadExactly(header);
-            if (!header[..8].SequenceEqual("SIALMSE3"u8)) throw new InvalidDataException("Invalid lighting set signature.");
+            if (!header[..8].SequenceEqual("SIALMSE\0"u8)) throw new InvalidDataException("Invalid lighting set signature.");
             var settings=PbrLightmapBakeSettings.Decode(header[96..]);
             var productCount=BinaryPrimitives.ReadInt32LittleEndian(header[88..]); var receiverCount=BinaryPrimitives.ReadInt32LittleEndian(header[92..]);
             Admit(productCount,receiverCount,maximumBytes,settings.Environment is not null);

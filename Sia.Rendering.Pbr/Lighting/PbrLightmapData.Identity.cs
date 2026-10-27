@@ -11,7 +11,7 @@ public sealed partial class PbrLightmapData
     private string ComputeBakeIdentity(CancellationToken token)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIALIGHTMAP-AREAL1-3"u8);
+        hash.AppendData("SIALIGHTMAP-AREAL1"u8);
         Span<byte> bytes = stackalloc byte[PbrLightmapBakeSettings.InputBytes];
         _ = Convert.FromHexString(SceneIdentity, bytes[..32], out _, out _); hash.AppendData(bytes[..32]);
         BakeSettings.Encode(bytes); hash.AppendData(bytes);

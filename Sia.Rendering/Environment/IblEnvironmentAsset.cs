@@ -84,7 +84,7 @@ public sealed partial class IblEnvironmentAsset
     {
         using var payload = new MemoryStream(k_PayloadBytes);
         using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true)) {
-            writer.Write("SIAENV2\0"u8);
+            writer.Write("SIAIBL\0\0"u8);
             void Vector(float3 v)
             {
                 writer.Write(v.x);
@@ -123,7 +123,7 @@ public sealed partial class IblEnvironmentAsset
     {
         Span<byte> signature = stackalloc byte[8];
         source.ReadExactly(signature);
-        if (!signature.SequenceEqual("SIAENV2\0"u8))
+        if (!signature.SequenceEqual("SIAIBL\0\0"u8))
             throw new InvalidDataException("Unsupported environment asset.");
         var bytes = new byte[k_PayloadBytes];
         signature.CopyTo(bytes);

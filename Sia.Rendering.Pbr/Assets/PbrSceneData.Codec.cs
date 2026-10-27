@@ -16,7 +16,7 @@ public sealed partial class PbrSceneData
         ArgumentNullException.ThrowIfNull(stream); cancellationToken.ThrowIfCancellationRequested();
         var attribution = s_utf8.GetBytes(Attribution);
         Span<byte> header = stackalloc byte[48];
-        "SIASCNR4"u8.CopyTo(header);
+        "SIASCNR\0"u8.CopyTo(header);
         BinaryPrimitives.WriteInt32LittleEndian(header[8..], _bindings.Length);
         BinaryPrimitives.WriteInt32LittleEndian(header[12..], _instances.Length);
         BinaryPrimitives.WriteInt32LittleEndian(header[16..], MaterialReferenceCount);
@@ -57,7 +57,7 @@ public sealed partial class PbrSceneData
         if (maximumBytes < 80) throw new InvalidDataException("Scene framing exceeds its decode limit.");
         try {
             Span<byte> header = stackalloc byte[48]; stream.ReadExactly(header);
-            if (!header[..8].SequenceEqual("SIASCNR4"u8)) throw new InvalidDataException("Invalid reference-scene signature.");
+            if (!header[..8].SequenceEqual("SIASCNR\0"u8)) throw new InvalidDataException("Invalid reference-scene signature.");
             var flags = BinaryPrimitives.ReadUInt32LittleEndian(header[40..]);
             if ((flags & ~3u) != 0 || BinaryPrimitives.ReadUInt32LittleEndian(header[44..]) != 0)
                 throw new InvalidDataException("Unknown reference-scene header flags.");

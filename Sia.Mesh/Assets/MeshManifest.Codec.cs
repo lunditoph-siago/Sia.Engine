@@ -15,7 +15,7 @@ public sealed partial class MeshManifest
     public void Save(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        Span<byte> header = stackalloc byte[93]; "SIAMESH3"u8.CopyTo(header);
+        Span<byte> header = stackalloc byte[93]; "SIAMESH\0"u8.CopyTo(header);
         header[8] = (byte)((Raster is null ? 0 : 1) | (Bvh is null ? 0 : 2) | (HasBakeUvs ? 4 : 0)
             | (Virtual is null ? 0 : 8) | (RasterPages is null ? 0 : 16));
         Source.Value.TryWriteBytes(header[9..25], bigEndian: true, out _);
@@ -41,7 +41,7 @@ public sealed partial class MeshManifest
         ArgumentNullException.ThrowIfNull(stream);
         try {
             Span<byte> header = stackalloc byte[93]; stream.ReadExactly(header[..8]);
-            if (!header[..8].SequenceEqual("SIAMESH3"u8)) throw new InvalidDataException("Unsupported Mesh manifest signature.");
+            if (!header[..8].SequenceEqual("SIAMESH\0"u8)) throw new InvalidDataException("Unsupported Mesh manifest signature.");
             stream.ReadExactly(header[8..]);
             var flags = header[8]; var slotCount = BinaryPrimitives.ReadInt32LittleEndian(header[89..]);
             if ((flags & ~31) != 0 || slotCount is < 1 or > MaximumMaterialSlots)

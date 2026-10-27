@@ -19,8 +19,8 @@ public partial record PbrTextureRecord : AssetRecord, ILoadable<PbrTextureRecord
         Span<byte> signature = stackalloc byte[8];
         try { stream.ReadExactly(signature); }
         catch (EndOfStreamException error) { throw new InvalidDataException("Truncated texture file.", error); }
-        if (signature.SequenceEqual("SIATEXR1"u8)) return new() { Data = PbrTextureData.Load(stream, maximumBytes, signature), Name = name };
-        if (!signature.SequenceEqual("SIATEXI2"u8)) throw new InvalidDataException("Invalid texture signature.");
+        if (signature.SequenceEqual("SIATEXR\0"u8)) return new() { Data = PbrTextureData.Load(stream, maximumBytes, signature), Name = name };
+        if (!signature.SequenceEqual("SIATEXI\0"u8)) throw new InvalidDataException("Invalid texture signature.");
         var mips = PbrTextureMipsData.Load(stream, maximumBytes, signature);
         return new() { Data = mips.Tail, Mips = mips, Name = name };
     }
@@ -33,9 +33,9 @@ public partial record PbrTextureRecord : AssetRecord, ILoadable<PbrTextureRecord
         try {
             var header = new byte[64];
             await stream.ReadExactlyAsync(header.AsMemory(0, 8), cancellationToken).ConfigureAwait(false);
-            if (header.AsSpan(0, 8).SequenceEqual("SIATEXR1"u8))
+            if (header.AsSpan(0, 8).SequenceEqual("SIATEXR\0"u8))
                 return new() { Data = await PbrTextureData.LoadAsync(stream, maximumBytes, header.AsMemory(0, 8), cancellationToken).ConfigureAwait(false), Name = name };
-            if (!header.AsSpan(0, 8).SequenceEqual("SIATEXI2"u8)) throw new InvalidDataException("Invalid texture signature.");
+            if (!header.AsSpan(0, 8).SequenceEqual("SIATEXI\0"u8)) throw new InvalidDataException("Invalid texture signature.");
             await stream.ReadExactlyAsync(header.AsMemory(8), cancellationToken).ConfigureAwait(false);
             var length = PbrTextureMipsData.ValidateHeader(header, maximumBytes);
             if (length > int.MaxValue)

@@ -32,8 +32,8 @@ internal static partial class MaterialCook
         var file = new DiffuseFile(path, token);
         try {
             Span<byte> header = stackalloc byte[64]; file.ReadExactly(header[..8]);
-            if (header[..8].SequenceEqual("SIATEXR1"u8)) { file.Position = 0; return file; }
-            if (!header[..8].SequenceEqual("SIATEXI2"u8))
+            if (header[..8].SequenceEqual("SIATEXR\0"u8)) { file.Position = 0; return file; }
+            if (!header[..8].SequenceEqual("SIATEXI\0"u8))
                 throw new InvalidDataException("Invalid diffuse texture source signature.");
             file.ReadExactly(header[8..]);
             var levels = (int)header[16]; var first = (int)header[17];
@@ -51,7 +51,7 @@ internal static partial class MaterialCook
             var tailOwned = tailBytes - 64 + (ulong)(levels - first) * (ulong)Unsafe.SizeOf<ReadOnlyMemory<byte>>();
             var indexOwned = (ulong)first * ((ulong)Unsafe.SizeOf<PbrTextureMipReference>() + 128) + (ulong)chunks * 256;
             // The codec temporarily retains its reference bytes while allocating the tail and index.
-            // TailMip0's embedded SIATEXR1 input is already charged by Compute; count its outer metadata only.
+            // TailMip0's embedded raw texture input is already charged by Compute; count its outer metadata only.
             ReserveDiffuseBytes(checked((first == 0 ? 64 + references : rootBytes) + tailOwned + indexOwned + references + 64),
                 maximumBytes, ref reserved);
             using var replay = new DiffuseHeaderInput(file, header.ToArray(), token);
@@ -94,7 +94,7 @@ internal static partial class MaterialCook
     {
         Span<byte> header = stackalloc byte[64]; input.ReadExactly(header);
         var sampler = index.Tail.Sampler;
-        if (!header[..8].SequenceEqual("SIATEXR1"u8)
+        if (!header[..8].SequenceEqual("SIATEXR\0"u8)
             || BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) != index.Width
             || BinaryPrimitives.ReadUInt32LittleEndian(header[12..]) != index.Height
             || header[16] != (index.Tail.Srgb ? 1 : 0) || header[17] != 1

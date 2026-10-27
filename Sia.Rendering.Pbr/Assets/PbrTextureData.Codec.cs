@@ -20,7 +20,7 @@ public sealed partial class PbrTextureData
             if (MipLevels.Span[i].Length != (long)System.Math.Max(1u, Width >> i) * System.Math.Max(1u, Height >> i) * 4)
                 throw new InvalidDataException("Invalid texture mip length.");
         Span<byte> header = stackalloc byte[HeaderBytes];
-        "SIATEXR1"u8.CopyTo(header);
+        "SIATEXR\0"u8.CopyTo(header);
         BinaryPrimitives.WriteUInt32LittleEndian(header[8..], Width);
         BinaryPrimitives.WriteUInt32LittleEndian(header[12..], Height);
         header[16] = Srgb ? (byte)1 : (byte)0; header[17] = (byte)MipLevels.Length;
@@ -72,7 +72,7 @@ public sealed partial class PbrTextureData
 
     internal static (uint Width, uint Height, int Count, PbrTextureSampler Sampler) ReadHeader(ReadOnlySpan<byte> header, ulong maximumBytes)
     {
-        if (!header[..8].SequenceEqual("SIATEXR1"u8) || header[16] > 1 || header[23] > 1)
+        if (!header[..8].SequenceEqual("SIATEXR\0"u8) || header[16] > 1 || header[23] > 1)
             throw new InvalidDataException("Invalid texture signature or boolean encoding.");
         var width = BinaryPrimitives.ReadUInt32LittleEndian(header[8..]);
         var height = BinaryPrimitives.ReadUInt32LittleEndian(header[12..]);

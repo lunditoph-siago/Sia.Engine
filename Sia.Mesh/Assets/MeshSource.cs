@@ -89,7 +89,7 @@ public sealed partial class MeshSource
         ReadOnlySpan<MeshSection> sections, ReadOnlySpan<float2> bakeUvs, Aabb bounds, CancellationToken cancellationToken = default)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("SIAMESHSOURCE1"u8);
+        hash.AppendData("SIAMESHSOURCE"u8);
         Span<byte> bytes = stackalloc byte[48];
         BinaryPrimitives.WriteInt32LittleEndian(bytes, vertices.Length);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[4..], indices.Length);

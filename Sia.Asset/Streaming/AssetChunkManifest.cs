@@ -79,7 +79,7 @@ public sealed class AssetChunkManifest
         var indices = Chunks.Select((c, i) => (c.Id, i)).ToDictionary(p => p.Id, p => p.i, StringComparer.Ordinal);
         using var output = new MemoryStream();
         using var writer = new BinaryWriter(output);
-        writer.Write("SIACHNK2"u8);
+        writer.Write("SIACHNK\0"u8);
         writer.Write(Chunks.Length);
         writer.Write(Bootstrap.Length);
         foreach (var chunk in Chunks) {
@@ -97,7 +97,7 @@ public sealed class AssetChunkManifest
     public static AssetChunkManifest Decode(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length is < 16 or > MaximumBytes
-            || !bytes[..8].SequenceEqual("SIACHNK2"u8)) {
+            || !bytes[..8].SequenceEqual("SIACHNK\0"u8)) {
             throw new InvalidDataException("Invalid chunk manifest header or size.");
         }
         var reader = new ManifestReader(bytes[8..]);

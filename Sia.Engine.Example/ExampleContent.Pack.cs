@@ -154,7 +154,7 @@ internal static partial class ExampleContent
             var copied = new List<string>(); long total = 0;
             var buffer = new byte[65536]; var encodedLength = new byte[8];
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            hash.AppendData("SIAEXAMPLECONTENT1"u8);
+            hash.AppendData("SIAEXAMPLECONTENT"u8);
             foreach (var name in required.Keys.Order(StringComparer.Ordinal)) {
                 cancellationToken.ThrowIfCancellationRequested(); RequireOwnedDirectories();
                 var source = required[name];

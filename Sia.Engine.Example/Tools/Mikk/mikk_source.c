@@ -138,7 +138,7 @@ int TOOL_MAIN(int argc, PathCharacter **argv) {
     if (!platform_supported()) { fputs("Little-endian IEEE binary32 host required.\n", stderr); return 3; }
     source = TOOL_FOPEN(argv[1], TOOL_READ_MODE);
     if (source == NULL) { error = "Cannot open Source snapshot.\n"; result = 4; goto cleanup; }
-    if (limit < sizeof(header) || !read_exact(source, header, sizeof(header)) || memcmp(header, "SIAMSHS1", 8) != 0) {
+    if (limit < sizeof(header) || !read_exact(source, header, sizeof(header)) || memcmp(header, "SIAMSHS\0", 8) != 0) {
         error = "Invalid or truncated Source header.\n"; result = 5; goto cleanup;
     }
     input.vertex_count = u32(header + 8); input.index_count = u32(header + 12);
@@ -226,7 +226,7 @@ int TOOL_MAIN(int argc, PathCharacter **argv) {
     output = TOOL_FOPEN(argv[2], TOOL_WRITE_MODE);
     if (output == NULL) { error = "Cannot exclusively create new result.\n"; result = 10; goto cleanup; }
     created_output = 1;
-    unsigned char result_header[16] = {0}; memcpy(result_header, "MIKKTG01", 8); put_u32(result_header + 8, input.index_count);
+    unsigned char result_header[16] = {0}; memcpy(result_header, "MIKKTG\0\0", 8); put_u32(result_header + 8, input.index_count);
     if (fwrite(result_header, 1, sizeof(result_header), output) != sizeof(result_header) ||
         fwrite(input.tangents, 1, tangent_bytes, output) != tangent_bytes || fflush(output) != 0) {
         error = "Corner result write failed.\n"; result = 11; goto cleanup;

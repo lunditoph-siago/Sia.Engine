@@ -83,7 +83,7 @@ internal static partial class MeshCook
                 throw new InvalidDataException("Reference tangent result length does not match the complete corner table.");
             Span<byte> bytes = stackalloc byte[16];
             input.ReadExactly(bytes);
-            if (!bytes[..8].SequenceEqual("MIKKTG01"u8)
+            if (!bytes[..8].SequenceEqual("MIKKTG\0\0"u8)
                 || BinaryPrimitives.ReadUInt32LittleEndian(bytes[8..]) != (uint)corners
                 || BinaryPrimitives.ReadUInt32LittleEndian(bytes[12..]) != 0)
                 throw new InvalidDataException("Unsupported reference tangent corner result.");
