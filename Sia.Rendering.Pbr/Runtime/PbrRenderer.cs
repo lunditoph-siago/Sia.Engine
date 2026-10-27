@@ -435,7 +435,7 @@ public sealed partial class PbrRenderer :
         if (!contexts.IsEmpty) {
             var environment = contexts[0].Frame.Frame.MainWorld.AcquireAddon<EnvironmentLighting>();
             if (environment.Atmosphere is not null)
-                throw new NotSupportedException("Atmosphere migration is not part of the resident PBR core.");
+                throw new NotSupportedException("Atmosphere lighting is not supported by the resident PBR renderer.");
             Environment.Update(environment.Sky);
         }
         if (Scene.Streaming is not null || Materials.IsStreaming || Lightmaps is not null) {
