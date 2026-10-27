@@ -106,7 +106,7 @@ fn trace_instances_query(origin: vec3<f32>, direction: vec3<f32>, minimum: f32, 
     var hit = miss; var steps = 0u;
     if (arrayLength(&instance_trace_geometry) < 3u || instance_trace_rows(reference) < 5u) { return InstanceTraceResult(miss, false, steps); }
     let header = instance_trace_row(0u, reference); let tables = instance_trace_row(1u, reference);
-    if (instance_trace_geometry[0].w != 0x32475453u || instance_trace_row(2u, reference).z != 0x31495453u
+    if (instance_trace_geometry[0].w != 0x00475453u || instance_trace_row(2u, reference).z != 0x00495453u
         || instance_trace_geometry[0].z != arrayLength(&instance_trace_geometry)
         || instance_trace_row(2u, reference).y != instance_trace_rows(reference)
         || any(instance_trace_geometry[1] != instance_trace_row(3u, reference))

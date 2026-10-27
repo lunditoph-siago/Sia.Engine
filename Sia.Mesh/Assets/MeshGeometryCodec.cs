@@ -6,8 +6,6 @@ namespace Sia.Engine.Mesh;
 // Shared domain encoding/validation; it never opens, owns or caches a stream/asset.
 internal static class MeshGeometryCodec
 {
-    internal readonly record struct Decoded(MeshSource Source, MeshData Geometry, MeshSection[] Sections, float2[] BakeUvs);
-
     public static void Write(Stream stream, ReadOnlySpan<byte> signature,
         ReadOnlySpan<MeshVertex> vertices, ReadOnlySpan<uint> indices, ReadOnlySpan<MeshSection> sections,
         ReadOnlySpan<float2> bakeUvs, Aabb bounds, string contentHash)
@@ -32,7 +30,7 @@ internal static class MeshGeometryCodec
         foreach (var uv in bakeUvs) { writer.Write(uv.x); writer.Write(uv.y); }
     }
 
-    public static Decoded Read(Stream stream, ReadOnlySpan<byte> signature, ulong maximumBytes)
+    public static MeshSource Read(Stream stream, ReadOnlySpan<byte> signature, ulong maximumBytes)
     {
         ArgumentNullException.ThrowIfNull(stream);
         Span<byte> bytes = stackalloc byte[32];
@@ -76,7 +74,7 @@ internal static class MeshGeometryCodec
             var geometry = new MeshData(vertices, indices, bounds) { BakeUvs = bakeUvs };
             var source = MeshSource.FromDecoded(geometry, sections, bakeUvs);
             if (source.ContentHash != contentHash) throw new InvalidDataException("Mesh geometry content hash mismatch.");
-            return new(source, geometry, sections, bakeUvs);
+            return source;
         }
         catch (ArgumentException exception) {
             throw new InvalidDataException("Invalid Mesh geometry payload.", exception);

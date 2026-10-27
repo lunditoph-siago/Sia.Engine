@@ -12,7 +12,7 @@ public sealed partial class PbrMaterialData
 
     public int EncodedSize => EncodedBytes;
 
-    /// <summary>Writes versioned material metadata without texture bytes to a borrowed stream.</summary>
+    /// <summary>Writes material metadata without texture bytes to a borrowed stream.</summary>
     public void Save(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
