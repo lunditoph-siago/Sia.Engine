@@ -33,7 +33,9 @@ fn surface_at(ordinal: u32, pixel: vec2<f32>) -> Surface {
     let normal = a.normal * bary.x + b.normal * bary.y + c.normal * bary.z;
     let tangent = a.tangent * bary.x + b.tangent * bary.y + c.tangent * bary.z;
     let t = tangent.xyz;
-    surface = sample_material(m, wa.xyz * bary.x + wb.xyz * bary.y + wc.xyz * bary.z, normal, vec4<f32>(t, tangent.w), uv, uv_dx, uv_dy, dot(cross(wb.xyz - wa.xyz, wc.xyz - wa.xyz), frame.eye.xyz - wa.xyz) >= 0.0);
+    let geometry_normal = cross(wb.xyz - wa.xyz, wc.xyz - wa.xyz);
+    surface = sample_material(m, wa.xyz * bary.x + wb.xyz * bary.y + wc.xyz * bary.z, normal, vec4<f32>(t, tangent.w), uv, uv_dx, uv_dy, dot(geometry_normal, frame.eye.xyz - wa.xyz) >= 0.0);
+    surface.geometry_normal = geometry_normal;
     surface.bake_uv = a.bake_uv * bary.x + b.bake_uv * bary.y + c.bake_uv * bary.z;
     surface.bake_uv_dx = (a.bake_uv * dx.x + b.bake_uv * dx.y + c.bake_uv * dx.z - surface.bake_uv * dot(dx, vec3<f32>(1.0))) / denominator;
     surface.bake_uv_dy = (a.bake_uv * dy.x + b.bake_uv * dy.y + c.bake_uv * dy.z - surface.bake_uv * dot(dy, vec3<f32>(1.0))) / denominator;
