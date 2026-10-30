@@ -28,7 +28,7 @@ public static partial class IblEnvironmentBaker
     public static IblEnvironmentAsset Bake(in GpuFrame frame, WgpuHandle<WGPUInstance> instance, ProceduralSky sky)
     {
         ArgumentNullException.ThrowIfNull(sky);
-        sky.Validate();
+        sky.ValidateData();
         using var gpu = new GpuResources(frame, 8 * 1024 * 1024);
         var skyValues = new float4[] { new(sky.Horizon, sky.Intensity), new(sky.Zenith, sky.SunExponent), new(sky.Ground, 0), new(math.normalize(sky.SunDirection), 0), new(sky.SunRadiance, 0) };
         var uniform = gpu.Upload<float4>(skyValues, WGPUBufferUsage.Uniform);

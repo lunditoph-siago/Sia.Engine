@@ -10,12 +10,9 @@
   "retainedVertices": 34834,
   "triangles": 69451,
   "authoring": [
-    "Remove 1113 unreferenced vertices and confidence/intensity scan fields.",
-    "Center referenced bounds and uniformly scale the longest axis to 1.6. Preserve all triangles and winding.",
-    "Generate area-weighted smooth normals; use a uniform material with zero UVs.",
-    "Export the canonical Mesh source and reference-only scene through Tools/author_bunny.py. Build independent Raster, Virtual and local BVH products offline."
+    "Remove unreferenced vertices and scan fields; center and uniformly scale the longest axis to 1.6, preserving triangles and winding.",
+    "Generate area-weighted smooth normals with a uniform material and zero UVs; export Mesh source and a reference-only scene for offline cooking."
   ],
-  "identities": "Canonical/Bunny.identities.json",
   "sceneId": "820054fa-7337-4448-a2f3-d9e3692bb316",
   "usage": "Research and free redistribution with source acknowledgment. Commercial use requires Stanford permission; see the repository terms."
 }
