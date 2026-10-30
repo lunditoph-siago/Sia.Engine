@@ -376,6 +376,19 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         }
     }
 
+#if !BROWSER
+    // Native queue callbacks may require instance event processing while shutdown joins.
+    // Keep both event processing and subsequent disposal on the graphics owner thread.
+    public void StopSceneStreaming()
+    {
+        var stop = StopSceneStreamingAsync().AsTask();
+        while (!stop.IsCompleted) {
+            Wgpu.ProcessEvents(_instance);
+            Thread.Sleep(2);
+        }
+        stop.GetAwaiter().GetResult();
+    }
+#endif
     public void Dispose()
     {
         if (_disposed) {
