@@ -51,7 +51,7 @@ internal static partial class PbrSceneFiles
         }
 
         private string Location(AssetId id) => _uri is not null
-            ? new Uri(_uri, id.Value.ToString("N") + ".siaasset").AbsoluteUri
+            ? new UriBuilder(new Uri(_uri, id.Value.ToString("N") + ".siaasset")) { Query = _uri.Query.TrimStart('?') }.Uri.AbsoluteUri
             : Path.Combine(_root!, id.Value.ToString("N") + ".siaasset");
 
         private void Claim<T>(AssetId id) where T : class, IAssetRecord

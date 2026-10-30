@@ -89,7 +89,8 @@ internal static partial class PbrSceneFiles
                 // Geometry products use an ID-to-file mapping. Authenticated typed
                 // mip references already carry content IDs; resolve their location on demand.
                 var name = locations.TryGetValue(chunk.Id, out var page) ? page : chunk.FileName;
-                var path = http ? new Uri(uri!, name).AbsoluteUri : Path.Combine(root!, name);
+                var path = http ? new UriBuilder(new Uri(uri!, name)) { Query = uri!.Query.TrimStart('?') }.Uri.AbsoluteUri
+                    : Path.Combine(root!, name);
                 return await AssetInput.OpenAsync(path, client, token);
             }, cacheBytes);
         }

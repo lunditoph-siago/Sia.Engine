@@ -70,38 +70,34 @@ internal static partial class LightingFiles
             GlobalTransform.Identity, new Node<SceneGraph>(null)));
     }
 
-    internal sealed record Prepared(IblEnvironmentRecord? Environment, DiffuseProbeRecord? Probes)
+    internal sealed record Prepared(IblEnvironmentRecord? Environment)
     {
         internal AssetContent<IblEnvironmentRecord>? EnvironmentContent { get; init; }
     }
 
-    internal static async Task<Prepared> PrepareAsync(string? environment, string? probes, HttpClient http,
+    internal static async Task<Prepared> PrepareAsync(string? environment, HttpClient http,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(http); cancellationToken.ThrowIfCancellationRequested();
         var preparedEnvironment = environment is null ? null
-            : await ReadAsync<IblEnvironmentRecord>(environment, http, IblEnvironmentAsset.EncodedBytes, exact: true, cancellationToken);
-        const int maximumProbeBytes = 76 + DiffuseProbeAsset.MaximumProbes * 9 * 16 + 32;
-        var preparedProbes = probes is null ? null
-            : await ReadAsync<DiffuseProbeRecord>(probes, http, maximumProbeBytes, exact: false, cancellationToken);
+            : await ReadEnvironmentAsync(environment, http, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        return new(preparedEnvironment, preparedProbes);
+        return new(preparedEnvironment);
     }
 
-    private static async Task<TRecord> ReadAsync<TRecord>(string path, HttpClient http, int maximumBytes,
-        bool exact, CancellationToken cancellationToken) where TRecord : ILoadable<TRecord>
+    private static async Task<IblEnvironmentRecord> ReadEnvironmentAsync(string path, HttpClient http,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var input = await AssetInput.OpenAsync(path, http, cancellationToken);
-        ReadOnlyMemory<byte> bytes = exact ? await AssetInput.ReadExactAsync(input, maximumBytes, cancellationToken)
-            : await AssetInput.ReadBoundedAsync(input, maximumBytes, cancellationToken);
+        ReadOnlyMemory<byte> bytes = await AssetInput.ReadExactAsync(input, IblEnvironmentAsset.EncodedBytes, cancellationToken);
         if (!MemoryMarshal.TryGetArray(bytes, out var segment))
             throw new InvalidOperationException("Asset input must return an array-backed payload.");
-        TRecord Decode(CancellationToken token)
+        IblEnvironmentRecord Decode(CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); cancellationToken.ThrowIfCancellationRequested();
             using var payload = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
-            return TRecord.Load(payload, path);
+            return IblEnvironmentRecord.Load(payload, path);
         }
 #if BROWSER
         return await Program.BrowserOwner.RunCpuAsync(Decode, cancellationToken);
@@ -112,7 +108,7 @@ internal static partial class LightingFiles
 
     // Synchronous owner-context operation. The caller retains this root until renderers are disposed
     // and destroys it on partial initialization failure. Shared assets keep their existing lifetimes.
-    internal static (Entity Environment, Entity Probes) Acquire(World world, Prepared prepared, Entity owner)
+    internal static Entity Acquire(World world, Prepared prepared, Entity owner)
     {
         ArgumentNullException.ThrowIfNull(world); ArgumentNullException.ThrowIfNull(prepared);
         if (!owner.IsValid || !ReferenceEquals(owner.Host.World, world)
@@ -120,7 +116,6 @@ internal static partial class LightingFiles
             throw new ArgumentException("Lighting owner must be an asset entity in the target World.", nameof(owner));
         _ = world.GetAddon<AssetLibrary>();
         AssetLibrary.RegisterAsset<IblEnvironmentResource, IblEnvironmentRecord>();
-        AssetLibrary.RegisterAsset<DiffuseProbeResource, DiffuseProbeRecord>();
         Entity environment = default;
         if (prepared.EnvironmentContent is { } content) {
             var record = prepared.Environment ?? throw new InvalidAssetException("Declared environment has no prepared record.");
@@ -136,7 +131,6 @@ internal static partial class LightingFiles
             environment = world.AcquireAsset(content.Id, () => record with { }, owner);
         }
         else if (prepared.Environment is { } e) environment = world.AcquireAsset(e, owner);
-        var probes = prepared.Probes is { } p ? world.AcquireAsset(p, owner) : default;
-        return (environment, probes);
+        return environment;
     }
 }
