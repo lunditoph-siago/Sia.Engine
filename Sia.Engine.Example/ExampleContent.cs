@@ -62,7 +62,8 @@ internal static partial class ExampleContent
 
     internal static Entry Default(string assetsDirectory, RenderQuality quality = RenderQuality.High)
     {
-        var catalog = Read(Path.Combine(assetsDirectory, "default-scenes.json")); Validate(catalog);
+        var catalog = Read(Path.Combine(assetsDirectory, "default-scenes.json"));
+        Validate(catalog);
         var entry = catalog.Bunny;
         string Resolve(string relative) => Path.Combine(assetsDirectory, relative.Replace('/', Path.DirectorySeparatorChar));
         if (quality == RenderQuality.Low) entry = entry with { Lightmaps = null };
