@@ -9,7 +9,7 @@ export function readSceneOptions(pageUrl) {
   if (!Object.hasOwn(scenes, pipeline)) throw new Error('Expected pipeline bunny|unlit.');
   const scene = scenes[pipeline];
   for (const name of parameters.keys()) {
-    if (!['pipeline', 'quality', 'scene', 'environment', 'probes', 'exposure-compensation', 'auto-exposure', 'camera'].includes(name))
+    if (!['pipeline', 'quality', 'content-directory', 'exposure-compensation', 'auto-exposure', 'camera'].includes(name))
       throw new Error(`Unknown scene option: ${name}.`);
     if (parameters.getAll(name).length !== 1) throw new Error(`Duplicate scene option: ${name}.`);
     if (pipeline === 'unlit' && name !== 'pipeline') throw new Error('Unlit does not use PBR scene or lighting options.');
@@ -18,8 +18,10 @@ export function readSceneOptions(pageUrl) {
   if (quality !== null && !['high', 'medium', 'low'].includes(quality)) throw new Error('Expected quality high|medium|low.');
   const args = ['--pipeline', pipeline];
   if (quality) args.push('--quality', quality);
-  for (const name of ['environment', 'probes']) {
-    if (parameters.has(name)) args.push('--' + name, parameters.get(name));
+  if (quality) {
+    const directory = parameters.get('content-directory') ?? 'Assets/';
+    if (!directory.trim()) throw new Error('Expected nonempty content directory URL.');
+    args.push('--content-directory', new URL(directory, pageUrl).href);
   }
   if (parameters.has('exposure-compensation')) {
     const value = parameters.get('exposure-compensation').trim();
@@ -43,5 +45,5 @@ export function readSceneOptions(pageUrl) {
     camera = value.replaceAll('-', '').toLowerCase();
     args.push('--camera', camera);
   }
-  return { ...scene, pipeline, quality, sceneUrl: parameters.get('scene'), camera, args };
+  return { ...scene, pipeline, quality, camera, args };
 }

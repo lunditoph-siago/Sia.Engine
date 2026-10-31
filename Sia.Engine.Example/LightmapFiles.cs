@@ -18,7 +18,7 @@ internal static partial class LightmapFiles
 
     internal static async Task<Prepared> PrepareAsync(string path, HttpClient http, PbrSceneFiles.Prepared scene,
         ulong maximumMetadataBytes = PbrLightmapSetData.MaximumPayloadBytes, long cacheBytes = 32L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, IblEnvironmentRecord? environment = null)
     {
         ArgumentNullException.ThrowIfNull(path); ArgumentNullException.ThrowIfNull(http); ArgumentNullException.ThrowIfNull(scene);
         ArgumentOutOfRangeException.ThrowIfLessThan(cacheBytes, 2); cancellationToken.ThrowIfCancellationRequested();
@@ -59,7 +59,15 @@ internal static partial class LightmapFiles
         foreach (var product in virtuals) foreach (var page in product.Data.Pages) ids.Add(page.Id);
         cancellationToken.ThrowIfCancellationRequested();
         var source = new ProductSource(path, http, set.Data, cacheBytes, otherIds: ids);
-        try { return new(new(id), set, source) { Environment = await source.ReadEnvironmentAsync(cancellationToken) }; }
+        try {
+            IblEnvironmentRecord? bakedEnvironment;
+            if (environment is not null && set.Data.BakeSettings.Environment is not null) {
+                set.Data.BakeSettings.ValidateEnvironment(environment.Data);
+                bakedEnvironment = environment;
+            }
+            else bakedEnvironment = await source.ReadEnvironmentAsync(cancellationToken);
+            return new(new(id), set, source) { Environment = bakedEnvironment };
+        }
         catch { await source.DisposeAsync(); throw; }
     }
 
