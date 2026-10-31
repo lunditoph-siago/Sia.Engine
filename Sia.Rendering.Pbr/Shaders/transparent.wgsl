@@ -70,6 +70,7 @@ fn transparent_vertex(
 
 @fragment
 fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let geometry_normal = cross(dpdx(input.world), dpdy(input.world));
     let uv_dx = dpdx(input.uv);
     let uv_dy = dpdy(input.uv);
     let m = materials[input.material];
@@ -79,6 +80,7 @@ fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool)
     let base = sample_base(m, input.uv, uv_dx, uv_dy);
     if (base.a * m.transport.x <= 0.0) { discard; }
     var s = sample_material_with_base(m, input.world, input.normal, input.tangent, input.uv, uv_dx, uv_dy, front, base);
+    s.geometry_normal = geometry_normal;
     s.bake_uv = input.bake_uv;
     s.bake_uv_dx = dpdx(input.bake_uv); s.bake_uv_dy = dpdy(input.bake_uv);
     s.bake_present = input.bake.x != 0u; s.source_instance = input.bake.y;
@@ -111,12 +113,14 @@ fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool)
 
 @fragment
 fn transparent_fragment(input: GlassVertex, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let geometry_normal = cross(dpdx(input.world), dpdy(input.world));
     let uv_dx = dpdx(input.uv);
     let uv_dy = dpdy(input.uv);
     let m = materials[input.material];
     let base = sample_base(m, input.uv, uv_dx, uv_dy);
     if (base.a * m.transport.x <= 0.0) { discard; }
     var s = sample_material_with_base(m, input.world, input.normal, input.tangent, input.uv, uv_dx, uv_dy, front, base);
+    s.geometry_normal = geometry_normal;
     s.bake_uv = input.bake_uv;
     s.bake_uv_dx = dpdx(input.bake_uv); s.bake_uv_dy = dpdy(input.bake_uv);
     s.bake_present = input.bake.x != 0u; s.source_instance = input.bake.y;
