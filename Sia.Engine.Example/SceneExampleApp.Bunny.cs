@@ -213,7 +213,6 @@ internal sealed partial class SceneExampleApp
             BakedEnvironment = _bakedEnvironment,
             ReflectionCaptures = _captureInputs ?? [],
             Lightmaps = _lightmapInput,
-            BakedProbes = _bakedProbes,
             TraceScene = _traceScene,
             TargetPixelError = _options.Quality == RenderQuality.Low ? preset.TargetPixelError : BunnyPixelError,
             ShadowTexelError = _options.Quality == RenderQuality.Low ? preset.ShadowTexelError : BunnyPixelError,
@@ -235,7 +234,6 @@ internal sealed partial class SceneExampleApp
 
     private LightingFiles.Prepared? _preparedLighting;
     private IblEnvironmentAsset? _bakedEnvironment;
-    private DiffuseProbeAsset? _bakedProbes;
     private LightmapFiles.Prepared? _preparedLightmaps;
     private PbrLightmapInput? _lightmapInput;
     private ReflectionCaptureFiles.Prepared[]? _preparedCaptures;
@@ -263,11 +261,10 @@ internal sealed partial class SceneExampleApp
     private void AcquireLightingAssets()
     {
         if (_preparedLighting is not { } prepared) return;
-        if (prepared.Environment is null && prepared.Probes is null) { _preparedLighting = null; return; }
+        if (prepared.Environment is null) { _preparedLighting = null; return; }
         if (!_assetRoot.IsValid) _assetRoot = RenderAssetUse.Create(_renderWorld!.Entities);
         var acquired = LightingFiles.Acquire(_renderWorld!.Entities, prepared, _assetRoot);
-        _bakedEnvironment = acquired.Environment.IsValid ? acquired.Environment.Get<IblEnvironmentResource>().Data : null;
-        _bakedProbes = acquired.Probes.IsValid ? acquired.Probes.Get<DiffuseProbeResource>().Data : null;
+        _bakedEnvironment = acquired.IsValid ? acquired.Get<IblEnvironmentResource>().Data : null;
         _preparedLighting = null;
     }
 }

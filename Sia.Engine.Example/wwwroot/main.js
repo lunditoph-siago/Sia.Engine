@@ -1,6 +1,5 @@
 import { readSceneOptions } from './scene-options.js';
 import { createSceneUI } from './scene-ui.js';
-import { defaultScene } from './example-content.js';
 
 let scene;
 let updateBrowserInput;
@@ -85,10 +84,6 @@ try {
   ui.configure(scene);
   await enableIsolation();
   const args = [...scene.args];
-  if (scene.quality) {
-    const path = scene.sceneUrl ?? await defaultScene(location.href);
-    args.push('--scene', new URL(path, location.href).href);
-  }
   ui.setLoadingState('Loading engine modules', NaN);
   const { dotnet } = await import('./_framework/dotnet.js');
   ui.setLoadingState('Starting engine runtime', NaN);
