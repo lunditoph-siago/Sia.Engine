@@ -5,9 +5,6 @@ public static partial class Program
     public static async Task<int> Main(string[] args)
     {
         try {
-#if !BROWSER
-            if (await RunOfflineAsync(args)) return 0;
-#endif
             var options = SceneOptions.Parse(args);
             var pipeline = options.Pipeline;
             var scenePath = options.ScenePath;
@@ -20,7 +17,7 @@ public static partial class Program
 #if BROWSER
                 throw new ArgumentException("The browser entry point must supply its default reference-scene URL.");
 #else
-                content = ExampleContent.Default(Path.Combine(AppContext.BaseDirectory, "Assets"), options.Quality);
+                content = ExampleContent.Default(options.ContentDirectory ?? Path.Combine(AppContext.BaseDirectory, "Assets"), options.Quality);
                 scenePath = content.Scene;
 #endif
             }

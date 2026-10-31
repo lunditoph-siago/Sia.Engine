@@ -410,9 +410,13 @@ public sealed class DiffuseProbeGpu : IDisposable
 
     public DiffuseProbeAsset Bake(WgpuHandle<WGPUInstance> instance, ProceduralSky sky,
         float3 towardLight, float3 lightRadiance, uint samples = 256)
+        => Bake(instance, sky, towardLight, lightRadiance, samples, 1000);
+
+    public DiffuseProbeAsset Bake(WgpuHandle<WGPUInstance> instance, ProceduralSky sky,
+        float3 towardLight, float3 lightRadiance, uint samples, float maximumDistance)
     {
         if (SignedCorrection) throw new InvalidOperationException("Runtime signed correction cannot be persisted as an absolute baked probe asset.");
-        Prepare(sky, towardLight, lightRadiance, (uint)Count, samples);
+        Prepare(sky, towardLight, lightRadiance, (uint)Count, samples, maximumDistance);
         var bytes = (ulong)(3 + (Count * 9)) * 16;
         using var temporary = new GpuResources(_frame, bytes);
         var readback = temporary.Buffer(bytes, WGPUBufferUsage.MapRead | WGPUBufferUsage.CopyDst);

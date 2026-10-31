@@ -6,7 +6,8 @@
     <_ExampleContentPayloads Condition="'$(ExampleContentDirectory)' != ''">$([System.IO.Path]::Combine('$(_ExampleContentRoot)', 'Content'))</_ExampleContentPayloads>
   </PropertyGroup>
   <Target Name="CollectExampleContent" Condition="'$(ExampleContentDirectory)' != ''">
-    <Error Condition="!Exists('$(_ExampleContentCatalog)')" Text="Example content catalog is missing. Package content with --package-example-content before building with ExampleContentDirectory." />
+    <Error Condition="!Exists('$(_ExampleContentCatalog)')" Text="Example content catalog is missing." />
+    <Error Condition="!Exists('$(_ExampleContentPayloads)')" Text="Example content payload directory is missing." />
     <ItemGroup>
       <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.siaasset', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
       <_ExampleContent Include="$([System.IO.Directory]::GetFiles('$(_ExampleContentPayloads)', '*.siascene', System.IO.SearchOption.AllDirectories))" Condition="Exists('$(_ExampleContentPayloads)')" />
