@@ -59,7 +59,7 @@ public static partial class Program
 #else
             using (app) {
                 try { app.Run(); }
-                finally { await app.StopSceneStreamingAsync(); }
+                finally { app.StopSceneStreaming(); }
             }
 #endif
             return 0;
