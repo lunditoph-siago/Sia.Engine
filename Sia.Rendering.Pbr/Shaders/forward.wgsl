@@ -70,8 +70,10 @@ fn forward_color(
     input: ForwardVertex,
     front: bool,
 ) -> vec4<f32> {
+    let geometry_normal = cross(dpdx(input.world), dpdy(input.world));
     var surface = sample_material(materials[input.material], input.world, input.normal,
         input.tangent, input.uv, dpdx(input.uv), dpdy(input.uv), front);
+    surface.geometry_normal = geometry_normal;
     surface.bake_uv = input.bake_uv;
     surface.bake_uv_dx = dpdx(input.bake_uv); surface.bake_uv_dy = dpdy(input.bake_uv);
     surface.bake_present = input.bake.x != 0u; surface.source_instance = input.bake.y;
