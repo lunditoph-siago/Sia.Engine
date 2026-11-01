@@ -325,4 +325,60 @@ public sealed class AssetLifetimeTests
         Assert.Empty(owner.Get<AssetMetadata>().Dependents);
         Assert.Empty(dependent.Get<AssetMetadata>().Referrers);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DestroyRetryDoesNotRemoveAReplacementAssetIndex(bool identified)
+    {
+        using var world = CreateWorld();
+        var originalRecord = new Record(7);
+        var replacementRecord = identified ? new Record(8) : originalRecord;
+        var id = AssetId.New();
+        var original = identified
+            ? world.AcquireAsset(id, () => originalRecord)
+            : world.AcquireAsset(originalRecord);
+        var error = new InvalidOperationException("host release callback after library removal");
+        var attempts = 0;
+        // QuerySubscription has already attached AssetLibrary.OnEntityRemoved to
+        // this host. This later callback fails after the index removal but before
+        // ordinary World release invalidates the entity's storage.
+        ((IReactiveEntityHost)original.Host).OnEntityReleased += entity => {
+            if (entity == original && ++attempts == 1) throw error;
+        };
+
+        Assert.Same(error, Assert.Throws<InvalidOperationException>(original.Destroy));
+
+        Assert.True(original.IsValid);
+        Assert.False(world.TryGetAsset(originalRecord, out _));
+        if (identified) Assert.False(world.TryGetAsset<Record>(id, out _));
+        var replacement = identified
+            ? world.AcquireAsset(id, () => replacementRecord)
+            : world.AcquireAsset(replacementRecord);
+        Assert.NotEqual(original, replacement);
+        Assert.True(world.TryGetAsset(replacementRecord, out var indexedRecord));
+        Assert.Equal(replacement, indexedRecord);
+        if (identified) {
+            Assert.True(world.TryGetAsset<Record>(id, out var indexedId));
+            Assert.Equal(replacement, indexedId);
+        }
+
+        original.Destroy();
+
+        Assert.Equal(2, attempts);
+        Assert.False(original.IsValid);
+        Assert.True(replacement.IsValid);
+        Assert.True(world.TryGetAsset(replacementRecord, out indexedRecord));
+        Assert.Equal(replacement, indexedRecord);
+        if (identified) {
+            Assert.True(world.TryGetAsset<Record>(id, out var indexedId));
+            Assert.Equal(replacement, indexedId);
+        }
+        Assert.Equal(replacement, identified
+            ? world.AcquireAsset<Record>(id, () => throw new InvalidOperationException("replacement identity was lost"))
+            : world.AcquireAsset(replacementRecord));
+        replacement.Destroy();
+        Assert.Empty(world.GetAddon<AssetLibrary>().Entities);
+        Assert.Equal(0, world.Count);
+    }
 }

@@ -115,9 +115,12 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         ref var metadata = ref entity.Get<AssetMetadata>();
         var assetRecord = metadata.AssetSource;
         if (assetRecord != null) {
-            _entities.Remove(new(assetRecord));
+            var key = new ObjectKey<IAssetRecord>(assetRecord);
+            if (_entities.TryGetValue(key, out var recordEntity) && recordEntity == entity)
+                _entities.Remove(key);
         }
-        if (metadata.Id is { } id) {
+        if (metadata.Id is { } id
+            && _identifiedEntities.TryGetValue(id, out var identifiedEntity) && identifiedEntity == entity) {
             _identifiedEntities.Remove(id);
         }
     }
