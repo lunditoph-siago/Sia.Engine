@@ -25,16 +25,16 @@ internal static partial class PbrSceneFiles
         internal AssetChunkCacheStatistics Statistics => _cache.Statistics;
 
         internal PageSource(string scenePath, HttpClient client, Prepared<MeshVirtualRecord> prepared,
-            long cacheBytes = 32L * 1024 * 1024)
-            : this(scenePath, client, prepared, prepared.Products, new Dictionary<AssetId, MeshRasterPagesRecord>(), cacheBytes) { }
+            long cacheBytes = 32L * 1024 * 1024, AssetPackIndex? packIndex = null)
+            : this(scenePath, client, prepared, prepared.Products, new Dictionary<AssetId, MeshRasterPagesRecord>(), cacheBytes, packIndex) { }
 
         internal PageSource(string scenePath, HttpClient client, Prepared<MeshRasterPagesRecord> prepared,
-            long cacheBytes = 32L * 1024 * 1024)
-            : this(scenePath, client, prepared, new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Products, cacheBytes) { }
+            long cacheBytes = 32L * 1024 * 1024, AssetPackIndex? packIndex = null)
+            : this(scenePath, client, prepared, new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Products, cacheBytes, packIndex) { }
 
         private PageSource(string scenePath, HttpClient client, Prepared prepared,
             IReadOnlyDictionary<AssetId, MeshVirtualRecord> virtualProducts,
-            IReadOnlyDictionary<AssetId, MeshRasterPagesRecord> rasterProducts, long cacheBytes)
+            IReadOnlyDictionary<AssetId, MeshRasterPagesRecord> rasterProducts, long cacheBytes, AssetPackIndex? packIndex)
         {
             var http = AssetInput.TryGetHttpUri(scenePath, out var uri);
             var root = http ? null : Path.GetDirectoryName(Path.GetFullPath(scenePath));
@@ -85,14 +85,16 @@ internal static partial class PbrSceneFiles
                         throw new InvalidAssetException("Texture mip ID has conflicting revisions.");
                 }
             }
+            var physicalPacks = packIndex?.Entries.Values.Select(entry => entry.Slice.Pack.Id).ToHashSet(StringComparer.Ordinal);
             _cache = new(async (chunk, token) => {
                 // Geometry products use an ID-to-file mapping. Authenticated typed
                 // mip references already carry content IDs; resolve their location on demand.
-                var name = locations.TryGetValue(chunk.Id, out var page) ? page : chunk.FileName;
+                var name = physicalPacks?.Contains(chunk.Id) == true ? chunk.FileName
+                    : locations.TryGetValue(chunk.Id, out var page) ? page : chunk.FileName;
                 var path = http ? new UriBuilder(new Uri(uri!, name)) { Query = uri!.Query.TrimStart('?') }.Uri.AbsoluteUri
                     : Path.Combine(root!, name);
                 return await AssetInput.OpenAsync(path, client, token);
-            }, cacheBytes);
+            }, cacheBytes, resolve: packIndex is null ? null : packIndex.Resolve);
         }
 
         private static bool SameMip(PbrTextureMipReference a, PbrTextureMipReference b)
@@ -138,10 +140,10 @@ internal static partial class PbrSceneFiles
 
     internal static async Task<PreparedStreaming> PrepareStreamingAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default, long maximumRequiredBytes = 512L * 1024 * 1024)
+        CancellationToken cancellationToken = default, long maximumRequiredBytes = 512L * 1024 * 1024, AssetPackIndex? packIndex = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(maximumRequiredBytes);
-        var prepared = await PrepareVirtualAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
+        var prepared = await PrepareVirtualAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
         var scene = PbrSceneComposition.ResolveVirtual(prepared.Scene.Data, r => prepared.Meshes[r.Value].Data,
             r => prepared.Products[r.Value].Data, r => prepared.Materials[r.Value].Data, r => prepared.Textures[r.Value].Data);
         var required = PbrSceneStream.RequiredPages(scene, maximumRequiredBytes);
@@ -151,10 +153,11 @@ internal static partial class PbrSceneFiles
                 throw new InvalidDataException("Required typed pages exceed the scene encoded admission.");
             total += page.EncodedBytes;
         }
-        var source = new PageSource(path, client, prepared);
+        var source = new PageSource(path, client, prepared, packIndex: packIndex);
         try {
-            var pages = new Dictionary<AssetId, MeshVirtualPageRecord>();
-            foreach (var page in required) pages.Add(page.Id, await source.ReadAsync(page.Reference, cancellationToken));
+            var records = await ReadRequiredAsync(required, (page, token) => source.ReadAsync(page.Reference, token), cancellationToken);
+            var pages = new Dictionary<AssetId, MeshVirtualPageRecord>(required.Length);
+            for (var index = 0; index < required.Length; index++) pages.Add(required[index].Id, records[index]);
             return new(prepared, pages, source, maximumRequiredBytes) { EncodedBytes = total };
         }
         catch { await source.DisposeAsync(); throw; }

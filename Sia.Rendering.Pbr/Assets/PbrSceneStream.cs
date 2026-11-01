@@ -8,12 +8,38 @@ namespace Sia.Engine.Rendering.Pbr;
 /// <summary>Transient rendering use of typed Mesh pages. The caller owns transport and asset lifetimes.</summary>
 public sealed partial class PbrSceneStream
 {
-    internal sealed record PageInfo(string Id, int Bytes, int Vertices, int Triangles, int DecodedBytes);
-    internal sealed record PagePart(string Id, int First, int Count);
-    internal sealed record NodeInfo(int Parent, int Children, int ChildCount, float Error, float[] Bounds, PagePart[] Pages, int Triangles);
-    internal sealed record HierarchyInfo(int Roots, NodeInfo[] Nodes);
+    internal readonly record struct PageInfo(string Id, int Bytes, int Vertices, int Triangles, int DecodedBytes);
+    internal readonly record struct PagePart(int Page, int First, int Count);
+
+    // Virtual nodes remain a view of the authenticated parent index. Only page
+    // references need translation into the composed scene's dense page table.
+    internal sealed class HierarchyInfo
+    {
+        private readonly MeshVirtualPagesData? _index;
+        private readonly MeshVirtualPageNode[]? _nodes;
+        private readonly int _firstNode, _nodeCount, _firstRange;
+        internal int Roots { get; }
+        internal PagePart[] Parts { get; }
+        internal ReadOnlySpan<MeshVirtualPageNode> Nodes => _index is { } index
+            ? index.Nodes.Slice(_firstNode, _nodeCount) : _nodes;
+
+        internal HierarchyInfo(MeshVirtualPagesData index, int partIndex, PagePart[] parts)
+        {
+            var part = index.Parts[partIndex];
+            _index = index; _firstNode = part.FirstNode; _nodeCount = part.NodeCount;
+            _firstRange = part.NodeCount == 0 ? 0 : index.Nodes[part.FirstNode].FirstRange;
+            Roots = part.RootCount; Parts = parts;
+        }
+
+        internal HierarchyInfo(int roots, MeshVirtualPageNode[] nodes, PagePart[] parts)
+            => (Roots, _nodes, Parts) = (roots, nodes, parts);
+
+        internal ReadOnlySpan<PagePart> GetPages(in MeshVirtualPageNode node)
+            => Parts.AsSpan(node.FirstRange - _firstRange, node.RangeCount);
+    }
     internal readonly record struct PageGeometry(StreamGeometryPage Page, int FirstTriangle, int TriangleCount);
-    private readonly Dictionary<string, (MeshVirtualPagesData Index, int Page)> _pageUses = new(StringComparer.Ordinal);
+    private readonly (MeshVirtualPagesData Index, int Page)[] _pageUses = [];
+    private readonly Dictionary<string, int> _pageIndices = new(StringComparer.Ordinal);
     private readonly Func<PageReference, CancellationToken, Task<MeshVirtualPageRecord>> _prepare;
     private readonly Func<PageReference, MeshVirtualPageRecord, MeshVirtualPageData> _acquire;
     public ReadOnlyMemory<VisibilityInstance> Instances { get; }
@@ -25,7 +51,8 @@ public sealed partial class PbrSceneStream
     public ReadOnlyMemory<byte> Identity { get; }
     internal HierarchyInfo[] Hierarchies { get; }
     internal Dictionary<string, StreamGeometryPage> ResidentRoots { get; } = new(StringComparer.Ordinal);
-    internal Dictionary<string, PageInfo> PageTable { get; } = new(StringComparer.Ordinal);
+    internal PageInfo[] Pages { get; private set; } = [];
+    internal int GetPageIndex(string id) => _pageIndices[id];
     internal PageGeometry[] TransparentGeometry { get; }
     internal PbrSceneInstance[] TransparentInstances { get; }
     internal bool RequiresInstancing { get; }
@@ -104,6 +131,24 @@ public sealed partial class PbrSceneStream
         var transparentGeometry = new List<PageGeometry>(); var transparentInstances = new List<PbrSceneInstance>();
         var transparentIndices = new Dictionary<(int Geometry, int Range), int>();
         var validated = new Dictionary<AssetId, MeshVirtualPageData>();
+        var pageTable = new List<PageInfo>();
+        var pageUses = new List<(MeshVirtualPagesData Index, int Page)>();
+        var pageIndices = new Dictionary<AssetId, (int Number, MeshVirtualPagesData Index, int Page)>();
+        int Page(MeshVirtualPagesData index, int page)
+        {
+            var descriptor = index.Pages[page];
+            if (pageIndices.TryGetValue(descriptor.Id, out var prior)) {
+                if (prior.Index.Pages[prior.Page] != descriptor) throw new InvalidAssetException("Page identity has conflicting revisions.");
+                return prior.Number;
+            }
+            var id = descriptor.Id.Value.ToString("N");
+            var number = pageTable.Count;
+            var gpuBytes = checked(descriptor.VertexCount * StreamGeometryPage.VertexBytes + descriptor.TriangleCount * 12);
+            var decoded = checked(descriptor.VertexCount * (MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0)) + descriptor.TriangleCount * 12);
+            pageTable.Add(new(id, gpuBytes, descriptor.VertexCount, descriptor.TriangleCount, decoded));
+            pageIndices.Add(descriptor.Id, (number, index, page)); _pageIndices.Add(id, number); pageUses.Add((index, page));
+            return number;
+        }
         MeshVirtualPageData Required(MeshVirtualPagesData index, int page)
         {
             var descriptor = index.Pages[page];
@@ -136,43 +181,36 @@ public sealed partial class PbrSceneStream
             if (part.RootCount == 0) continue;
             if (!geometryIndices.TryGetValue(instance.Geometry, out var h)) {
                 h = hierarchies.Count; geometryIndices.Add(instance.Geometry, h);
-                var nodes = new NodeInfo[part.NodeCount];
+                var nodes = index.Nodes.Slice(part.FirstNode, part.NodeCount);
+                var firstRange = nodes[0].FirstRange;
+                var parts = new PagePart[nodes[^1].FirstRange + nodes[^1].RangeCount - firstRange];
                 for (var n = 0; n < nodes.Length; n++) {
-                    var node = index.Nodes[part.FirstNode + n]; var pages = new PagePart[node.RangeCount];
-                    for (var r = 0; r < pages.Length; r++) {
-                        var range = index.Ranges[node.FirstRange + r]; var descriptor = index.Pages[range.Page]; var id = descriptor.Id.Value.ToString("N");
-                        if (_pageUses.TryGetValue(id, out var prior)) {
-                            if (prior.Index.Pages[prior.Page] != descriptor) throw new InvalidAssetException("Page identity has conflicting revisions.");
-                        }
-                        else {
-                            _pageUses.Add(id, (index, range.Page));
-                            var gpuBytes = checked(descriptor.VertexCount * StreamGeometryPage.VertexBytes + descriptor.TriangleCount * 12);
-                            var decoded = checked(descriptor.VertexCount * (MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0)) + descriptor.TriangleCount * 12);
-                            PageTable.Add(id, new(id, gpuBytes, descriptor.VertexCount, descriptor.TriangleCount, decoded));
-                        }
-                        pages[r] = new(id, range.FirstTriangle, range.TriangleCount);
+                    var node = nodes[n];
+                    for (var r = 0; r < node.RangeCount; r++) {
+                        var range = index.Ranges[node.FirstRange + r]; var page = Page(index, range.Page); var id = pageTable[page].Id;
+                        parts[node.FirstRange - firstRange + r] = new(page, range.FirstTriangle, range.TriangleCount);
                         if (n < part.RootCount && !ResidentRoots.ContainsKey(id)) ResidentRoots.Add(id, StreamGeometryPage.Create(Required(index, range.Page)));
                     }
-                    var b = node.Bounds;
-                    nodes[n] = new(node.Parent, node.FirstChild, node.ChildCount, node.Error,
-                        [b.Min.x, b.Min.y, b.Min.z, b.Max.x, b.Max.y, b.Max.z], pages, node.TriangleCount);
                 }
-                hierarchies.Add(new(part.RootCount, nodes));
+                hierarchies.Add(new(index, geometry.Part, parts));
             }
             opaque.Add(new(instance.Transform, instance.Material) {
                 AssetIndex = h, AuthoredId = instance.AuthoredId, MaterialSlot = instance.MaterialSlot });
         }
-        Hierarchies = [.. hierarchies]; Instances = opaque.ToArray();
+        Hierarchies = [.. hierarchies]; Instances = opaque.ToArray(); Pages = [.. pageTable]; _pageUses = [.. pageUses];
         TransparentGeometry = [.. transparentGeometry]; TransparentInstances = [.. transparentInstances];
     }
 
-    internal static Aabb NodeBounds(NodeInfo node) => new(new(node.Bounds[0], node.Bounds[1], node.Bounds[2]), new(node.Bounds[3], node.Bounds[4], node.Bounds[5]));
+    internal static Aabb NodeBounds(in MeshVirtualPageNode node) => node.Bounds;
     internal Task<MeshVirtualPageRecord> ReadPageAsync(string id, CancellationToken token)
-        => _prepare(_pageUses[id].Index.Pages[_pageUses[id].Page].Reference, token);
+    {
+        var use = _pageUses[GetPageIndex(id)];
+        return _prepare(use.Index.Pages[use.Page].Reference, token);
+    }
 
     internal StreamGeometryPage UsePage(string id, MeshVirtualPageRecord prepared)
     {
-        var use = _pageUses[id]; var descriptor = use.Index.Pages[use.Page];
+        var use = _pageUses[GetPageIndex(id)]; var descriptor = use.Index.Pages[use.Page];
         var page = _acquire(descriptor.Reference, prepared) ?? throw new AssetNotFoundException("Typed page acquisition failed.");
         use.Index.ValidatePage(use.Page, page);
         return StreamGeometryPage.Create(page);

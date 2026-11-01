@@ -13,7 +13,13 @@ public readonly record struct PbrGpuTraversalStatistics(
     long DroppedReadbacks,
     long FailedReadbacks,
     long MaximumFeedbackAge,
-    uint DeferredRefinements);
+    uint DeferredRefinements)
+{
+    /// <summary>Children not resident/admitted in the latest accepted pose-matching GPU cut.</summary>
+    public uint UnreadyRefinements { get; init; }
+    /// <summary>Refinements deferred by this cut's traversal limit.</summary>
+    public uint LimitedRefinements { get; init; }
+}
 
 public enum PbrOpaquePath
 {
@@ -152,7 +158,7 @@ public sealed partial class PbrRenderer :
             var bytes = Scene.Streaming?.Hierarchy?.Bytes ?? 0;
             var pending = 0;
             long dropped = 0, failed = 0, age = -1;
-            uint deferred = 0;
+            uint deferred = 0, unready = 0, limited = 0;
             foreach (var view in _views) {
                 if (view.Selection is not { } selection) continue;
                 bytes = checked(bytes + selection.Bytes);
@@ -161,8 +167,12 @@ public sealed partial class PbrRenderer :
                 failed = checked(failed + selection.FeedbackFailures);
                 age = System.Math.Max(age, selection.FeedbackAge);
                 deferred = checked(deferred + selection.DeferredRefinements);
+                unready = checked(unready + selection.UnreadyRefinements);
+                limited = checked(limited + selection.LimitedRefinements);
             }
-            return new(Scene.Streaming?.Hierarchy is not null, bytes, pending, dropped, failed, age, deferred);
+            return new(Scene.Streaming?.Hierarchy is not null, bytes, pending, dropped, failed, age, deferred) {
+                UnreadyRefinements = unready, LimitedRefinements = limited
+            };
         }
     }
 

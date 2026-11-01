@@ -21,11 +21,12 @@ public static partial class Program
                 content = await ExampleContent.DefaultAsync(directory, streamHttp);
             }
             var scenePath = content?.Scene;
+            var packs = await PbrSceneFiles.ReadPackIndexAsync(content?.PackIndex, streamHttp);
             var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
             await using var mixed = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi) : null;
+                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi, packIndex: packs) : null;
             await using var raster = scenePath is not null && options.Quality == Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareRasterStreamingAsync(scenePath, streamHttp) : null;
+                ? await PbrSceneFiles.PrepareRasterStreamingAsync(scenePath, streamHttp, packIndex: packs) : null;
             PbrSceneFiles.Prepared? references = (PbrSceneFiles.Prepared?)mixed ?? raster;
             var lighting = await LightingFiles.PrepareAsync(content?.Environment, streamHttp);
             var capturePaths = content?.ReflectionCaptures ?? [];

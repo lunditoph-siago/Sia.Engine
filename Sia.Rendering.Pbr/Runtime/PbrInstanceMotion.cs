@@ -56,7 +56,7 @@ internal sealed class PbrInstanceMotion
                 var instance = source.Instances.Span[row]; var tree = source.Hierarchies[instance.AssetIndex];
                 id = instance.AuthoredId; transform = instance.Transform;
                 bounds = PbrSceneStream.NodeBounds(tree.Nodes[0]);
-                foreach (var node in tree.Nodes.AsSpan(1, tree.Roots - 1)) bounds = Aabb.Union(bounds, PbrSceneStream.NodeBounds(node));
+                foreach (var node in tree.Nodes.Slice(1, tree.Roots - 1)) bounds = Aabb.Union(bounds, PbrSceneStream.NodeBounds(node));
             }
             else {
                 var instance = source.TransparentInstances[row - source.Instances.Length];

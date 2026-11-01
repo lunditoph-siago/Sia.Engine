@@ -83,6 +83,7 @@ internal sealed partial class PbrStreamResidency
         try {
             if (move.Upload is null) {
                 if (!_requests.TryGetReady(page.Id, out var record)) return;
+                _requests.BeginInstall(page.Id);
                 var geometry = _source.UsePage(page.Id, record!);
                 var transform = float4x4.identity;
                 var material = 1;

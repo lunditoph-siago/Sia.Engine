@@ -92,24 +92,24 @@ internal sealed partial class PbrStreamResidency
         }
         // Retain only previously admitted complete groups, never raw denied
         // descendants. Their union already fits both original capacities.
-        var eligible = groups.Where(group => group.Value.All(child =>
-            _source.Hierarchies[child.Key.Asset].Nodes[child.Key.Node].Pages.All(part =>
-                IsAdmitted(PageKey(child.Key.Instance, part.Id)))))
+        var eligible = groups.Where(group => group.Value.All(child => AllPagesAdmitted(child.Key)))
             .ToDictionary(group => group.Key, group => group.Value);
         foreach (var pair in _budgetPreviousRequests) {
             var child = pair.Key;
             var tree = _source.Hierarchies[child.Asset];
             ChildRequest? frontier = null;
             for (var node = child.Node; tree.Nodes[node].Parent >= 0; node = tree.Nodes[node].Parent) {
-                if (tree.Nodes[node].Pages.Any(part => removed.Contains(PageKey(child.Instance, part.Id))
-                    || PageKey(child.Instance, part.Id) == recovery.Target)) frontier = child with { Node = node };
+                foreach (var part in tree.GetPages(tree.Nodes[node])) {
+                    var key = PageKey(child.Instance, part.Page);
+                    if (removed.Contains(key) || key == recovery.Target) { frontier = child with { Node = node }; break; }
+                }
             }
             if (frontier is null || !Include(child with { Node = tree.Nodes[child.Node].Parent })) continue;
             recovery.Anchors.Add(frontier.Value);
         }
-        var leased = recovery.Requests.Keys.SelectMany(child =>
-            _source.Hierarchies[child.Asset].Nodes[child.Node].Pages.Select(part =>
-                PageKey(child.Instance, part.Id))).ToHashSet();
+        var leased = new HashSet<Key>();
+        foreach (var child in recovery.Requests.Keys)
+            foreach (var part in NodePages(child)) leased.Add(PageKey(child.Instance, part.Page));
         return recovery.Anchors.Count != 0 && leased.Contains(recovery.Target)
             && victims.Where(IsAdmitted).All(leased.Contains);
 
@@ -122,6 +122,12 @@ internal sealed partial class PbrStreamResidency
                 || !Include(group with { Node = parent }))) return false;
             recovery.Groups.Add(group);
             foreach (var child in children) recovery.Requests[child.Key] = child.Value;
+            return true;
+        }
+
+        bool AllPagesAdmitted(ChildRequest child)
+        {
+            foreach (var part in NodePages(child)) if (!IsAdmitted(PageKey(child.Instance, part.Page))) return false;
             return true;
         }
     }

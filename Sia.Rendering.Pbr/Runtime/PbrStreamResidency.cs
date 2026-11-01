@@ -27,7 +27,17 @@ public readonly record struct PbrStreamingStatistics(
     long Evictions,
     ulong Revision,
     PageSchedulerStatistics Requests,
-    int DeferredGroups);
+    int DeferredGroups)
+{
+    public int LastAdmissionMissingAncestors { get; init; }
+    public int LastAdmissionVertexRejections { get; init; }
+    public int LastAdmissionTriangleRejections { get; init; }
+    public long AdmissionRebuilds { get; init; }
+    public long AdmissionCacheHits { get; init; }
+    public long AdmissionPageVisits { get; init; }
+    public double AdmissionMilliseconds { get; init; }
+    public int ReadAheadDemands { get; init; }
+}
 
 internal sealed partial class PbrStreamResidency : IAsyncDisposable
 {
@@ -68,6 +78,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     private readonly VisibilityInstance[] _instances;
     private readonly PbrSceneStream.PageInfo[] _pages;
     private readonly Dictionary<string, int> _pageIndices;
+    private readonly int[] _canonicalPages;
     private readonly StreamPageArena _arena;
     private readonly PbrStreamingSettings _settings;
     private readonly BoundedPageScheduler<MeshVirtualPageRecord> _requests;
@@ -108,7 +119,13 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     public PbrStreamingStatistics Statistics => new(
         _arena.Bytes, _arena.UsedBytes, _rootBytes, _arena.StagingBytes, _uploaded,
-        _resident.Count, _installs, _evictions, Revision, _requests.Statistics, _deferredGroups);
+        _resident.Count, _installs, _evictions, Revision, _requests.Statistics, _deferredGroups) {
+            LastAdmissionMissingAncestors = _budgetMissingAncestors,
+            LastAdmissionVertexRejections = _budgetVertexDenied, LastAdmissionTriangleRejections = _budgetTriangleDenied,
+            AdmissionRebuilds = _budgetRebuilds, AdmissionCacheHits = _budgetCacheHits,
+            AdmissionPageVisits = _budgetPageVisits, AdmissionMilliseconds = _budgetMilliseconds,
+            ReadAheadDemands = _readAheadDemands
+        };
 
     internal bool IsStopped => _stopTask is { IsCompletedSuccessfully: true };
     internal int SelectionNodeLimit { get; }
@@ -128,17 +145,22 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         SelectionNodeLimit = settings.MaximumSelectionNodesPerView == 0
             ? checked((int)System.Math.Max(1024, selectionNodes)) : settings.MaximumSelectionNodesPerView;
         _instances = source.Instances.ToArray();
-        _pages = [.. source.PageTable.Values];
+        _pages = source.Pages;
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
+        _canonicalPages = Enumerable.Range(0, _pages.Length).ToArray();
         if (SharedInstances) {
             // Required Virtual roots are already authenticated and remain pinned for this owner.
             var roots = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var (id, page) in source.ResidentRoots) {
                 if (page.Data is not { } data) continue;
-                if (roots.TryGetValue(data.ContentHash, out var index)) _pageIndices[id] = index;
+                if (roots.TryGetValue(data.ContentHash, out var index)) {
+                    _pageIndices[id] = index;
+                    _canonicalPages[source.GetPageIndex(id)] = index;
+                }
                 else roots.Add(data.ContentHash, _pageIndices[id]);
             }
         }
+        InitializeBudgetLayout();
         _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes),
             2 * MeshVirtualPageData.MaximumEncodedBytes, settings.MaximumRequests, settings.DecodedBytes);
         _norms = new float[source.Instances.Length];
@@ -152,19 +174,19 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             var instance = source.Instances.Span[i];
             var tree = source.Hierarchies![instance.AssetIndex];
             if (!settings.GpuTraversal)
-                _bounds[i] = [.. tree.Nodes.Select(n => BoundsTransform.Apply(PbrSceneStream.NodeBounds(n), instance.Transform))];
+                _bounds[i] = TransformBounds(tree, instance.Transform);
             var minimum = new float3(float.PositiveInfinity);
             var maximum = new float3(float.NegativeInfinity);
-            foreach (var node in tree.Nodes.AsSpan(0, tree.Roots)) {
+            foreach (var node in tree.Nodes.Slice(0, tree.Roots)) {
                 var bounds = BoundsTransform.Apply(PbrSceneStream.NodeBounds(node), instance.Transform);
                 minimum = math.min(minimum, bounds.Min);
                 maximum = math.max(maximum, bounds.Max);
             }
             _instanceBounds[i] = new(minimum, maximum);
-            foreach (var node in tree.Nodes.Take(tree.Roots))
-                foreach (var part in node.Pages) {
-                    var id = part.Id;
-                    var key = PageKey(i, id);
+            foreach (var node in tree.Nodes.Slice(0, tree.Roots))
+                foreach (var part in tree.GetPages(node)) {
+                    var id = _pages[part.Page].Id;
+                    var key = PageKey(i, part.Page);
                     if (!_resident.ContainsKey(key)) {
                         var page = source.ResidentRoots[id];
                         if (!arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out var allocation))
@@ -197,38 +219,49 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 continue;
             }
             var tree = _source.Hierarchies[instance.AssetIndex];
-            _bounds[i] ??= [.. tree.Nodes.Select(n => BoundsTransform.Apply(PbrSceneStream.NodeBounds(n), instance.Transform))];
+            _bounds[i] ??= TransformBounds(tree, instance.Transform);
             _branches[i] = [.. Enumerable.Range(0, tree.Roots).Where(n => tree.Nodes[n].ChildCount > 0)
-                .GroupBy(n => tree.Nodes[n].Pages[0].Id, StringComparer.Ordinal)
+                .GroupBy(n => tree.GetPages(tree.Nodes[n])[0].Page)
                 .Select(g => new BranchGroup(i, [.. g], Union(g.Select(n => _bounds[i][n]))))];
             var rootGroups = _branches[i].SelectMany(g => g.Roots.Select(n => (Node: n, Group: g))).ToDictionary(p => p.Node, p => p.Group);
             var rootOf = new int[tree.Nodes.Length];
             for (var n = 0; n < tree.Nodes.Length; n++) {
                 rootOf[n] = tree.Nodes[n].Parent < 0 ? n : rootOf[tree.Nodes[n].Parent];
                 if (!rootGroups.TryGetValue(rootOf[n], out var group)) continue;
-                foreach (var part in tree.Nodes[n].Pages) {
-                    var key = PageKey(i, part.Id);
+                foreach (var part in tree.GetPages(tree.Nodes[n])) {
+                    var key = PageKey(i, part.Page);
                     if (!_dependencies.TryGetValue(key, out var groups)) _dependencies.Add(key, groups = []);
                     groups.Add(group);
                 }
             }
             var leaves = new Dictionary<Key, List<PbrGpuScene.Draw>>();
-            foreach (var node in tree.Nodes.AsSpan(0, tree.Roots)) {
+            foreach (var node in tree.Nodes.Slice(0, tree.Roots)) {
                 if (node.ChildCount != 0) continue;
-                foreach (var part in node.Pages) {
-                    var key = PageKey(i, part.Id);
+                foreach (var part in tree.GetPages(node)) {
+                    var key = PageKey(i, part.Page);
                     if (!leaves.TryGetValue(key, out var list)) leaves.Add(key, list = []);
                     list.Add(Draw(i, node, part, _resident[key].Allocation));
                 }
             }
             _leafRoots[i] = [.. leaves.Select(p => new LeafRoot(p.Key, Union(p.Value.Select(d => d.Bounds)), Merge(p.Value)))];
             foreach (var group in _branches[i]) {
-                group.RootPages = [.. group.Roots.SelectMany(n => tree.Nodes[n].Pages).Select(p => PageKey(i, p.Id)).Distinct()];
-                group.Fallback = Merge([.. group.Roots.SelectMany(n => tree.Nodes[n].Pages.Select(p => Draw(i, tree.Nodes[n], p,
-                    _resident[PageKey(i, p.Id)].Allocation, _bounds[i][n])))]);
+                var rootPages = new HashSet<Key>(); var fallback = new List<PbrGpuScene.Draw>();
+                foreach (var n in group.Roots)
+                    foreach (var part in tree.GetPages(tree.Nodes[n])) {
+                        var key = PageKey(i, part.Page); rootPages.Add(key);
+                        fallback.Add(Draw(i, tree.Nodes[n], part, _resident[key].Allocation, _bounds[i][n]));
+                    }
+                group.RootPages = [.. rootPages]; group.Fallback = Merge([.. fallback]);
             }
         }
         _cpuSelectionInitialized = true;
+    }
+
+    private static Aabb[] TransformBounds(PbrSceneStream.HierarchyInfo tree, float4x4 transform)
+    {
+        var result = new Aabb[tree.Nodes.Length];
+        for (var n = 0; n < result.Length; n++) result[n] = BoundsTransform.Apply(tree.Nodes[n].Bounds, transform);
+        return result;
     }
 
     private static Aabb Union(IEnumerable<Aabb> bounds)
@@ -261,6 +294,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _used.Clear();
         _uploaded = 0;
         _deferredGroups = 0;
+        _readAheadDemands = 0;
         BeginBudgetFrame();
         BeginRelocationFrame();
         BeginRecoveryFrame();
@@ -361,11 +395,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             var node = tree.Nodes[index];
             var bounds = _bounds[instanceIndex][index];
             if (!culler.Intersects(bounds)) return;
-            foreach (var part in node.Pages) Touch(PageKey(instanceIndex, part.Id));
+            foreach (var part in tree.GetPages(node)) Touch(PageKey(instanceIndex, part.Page));
             if (++visited > SelectionNodeLimit) {
                 deferred = true;
                 groupIncomplete = true;
-                foreach (var part in node.Pages) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Id)].Allocation, bounds));
+                foreach (var part in tree.GetPages(node)) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Page)].Allocation, bounds));
                 return;
             }
             var raw = node.ChildCount == 0 ? 0
@@ -379,12 +413,12 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 priority = System.Math.Max(priority, 1.0e-20f);
                 var complete = true;
                 var visibleChildren = 0;
-                for (var c = node.Children; c < node.Children + node.ChildCount; c++) {
+                for (var c = node.FirstChild; c < node.FirstChild + node.ChildCount; c++) {
                     if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
                     visibleChildren++;
                     RequestChild(new(SharedInstances ? -1 : instanceIndex, instance.AssetIndex, c), priority);
-                    foreach (var part in tree.Nodes[c].Pages) {
-                        var key = PageKey(instanceIndex, part.Id);
+                    foreach (var part in tree.GetPages(tree.Nodes[c])) {
+                        var key = PageKey(instanceIndex, part.Page);
                         if (!IsAdmitted(key)) { complete = false; continue; }
                         Demand(key, priority);
                         if (_resident.ContainsKey(key)) Touch(key);
@@ -392,16 +426,16 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     }
                 }
                 if (complete && visibleChildren <= SelectionNodeLimit - visited) {
-                    for (var c = node.Children; c < node.Children + node.ChildCount; c++) Visit(instanceIndex, tree, c);
+                    for (var c = node.FirstChild; c < node.FirstChild + node.ChildCount; c++) Visit(instanceIndex, tree, c);
                     return;
                 }
                 if (complete) { deferred = true; groupIncomplete = true; }
             }
-            foreach (var part in node.Pages) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Id)].Allocation, bounds));
+            foreach (var part in tree.GetPages(node)) output.Add(Draw(instanceIndex, node, part, _resident[PageKey(instanceIndex, part.Page)].Allocation, bounds));
         }
     }
 
-    private Key PageKey(int instance, string id) => new(SharedInstances ? -1 : instance, _pageIndices[id]);
+    private Key PageKey(int instance, int sourcePage) => new(SharedInstances ? -1 : instance, _canonicalPages[sourcePage]);
 
     private void Touch(Key key)
     {
@@ -417,7 +451,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         if (_viewWanted is { } wanted && (!wanted.TryGetValue(key, out old) || priority > old)) wanted[key] = priority;
     }
 
-    private PbrGpuScene.Draw Draw(int index, PbrSceneStream.NodeInfo node, PbrSceneStream.PagePart part, StreamPageAllocation allocation, Aabb? bounds = null)
+    private PbrGpuScene.Draw Draw(int index, MeshVirtualPageNode node, PbrSceneStream.PagePart part, StreamPageAllocation allocation, Aabb? bounds = null)
     {
         var instance = _instances[index];
         return new(allocation.Triangles.Offset + (uint)part.First, (uint)part.Count, instance.MaterialIndex,
@@ -431,6 +465,10 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     {
         if (_stopped) return;
         PrepareRecoveryEnd();
+        // Plan against this frame's complete observed groups before issuing IO.
+        // Read-ahead only retains prepared records; GPU admission and addresses
+        // still publish at the next Begin, after existing draws are submitted.
+        EndBudgetFrame();
         CancelRelocationReservation();
         if (_relocation is not null) {
             AdvanceRelocation();
@@ -453,6 +491,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         }
         foreach (var pair in _missingPages)
             _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].DecodedBytes, pair.Value.Priority));
+        AppendBudgetReadAhead();
         _requests.Update(_demands);
         if (_recovery is { Started: true } recovery && _requests.Statistics.Failed != recovery.Failures) {
             AbortRecovery(true);
@@ -503,6 +542,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         material = instance.MaterialIndex + 1;
                     }
                     try {
+                        _requests.BeginInstall(id);
                         _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
                             SharedInstances ? 0u : (uint)candidate.Key.Instance, material));
                     }
@@ -541,6 +581,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             foreach (var pair in _missingPages)
                 if (pair.Value.Remaining > 0)
                     _demands.Add(new(_pages[pair.Key].Id, _pages[pair.Key].DecodedBytes, pair.Value.Priority));
+            AppendBudgetReadAhead();
             _requests.Update(_demands);
         }
         EndBudgetFrame();

@@ -58,8 +58,11 @@ internal sealed unsafe partial class PbrView
                 _shadowDirty[layer] = true;
                 _shadowGeometryRevision[layer] = _owner.Scene.GeometryRevision;
             }
-            _selection?.Select(context.CommandEncoder, (int)layer);
+            // Cached depth still contributes streaming demand. Expanding draw
+            // records is only needed when this layer will actually rasterize.
+            _selection?.SelectNodes(context.CommandEncoder, (int)layer);
             if (!_shadowDirty[layer]) continue;
+            _selection?.ExpandTriangles(context.CommandEncoder, (int)layer);
             var attachment = WGPURenderPassDepthStencilAttachment.Default;
             attachment.View = (WGPUTextureView*)_shadowViews[layer].GetWgpu<WGPUTextureView>().DangerousGetHandle();
             attachment.DepthLoadOp = WGPULoadOp.Clear;

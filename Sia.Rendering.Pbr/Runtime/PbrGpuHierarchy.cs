@@ -123,15 +123,15 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
         for (var n = tree.Nodes.Length - 1; n >= 0; n--) {
             var node = tree.Nodes[n];
             ulong triangles = 0, nodes = 0, records = 0, ownRecords = 0;
-            foreach (var part in node.Pages)
+            foreach (var part in tree.GetPages(node))
                 ownRecords = checked(ownRecords + (((ulong)part.Count + WorkBlockTriangles - 1) / WorkBlockTriangles));
             for (var c = 0; c < node.ChildCount; c++) {
-                var child = cuts[node.Children + c];
+                var child = cuts[node.FirstChild + c];
                 triangles = checked(triangles + child.Triangles);
                 nodes = checked(nodes + child.Nodes);
                 records = checked(records + child.Records);
             }
-            cuts[n] = (System.Math.Max((ulong)node.Triangles, triangles), System.Math.Max(1ul, nodes),
+            cuts[n] = (System.Math.Max((ulong)node.TriangleCount, triangles), System.Math.Max(1ul, nodes),
                 System.Math.Max(ownRecords, records));
         }
         ulong totalTriangles = 0, totalNodes = 0, totalRecords = 0;
