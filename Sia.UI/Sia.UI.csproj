@@ -15,9 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sia" Version="2.1.5" />
+    <PackageReference Include="Sia" Version="2.1.6" />
     <PackageReference Include="Sia.Input" Version="0.0.4" />
-    <PackageReference Include="Sia.Prelude" Version="2.1.5" />
+    <PackageReference Include="Sia.Prelude" Version="2.1.6" />
   </ItemGroup>
 
   <ItemGroup>

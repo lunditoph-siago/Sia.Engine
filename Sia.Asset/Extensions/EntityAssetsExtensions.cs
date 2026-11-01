@@ -2,9 +2,11 @@ namespace Sia.Asset;
 
 public static class EntityAssetExtensions
 {
+    /// <summary>Add an idempotent owner edge between live assets in the same World. Cycles are rejected.</summary>
     public static void Refer(this Entity entity, Entity target)
         => entity.Execute(new AssetMetadata.Refer(target));
 
+    /// <summary>Remove the owner edge; an Automatic target is reclaimed after its last reference notification.</summary>
     public static void Unrefer(this Entity entity, Entity target)
         => entity.Execute(new AssetMetadata.Unrefer(target));
 

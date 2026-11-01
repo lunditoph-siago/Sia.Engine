@@ -7,13 +7,16 @@ public sealed partial class PbrTextureData
 
     // An indexed bootstrap carries its verified finest-mip descriptor. Whole
     // inputs can compute the same canonical single-level identity without IO.
-    internal string SourceLevel0Hash => _sourceLevel0Hash ??= Level0Hash;
+    public string SourceLevel0Hash => _sourceLevel0Hash ??= Level0Hash;
 
     internal string Level0Hash => _level0Hash ??= MipLevels.Length == 1 ? EncodedHash
-        : new PbrTextureData(Width, Height, Srgb, Sampler, [MipLevels.Span[0]]).EncodedHash;
+        : new PbrTextureData(Width, Height, Srgb, Sampler, [MipLevels.Span[0]]) {
+            Format = Format, BuildKey = BuildKey, _sourceLevel0Hash = _sourceLevel0Hash, _transportAverage = _transportAverage
+        }.EncodedHash;
 
     internal PbrTextureData WithSourceLevel0Hash(string hash)
         => new(Width, Height, Srgb, Sampler, MipLevels.ToArray()) {
+            Format = Format, BuildKey = BuildKey, _transportAverage = _transportAverage,
             _sourceLevel0Hash = hash, _encodedHash = _encodedHash, _level0Hash = _level0Hash
         };
 }

@@ -2,6 +2,7 @@ namespace Sia.Asset;
 
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using Sia;
 
 public record struct AssetMetadata()
@@ -25,15 +26,25 @@ public record struct AssetMetadata()
     public readonly record struct Refer(Entity Asset) : ICommand<AssetMetadata>
     {
         public void Execute(World world, Entity target)
-            => Execute(world, target, ref target.Get<AssetMetadata>());
+        {
+            RequireAsset(world, target, nameof(target));
+            Execute(world, target, ref target.Get<AssetMetadata>());
+        }
 
         public void Execute(World world, Entity target, ref AssetMetadata metadata)
         {
+            RequireAsset(world, target, nameof(target));
+            RequireAsset(world, Asset, nameof(Asset));
+            if (metadata._dependents?.Contains(Asset) == true) return;
+            if (world.TryGetAddon<AssetLibrary>(out var library)
+                && (library.IsReleasing(target) || library.IsReleasing(Asset)))
+                throw new InvalidOperationException("An asset being released cannot acquire references.");
+            if (Asset == target || Reaches(Asset, target))
+                throw new InvalidOperationException("Asset references must form a directed acyclic graph.");
+
             ref var dependents = ref metadata._dependents;
             dependents ??= [];
-            if (!dependents.Add(Asset)) {
-                return;
-            }
+            dependents.Add(Asset);
 
             ref var referers = ref Asset.Get<AssetMetadata>()._referrers;
             referers ??= [];
@@ -46,10 +57,15 @@ public record struct AssetMetadata()
     public readonly record struct Unrefer(Entity Asset) : ICommand<AssetMetadata>
     {
         public void Execute(World world, Entity target)
-            => Execute(world, target, ref target.Get<AssetMetadata>());
+        {
+            RequireAsset(world, target, nameof(target));
+            Execute(world, target, ref target.Get<AssetMetadata>());
+        }
 
         public void Execute(World world, Entity target, ref AssetMetadata metadata)
         {
+            RequireAsset(world, target, nameof(target));
+            RequireAsset(world, Asset, nameof(Asset));
             ref var dependents = ref metadata._dependents;
             if (dependents == null || !dependents.Remove(Asset)) {
                 return;
@@ -57,6 +73,29 @@ public record struct AssetMetadata()
             Asset.Get<AssetMetadata>()._referrers!.Remove(target);
             world.Send(Asset, new OnUnreferred(Asset));
         }
+    }
+
+    internal static void RequireAsset(World world, Entity entity, string parameterName)
+    {
+        world.EnsureOwnerThread();
+        if (!entity.IsValid || !ReferenceEquals(entity.Host.World, world)
+            || Unsafe.IsNullRef(ref entity.GetOrNullRef<AssetMetadata>()))
+            throw new ArgumentException("The entity must be a live asset in this world.", parameterName);
+    }
+
+    private static bool Reaches(Entity start, Entity destination)
+    {
+        var dependents = start.Get<AssetMetadata>().Dependents;
+        if (dependents.Count == 0) return false;
+        var pending = new Stack<Entity>(dependents);
+        var visited = new HashSet<Entity>();
+        while (pending.TryPop(out var current)) {
+            if (current == destination) return true;
+            if (!current.IsValid || !visited.Add(current)) continue;
+            foreach (var dependent in current.Get<AssetMetadata>().Dependents)
+                pending.Push(dependent);
+        }
+        return false;
     }
 
     public readonly Entity? FindReferrer<TAsset>(bool recurse = false)

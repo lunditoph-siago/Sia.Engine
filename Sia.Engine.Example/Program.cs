@@ -44,24 +44,34 @@ public static partial class Program
             references = null;
             lighting = null;
 #if BROWSER
+            var errors = new List<Exception>();
             try {
                 SetLoadingState("Preparing graphics", double.NaN);
                 await Task.Delay(20);
                 await app.RunAsync();
             }
-            finally {
+            catch (Exception error) { errors.Add(error); }
+            try {
                 await BrowserOwner.RunGraphicsAsync(async () => {
-                    await app.StopSceneStreamingAsync();
-                    app.Dispose();
+                    try { await app.StopSceneStreamingAsync(); }
+                    catch (Exception error) { errors.Add(error); }
+                    try { app.Dispose(); }
+                    catch (Exception error) { errors.Add(error); }
                     return 0;
                 });
             }
+            catch (Exception error) { errors.Add(error); }
 #else
-            using (app) {
-                try { app.Run(); }
-                finally { app.StopSceneStreaming(); }
-            }
+            var errors = new List<Exception>();
+            try { app.Run(); }
+            catch (Exception error) { errors.Add(error); }
+            try { app.StopSceneStreaming(); }
+            catch (Exception error) { errors.Add(error); }
+            try { app.Dispose(); }
+            catch (Exception error) { errors.Add(error); }
 #endif
+            if (errors.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+            if (errors.Count != 0) throw new AggregateException("Scene execution or shutdown did not complete.", errors);
             return 0;
         }
         catch (Exception exception) {

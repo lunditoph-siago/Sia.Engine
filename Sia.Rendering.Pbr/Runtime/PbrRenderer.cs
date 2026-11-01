@@ -536,7 +536,6 @@ public sealed partial class PbrRenderer :
             throw new InvalidOperationException("Await StopStreamingAsync before disposing a streaming renderer.");
         if (Materials is not null && !Materials.IsStopped)
             throw new InvalidOperationException("Await StopStreamingAsync before disposing streaming materials.");
-        _disposed = true;
         _trace = null; _pendingTrace = null; _traceData = null; _pendingTraceData = null;
         while (_views.Count != 0)
             _views[^1].Dispose();
@@ -548,5 +547,6 @@ public sealed partial class PbrRenderer :
         Scene?.Dispose();
         Materials?.Dispose();
         Pipelines?.Dispose();
+        _disposed = true;
     }
 }

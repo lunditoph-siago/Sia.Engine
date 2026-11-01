@@ -64,19 +64,7 @@ public static partial class PbrSceneTransport
     { Span<byte> bytes = stackalloc byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes, value); target.AppendData(bytes); }
 
     private static float3 Average(PbrTextureData? texture)
-    {
-        if (texture is null) return new(1);
-        var bytes = texture.MipLevels.Span[^1].Span;
-        var sum = float3.zero;
-        float Decode(byte value)
-        {
-            var x = value / 255f;
-            return texture.Srgb ? x <= .04045f ? x / 12.92f : MathF.Pow((x + .055f) / 1.055f, 2.4f) : x;
-        }
-        for (var i = 0; i < bytes.Length; i += 4)
-            sum += new float3(Decode(bytes[i]), Decode(bytes[i + 1]), Decode(bytes[i + 2]));
-        return sum / (bytes.Length / 4);
-    }
+        => texture?.TransportAverage ?? new float3(1);
 
     public static DiffuseProbeAsset CreateVolume(SceneTraceData scene, uint3 dimensions,
         ProceduralSky sky, Aabb? bounds = null)

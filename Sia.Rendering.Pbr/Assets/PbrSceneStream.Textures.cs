@@ -28,7 +28,21 @@ public sealed partial class PbrSceneStream
                     if (index is not null && !ReferenceEquals(index.Tail, source))
                         throw new InvalidDataException("Texture index must describe the acquired bootstrap tail.");
                     var first = 0;
-                    while (first + 1 < source.MipLevels.Length && System.Math.Max(source.Width >> first, source.Height >> first) > 64) first++;
+                    var layout = source.BlockLayout;
+                    if (index is not null && source.Format != PbrTextureFormat.Rgba8)
+                        for (var mip = 0; mip <= index.TailMip; mip++)
+                            if (System.Math.Max(1u, index.Width >> mip) % layout.BlockWidth != 0
+                                || System.Math.Max(1u, index.Height >> mip) % layout.BlockHeight != 0)
+                                throw new InvalidDataException("Compressed streaming requires a continuous range of block-aligned base mips.");
+                    while (first + 1 < source.MipLevels.Length && System.Math.Max(source.Width >> first, source.Height >> first) > 64) {
+                        var next = first + 1;
+                        if (source.Format != PbrTextureFormat.Rgba8 && (System.Math.Max(1u, source.Width >> next) % layout.BlockWidth != 0
+                            || System.Math.Max(1u, source.Height >> next) % layout.BlockHeight != 0)) break;
+                        first = next;
+                    }
+                    if (source.Format != PbrTextureFormat.Rgba8 && (System.Math.Max(1u, source.Width >> first) % layout.BlockWidth != 0
+                        || System.Math.Max(1u, source.Height >> first) % layout.BlockHeight != 0))
+                        throw new InvalidDataException("Compressed bootstrap dimensions require whole texture blocks; select an aligned tail or a raw product.");
                     tail = source.SliceMipChain(first);
                     tails.Add(source, tail); _fullTextures.Add(tail, source);
                     if (index is not null) _textureMips.Add(tail, index);

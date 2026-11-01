@@ -9,12 +9,13 @@ public sealed partial class PbrTextureData
 {
     private const int HeaderBytes = 64;
     private string? _encodedHash;
-    public ulong EncodedBytes => HeaderBytes + PayloadBytes;
+    public ulong EncodedBytes => (ulong)CodecHeaderBytes(Format) + PayloadBytes;
 
-    /// <summary>Writes one independently readable RGBA8 mip chain to a borrowed stream.</summary>
+    /// <summary>Writes one independently readable mip chain. SIATEXR remains raw RGBA8; GPU blocks use SIATEXB.</summary>
     public void Save(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        if (Format != PbrTextureFormat.Rgba8) { SaveBlocks(stream); return; }
         if (!ValidShape(Width, Height, MipLevels.Length, Sampler)) throw new InvalidDataException("Invalid texture shape or sampler.");
         for (var i = 0; i < MipLevels.Length; i++)
             if (MipLevels.Span[i].Length != (long)System.Math.Max(1u, Width >> i) * System.Math.Max(1u, Height >> i) * 4)
@@ -45,6 +46,11 @@ public sealed partial class PbrTextureData
         ArgumentNullException.ThrowIfNull(stream);
         if (maximumBytes < HeaderBytes) throw new InvalidDataException("Texture header exceeds the decode limit.");
         try {
+            if (signature.IsEmpty) {
+                Span<byte> prefix = stackalloc byte[8]; stream.ReadExactly(prefix);
+                return Load(stream, maximumBytes, prefix);
+            }
+            if (signature.SequenceEqual("SIATEXB\0"u8)) return LoadBlocks(stream, maximumBytes, signature);
             Span<byte> header = stackalloc byte[HeaderBytes];
             if (signature.IsEmpty) stream.ReadExactly(header);
             else {
@@ -118,6 +124,13 @@ public sealed partial class PbrTextureData
     {
         if (maximumBytes < HeaderBytes) throw new InvalidDataException("Texture header exceeds the decode limit.");
         try {
+            if (signature.IsEmpty) {
+                var prefix = new byte[8]; await stream.ReadExactlyAsync(prefix, token).ConfigureAwait(false);
+                return await LoadAsync(stream, maximumBytes, prefix, token).ConfigureAwait(false);
+            }
+            if (signature.Span.SequenceEqual("SIATEXB\0"u8))
+                return await LoadBlocksAsync(stream, maximumBytes, signature, token).ConfigureAwait(false);
+            if (signature.Length != 8) throw new ArgumentException("Texture signature must contain eight bytes.", nameof(signature));
             var header = new byte[HeaderBytes]; signature.CopyTo(header);
             await stream.ReadExactlyAsync(header.AsMemory(signature.Length), token).ConfigureAwait(false);
             var (width, height, count, sampler) = ReadHeader(header, maximumBytes);
