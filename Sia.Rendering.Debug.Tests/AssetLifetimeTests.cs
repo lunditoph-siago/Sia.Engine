@@ -239,4 +239,90 @@ public sealed class AssetLifetimeTests
         Assert.True(world.TryGetAsset<Record>(id, out var indexed));
         Assert.Equal(second, indexed);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LateRemoveNotificationCannotCreateDanglingReferences(bool dyingIsOwner)
+    {
+        using var world = CreateWorld();
+        var survivor = Owner(world);
+        var dying = Owner(world);
+        var notified = false;
+        Exception? rejection = null;
+        // Register after AssetLibrary: its own dependency cleanup has returned when
+        // this listener runs, but the entity has not yet been invalidated by World.
+        world.Dispatcher.Listen<WorldEvents.Remove>((Entity target, in WorldEvents.Remove _) => {
+            if (target != dying) return false;
+            notified = true;
+            Assert.True(target.IsValid);
+            rejection = Xunit.Record.Exception(() => {
+                if (dyingIsOwner) target.Refer(survivor);
+                else survivor.Refer(target);
+            });
+            return false;
+        });
+
+        dying.Destroy();
+
+        Assert.True(notified);
+        Assert.False(dying.IsValid);
+        Assert.Empty(survivor.Get<AssetMetadata>().Dependents);
+        Assert.Empty(survivor.Get<AssetMetadata>().Referrers);
+        Assert.IsType<InvalidOperationException>(rejection);
+    }
+
+    [Fact]
+    public void FailedRemoveNotificationKeepsAssetClosedToNewReferencesButAllowsDestroyRetry()
+    {
+        using var world = CreateWorld();
+        var owner = Owner(world);
+        var dependent = Owner(world);
+        var record = new Record(7);
+        var dying = world.CreateAsset(record, AssetLife.Persistent);
+        owner.Refer(dying); dying.Refer(dependent);
+        var error = new InvalidOperationException("late remove callback");
+        var attempts = 0;
+        world.Dispatcher.Listen<WorldEvents.Remove>((Entity target, in WorldEvents.Remove _) => {
+            if (target == dying && ++attempts == 1) throw error;
+            return false;
+        });
+
+        Assert.Same(error, Assert.Throws<InvalidOperationException>(dying.Destroy));
+
+        Assert.True(dying.IsValid);
+        Assert.Empty(dying.Get<AssetMetadata>().Dependents);
+        Assert.Empty(dying.Get<AssetMetadata>().Referrers);
+        Assert.Empty(owner.Get<AssetMetadata>().Dependents);
+        Assert.Empty(dependent.Get<AssetMetadata>().Referrers);
+        Assert.Throws<InvalidOperationException>(() => owner.Refer(dying));
+        Assert.Throws<InvalidOperationException>(() => dying.Refer(dependent));
+
+        var count = world.Count;
+        var createdRecord = new Record(8);
+        var acquiredRecord = new Record(9);
+        var id = AssetId.New();
+        var factories = 0;
+        Assert.Throws<InvalidOperationException>(() => world.CreateAsset(createdRecord, dying));
+        Assert.Throws<InvalidOperationException>(() => world.AcquireAsset(acquiredRecord, dying));
+        Assert.Throws<InvalidOperationException>(() => world.AcquireAsset(id, () => {
+            factories++;
+            return new Record(10);
+        }, dying));
+        Assert.Equal(count, world.Count);
+        Assert.Equal(0, factories);
+        Assert.False(world.TryGetAsset(createdRecord, out _));
+        Assert.False(world.TryGetAsset(acquiredRecord, out _));
+        Assert.False(world.TryGetAsset<Record>(id, out _));
+        Assert.Empty(dying.Get<AssetMetadata>().Dependents);
+        Assert.Empty(dying.Get<AssetMetadata>().Referrers);
+
+        dying.Destroy();
+
+        Assert.Equal(2, attempts);
+        Assert.False(dying.IsValid);
+        Assert.False(world.TryGetAsset(record, out _));
+        Assert.Empty(owner.Get<AssetMetadata>().Dependents);
+        Assert.Empty(dependent.Get<AssetMetadata>().Referrers);
+    }
 }

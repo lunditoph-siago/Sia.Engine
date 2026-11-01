@@ -67,6 +67,9 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
 
     private void ReleaseDependencies(in Entity entity, ref AssetMetadata meta)
     {
+        // Persist on the entity through later Remove listeners and failed destruction.
+        // The set below only prevents recursive dependency cleanup during this attempt.
+        meta.IsClosing = true;
         if (!_releasing.Add(entity)) return;
         try {
             foreach (var referrer in meta.Referrers.ToArray()) {
@@ -79,11 +82,10 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         finally { _releasing.Remove(entity); }
     }
 
-    internal bool IsReleasing(Entity entity) => _releasing.Contains(entity);
-
     private void QueueAutomaticRelease(Entity entity)
     {
         if (!_initialized || _releasing.Contains(entity) || !entity.IsValid
+            || entity.Get<AssetMetadata>().IsClosing
             || entity.Get<AssetMetadata>().AssetLife != AssetLife.Automatic
             || entity.Get<AssetMetadata>().Referrers.Count != 0
             || !_pendingReleases.Add(entity)) return;
@@ -91,7 +93,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
             _pendingReleases.Remove(entity);
             if (!_initialized || !entity.IsValid || _releasing.Contains(entity)) return;
             ref var current = ref entity.Get<AssetMetadata>();
-            if (current.AssetLife == AssetLife.Automatic && current.Referrers.Count == 0)
+            if (!current.IsClosing && current.AssetLife == AssetLife.Automatic && current.Referrers.Count == 0)
                 entity.Destroy();
         });
     }
@@ -136,7 +138,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     public Entity CreateEntity(
         IAssetRecord record, Entity referrer, AssetLife life = AssetLife.Automatic)
     {
-        AssetMetadata.RequireAsset(World, referrer, nameof(referrer));
+        AssetMetadata.RequireReferenceEndpoint(World, referrer, nameof(referrer));
         var entity = CreateEntity(record, life);
         referrer.Refer(entity);
         return entity;
@@ -158,7 +160,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     public Entity AcquireEntity(
         IAssetRecord record, Entity referrer, AssetLife life = AssetLife.Automatic)
     {
-        AssetMetadata.RequireAsset(World, referrer, nameof(referrer));
+        AssetMetadata.RequireReferenceEndpoint(World, referrer, nameof(referrer));
         var entity = AcquireEntity(record, life);
         referrer.Refer(entity);
         return entity;
@@ -202,7 +204,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         Entity referrer, AssetLife life = AssetLife.Automatic)
         where TAssetRecord : class, IAssetRecord
     {
-        AssetMetadata.RequireAsset(World, referrer, nameof(referrer));
+        AssetMetadata.RequireReferenceEndpoint(World, referrer, nameof(referrer));
         var entity = AcquireEntity(id, createRecord, life);
         referrer.Refer(entity);
         return entity;

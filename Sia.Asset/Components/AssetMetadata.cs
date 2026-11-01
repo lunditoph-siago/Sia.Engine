@@ -14,6 +14,7 @@ public record struct AssetMetadata()
     public AssetLife AssetLife { get; init; }
     public IAssetRecord? AssetSource { get; init; }
     public AssetId? Id { get; internal set; }
+    internal bool IsClosing { get; set; }
 
     public readonly IReadOnlySet<Entity> Referrers =>
         _referrers ?? (IReadOnlySet<Entity>)ImmutableHashSet<Entity>.Empty;
@@ -33,12 +34,9 @@ public record struct AssetMetadata()
 
         public void Execute(World world, Entity target, ref AssetMetadata metadata)
         {
-            RequireAsset(world, target, nameof(target));
-            RequireAsset(world, Asset, nameof(Asset));
+            RequireReferenceEndpoint(world, target, nameof(target));
+            RequireReferenceEndpoint(world, Asset, nameof(Asset));
             if (metadata._dependents?.Contains(Asset) == true) return;
-            if (world.TryGetAddon<AssetLibrary>(out var library)
-                && (library.IsReleasing(target) || library.IsReleasing(Asset)))
-                throw new InvalidOperationException("An asset being released cannot acquire references.");
             if (Asset == target || Reaches(Asset, target))
                 throw new InvalidOperationException("Asset references must form a directed acyclic graph.");
 
@@ -81,6 +79,13 @@ public record struct AssetMetadata()
         if (!entity.IsValid || !ReferenceEquals(entity.Host.World, world)
             || Unsafe.IsNullRef(ref entity.GetOrNullRef<AssetMetadata>()))
             throw new ArgumentException("The entity must be a live asset in this world.", parameterName);
+    }
+
+    internal static void RequireReferenceEndpoint(World world, Entity entity, string parameterName)
+    {
+        RequireAsset(world, entity, parameterName);
+        if (entity.Get<AssetMetadata>().IsClosing)
+            throw new InvalidOperationException("An asset being released cannot acquire references.");
     }
 
     private static bool Reaches(Entity start, Entity destination)
