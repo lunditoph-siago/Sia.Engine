@@ -42,7 +42,8 @@ public sealed class PbrTextureBlocksTests
         Assert.Equal(PbrTextureFormat.Rgba8, raw.Format);
         Assert.Equal("SIATEXR\0"u8.ToArray(), encoded[..8]);
         Assert.Equal(68, encoded.Length);
-        Assert.Equal((byte)128, PbrTextureData.Load(new MemoryStream(encoded)).MipLevels.Span[0].Span[0]);
+        using var input = new MemoryStream(encoded);
+        Assert.Equal((byte)128, PbrTextureData.Load(input).MipLevels.Span[0].Span[0]);
         Assert.InRange(raw.TransportAverage.x, .21585f, .21587f);
     }
 
@@ -61,7 +62,8 @@ public sealed class PbrTextureBlocksTests
         Assert.Equal(PbrTextureFormat.Bc7, tail.Format);
         Assert.Equal(4u, tail.Width);
         Assert.Equal(3, tail.MipLevels.Length);
-        AssertTexture(tail, PbrTextureData.Load(new MemoryStream(Encode(tail))));
+        using var input = new MemoryStream(Encode(tail));
+        AssertTexture(tail, PbrTextureData.Load(input));
     }
 
     [Fact]
@@ -76,11 +78,13 @@ public sealed class PbrTextureBlocksTests
         var index = PbrTextureMipsData.Create(8, 8, blocks.SliceMipChain(1), [reference]);
         using var output = new MemoryStream(); index.Save(output);
         Assert.Equal((byte)PbrTextureFormat.Bc7, output.GetBuffer()[20]);
-        var record = PbrTextureRecord.Load(new MemoryStream(output.ToArray()));
+        using var input = new MemoryStream(output.ToArray());
+        var record = PbrTextureRecord.Load(input);
         Assert.NotNull(record.Mips);
         Assert.Equal(SourceHash, record.Data.SourceLevel0Hash);
         Assert.Equal(BuildKey, record.Data.BuildKey);
-        record.Mips.ValidateMip(0, PbrTextureRecord.Load(new MemoryStream(bytes)));
+        using var fineInput = new MemoryStream(bytes);
+        record.Mips.ValidateMip(0, PbrTextureRecord.Load(fineInput));
         var id = new AssetRefer<PbrTextureRecord>.Id(new(Guid.NewGuid()));
         var moments = new PbrDiffuseMoments(Average, Average, SourceHash, null);
         var material = new PbrMaterialData(PbrMaterial.Default, baseColor: id, diffuseMoments: moments);
@@ -101,7 +105,8 @@ public sealed class PbrTextureBlocksTests
         Assert.NotNull(loaded.Mips);
         Assert.Equal(PbrTextureFormat.Bc5, loaded.Mips.Format);
         Assert.Equal(SourceHash, loaded.Data.SourceLevel0Hash);
-        loaded.Mips.ValidateMip(0, PbrTextureRecord.Load(new MemoryStream(fineBytes)));
+        using var fineInput = new MemoryStream(fineBytes);
+        loaded.Mips.ValidateMip(0, PbrTextureRecord.Load(fineInput));
     }
 
     [Fact]
@@ -116,7 +121,32 @@ public sealed class PbrTextureBlocksTests
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(bytes.AsSpan(0, 32)); hash.AppendData(bytes.AsSpan(64));
         hash.GetHashAndReset().CopyTo(bytes, 32);
-        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(new MemoryStream(bytes)));
+        using var input = new MemoryStream(bytes);
+        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(input));
+    }
+
+    [Theory]
+    [InlineData(68u, 68u, 4, false)] // 4 -> 8 -> 17 breaks block alignment.
+    [InlineData(48u, 80u, 2, true)] // 12x20 -> 24x40 -> 48x80 remains aligned.
+    public void SceneValidatesAllCompressedMipBasesBeforeReadingFineMips(uint width, uint height, int tailMip, bool supported)
+    {
+        var blocks = Blocks(width, height, PbrTextureFormat.Bc7, true);
+        var references = new PbrTextureMipReference[tailMip];
+        for (var mip = 0; mip < tailMip; mip++) {
+            var bytes = Encode(blocks.SliceMipChain(mip, 1));
+            references[mip] = new(new(Guid.NewGuid()), Convert.ToHexString(SHA256.HashData(bytes)), bytes.Length);
+        }
+        var index = PbrTextureMipsData.Create(width, height, blocks.SliceMipChain(tailMip), references);
+        var scene = PbrRasterScene.Create([], [new(PbrMaterial.Default, BaseColor: index.Tail)], []);
+        PbrSceneStream Create() => PbrSceneStream.Create(scene, _ => index,
+            static (_, _) => throw new InvalidOperationException("Scene creation cannot read fine mips."));
+        if (supported) {
+            Assert.Equal(tailMip, Assert.Single(Create().TextureSources.Values).TailMip);
+        }
+        else {
+            var failure = Assert.Throws<InvalidDataException>(Create);
+            Assert.Contains("block-aligned base mips", failure.Message);
+        }
     }
 
     [Theory]
@@ -131,7 +161,8 @@ public sealed class PbrTextureBlocksTests
         var bytes = Encode(foreign);
         var reference = new PbrTextureMipReference(new(Guid.NewGuid()), Convert.ToHexString(SHA256.HashData(bytes)), bytes.Length);
         var index = PbrTextureMipsData.Create(8, 8, expected.SliceMipChain(1), [reference]);
-        Assert.Throws<InvalidDataException>(() => index.ValidateMip(0, PbrTextureRecord.Load(new MemoryStream(bytes))));
+        using var input = new MemoryStream(bytes);
+        Assert.Throws<InvalidDataException>(() => index.ValidateMip(0, PbrTextureRecord.Load(input)));
     }
 
     [Fact]
@@ -163,22 +194,29 @@ public sealed class PbrTextureBlocksTests
     {
         var bytes = Encode(Blocks(4, 4, PbrTextureFormat.Bc7, true));
         bytes[offset] ^= 0x40;
-        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(new MemoryStream(bytes)));
-        await Assert.ThrowsAsync<InvalidDataException>(async () => await PbrTextureRecord.LoadAsync(new MemoryStream(bytes), 4096));
+        using var input = new MemoryStream(bytes);
+        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(input));
+        using var asyncInput = new MemoryStream(bytes);
+        await Assert.ThrowsAsync<InvalidDataException>(async () => await PbrTextureRecord.LoadAsync(asyncInput, 4096));
     }
 
     [Fact]
     public async Task ExactEofDecodeLimitsAndCancellationAreEnforced()
     {
         var bytes = Encode(Blocks(4, 4, PbrTextureFormat.Bc7, false));
-        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(new MemoryStream(bytes[..^1])));
-        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(new MemoryStream([.. bytes, 0])));
-        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(new MemoryStream(bytes), (ulong)bytes.Length - 1));
+        using var truncated = new MemoryStream(bytes[..^1]);
+        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(truncated));
+        using var trailing = new MemoryStream([.. bytes, 0]);
+        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(trailing));
+        using var overBudget = new MemoryStream(bytes);
+        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(overBudget, (ulong)bytes.Length - 1));
         var forged = bytes.ToArray(); BinaryPrimitives.WriteUInt32LittleEndian(forged.AsSpan(8), uint.MaxValue);
-        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(new MemoryStream(forged)));
+        using var forgedInput = new MemoryStream(forged);
+        Assert.Throws<InvalidDataException>(() => PbrTextureRecord.Load(forgedInput));
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        using var cancelledInput = new MemoryStream(bytes);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await PbrTextureRecord.LoadAsync(new MemoryStream(bytes), 4096, cancellationToken: cancellation.Token));
+            await PbrTextureRecord.LoadAsync(cancelledInput, 4096, cancellationToken: cancellation.Token));
     }
 
     [Theory]

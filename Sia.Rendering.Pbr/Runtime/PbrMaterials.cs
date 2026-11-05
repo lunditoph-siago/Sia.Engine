@@ -213,9 +213,14 @@ internal sealed partial class PbrMaterials : IDisposable
             if (!layout.SupportsBaseDimensions(texture.Width, texture.Height)
                 || texture.Width > _gpu.Limits.MaxTextureDimension2D || texture.Height > _gpu.Limits.MaxTextureDimension2D)
                 throw new NotSupportedException("Bootstrap texture dimensions do not fit the device and storage blocks.");
-            if (texture.Format != PbrTextureFormat.Rgba8
-                && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)_gpu.Device.DangerousGetHandle(), WGPUFeatureName.TextureCompressionBC) == 0)
-                throw new NotSupportedException("Block-compressed textures require texture-compression-bc on the device; select the raw product fallback.");
+            if (texture.Format != PbrTextureFormat.Rgba8) {
+                var device = (WGPUDevice*)_gpu.Device.DangerousGetHandle();
+                if (WgpuUnsafe.wgpuDeviceHasFeature(device, WGPUFeatureName.TextureCompressionBC) == 0)
+                    throw new NotSupportedException("Block-compressed textures require texture-compression-bc on the device. Select the RGBA8 product fallback.");
+                if (_stream is not null && _stream.TextureSources.TryGetValue(texture, out var source) && source.TailMip > 0
+                    && WgpuUnsafe.wgpuDeviceHasFeature(device, WGPUFeatureName.CoreFeaturesAndLimits) == 0)
+                    throw new NotSupportedException("Block-compressed mip streaming requires core-features-and-limits for texture copies. Select the RGBA8 product fallback.");
+            }
             if (_stream is not null && _streaming.UploadBytesPerFrame < layout.BytesPerBlock)
                 throw new ArgumentException("The frame upload allowance must hold at least one texture storage block.", nameof(_streaming));
             bytes = checked(bytes + texture.PayloadBytes);

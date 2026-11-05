@@ -154,10 +154,14 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private bool RequiresBlockTextures()
     {
-        if (_referenceScene is null || !_referenceScene.Textures.Values.Any(texture => texture.Data.Format != PbrTextureFormat.Rgba8))
+        if (_referenceScene is not { } scene || !scene.Textures.Values.Any(texture => texture.Data.Format != PbrTextureFormat.Rgba8))
             return false;
         if (WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), WGPUFeatureName.TextureCompressionBC) == 0)
             throw new NotSupportedException("This content package requires BC texture compression. Select an rgba8 package for an adapter without texture-compression-bc.");
+        if (scene is PbrSceneFiles.PreparedMixed or PbrSceneFiles.PreparedRasterStreaming
+            && scene.Textures.Values.Any(texture => texture.Data.Format != PbrTextureFormat.Rgba8 && texture.Mips is { TailMip: > 0 })
+            && WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), WGPUFeatureName.CoreFeaturesAndLimits) == 0)
+            throw new NotSupportedException("This content package requires WebGPU core for block-compressed mip streaming. Select an rgba8 package for this adapter.");
         return true;
     }
 

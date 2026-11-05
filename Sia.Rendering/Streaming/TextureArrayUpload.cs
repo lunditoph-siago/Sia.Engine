@@ -102,6 +102,9 @@ public sealed unsafe class TextureArrayUpload : IDisposable
         if (levels[0].Length == 0) _levels = [];
         _gpu = new(frame, budget);
         try {
+            if (_sharedMipCount != 0 && _layout.BlockWidth > 1
+                && WgpuUnsafe.wgpuDeviceHasFeature((WGPUDevice*)_gpu.Device.DangerousGetHandle(), WGPUFeatureName.CoreFeaturesAndLimits) == 0)
+                throw new NotSupportedException("Copying block-compressed texture mips requires core-features-and-limits on the device.");
             if (updateExisting) {
                 if (!previous.IsValid || !existingView.IsValid) throw new ArgumentException("Existing texture and view are required.");
                 Texture = previous; View = existingView;

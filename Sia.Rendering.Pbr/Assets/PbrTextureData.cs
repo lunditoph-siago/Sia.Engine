@@ -56,7 +56,7 @@ public sealed partial class PbrTextureData
             }
             for (var at = 0; at < bytes.Length; at += 4)
                 sum += new float3(Decode(bytes[at]), Decode(bytes[at + 1]), Decode(bytes[at + 2]));
-            return (_transportAverage = sum / (bytes.Length / 4)).Value;
+            return (_transportAverage = sum / (bytes.Length / 4f)).Value;
         }
     }
 
