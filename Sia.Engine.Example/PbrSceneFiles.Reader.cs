@@ -13,7 +13,7 @@ internal static partial class PbrSceneFiles
         IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures) : Prepared(Id, Scene, Meshes, Materials, Textures);
 
     // Application-owned location, cross-kind claims and aggregate encoded admission; streams are scoped per read.
-    private sealed class Reader
+    private sealed class Reader : IAsyncDisposable
     {
         private readonly string _path;
         private readonly string? _root;
@@ -23,10 +23,13 @@ internal static partial class PbrSceneFiles
         private readonly Dictionary<AssetId, Type> _claims = [];
         private readonly int _maximumFileBytes;
         private readonly long _maximumTotalBytes;
+        private readonly AssetPackIndex? _packs;
+        private readonly AssetChunkCache? _packCache;
         internal AssetId Id { get; }
         internal long EncodedBytes { get; private set; }
 
-        internal Reader(string path, HttpClient client, int maximumFileBytes, long maximumTotalBytes, CancellationToken token)
+        internal Reader(string path, HttpClient client, int maximumFileBytes, long maximumTotalBytes, CancellationToken token,
+            AssetPackIndex? packs = null)
         {
             ArgumentNullException.ThrowIfNull(path); ArgumentNullException.ThrowIfNull(client);
             ArgumentOutOfRangeException.ThrowIfNegative(maximumFileBytes); ArgumentOutOfRangeException.ThrowIfNegative(maximumTotalBytes);
@@ -38,7 +41,17 @@ internal static partial class PbrSceneFiles
             Id = new(guid); _path = path; _client = client; _token = token;
             _root = http ? null : Path.GetDirectoryName(Path.GetFullPath(path)); _uri = http ? uri : null;
             _maximumFileBytes = maximumFileBytes; _maximumTotalBytes = maximumTotalBytes;
+            _packs = packs;
+            if (packs is not null) {
+                _packCache = new(async (chunk, cancellation) => {
+                    var location = _uri is null ? Path.Combine(_root!, chunk.FileName)
+                        : new UriBuilder(new Uri(_uri, chunk.FileName)) { Query = _uri.Query.TrimStart('?') }.Uri.AbsoluteUri;
+                    return await AssetInput.OpenAsync(location, _client, cancellation);
+                }, AssetChunk.MaximumLength + 1L, resolve: packs.Resolve);
+            }
         }
+
+        public ValueTask DisposeAsync() => _packCache?.DisposeAsync() ?? ValueTask.CompletedTask;
 
         internal Task<T> Read<T>(AssetId id, Func<Stream, ulong, string?, T> decode) where T : class, IAssetRecord
             => Read(id, Location(id), (stream, name) => decode(stream, (ulong)_maximumFileBytes, name));
@@ -79,7 +92,11 @@ internal static partial class PbrSceneFiles
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_token);
             var token = cancellation.Token;
             var window = new ReadWindow(_maximumFileBytes, _maximumTotalBytes - EncodedBytes);
-            var pending = new Queue<Task<EncodedInput>>(4);
+            // Packed slices can alias an earlier physical reservation. Keep one
+            // borrowed slice at a time, otherwise later A can pin pack A while
+            // ordered consumption waits for B to evict it (A/B/A deadlock).
+            var concurrency = _packs is null ? 4 : 1;
+            var pending = new Queue<Task<EncodedInput>>(concurrency);
             var records = new Dictionary<AssetId, T>();
             var next = 0; var consuming = -1;
             var failureGate = new object(); Exception? failure = null; var failedIndex = int.MaxValue;
@@ -104,7 +121,7 @@ internal static partial class PbrSceneFiles
             }
             void Fill()
             {
-                while (pending.Count < 4 && next < ids.Count) {
+                while (pending.Count < concurrency && next < ids.Count) {
                     var index = next++;
                     pending.Enqueue(Fetch(index));
                 }
@@ -151,9 +168,20 @@ internal static partial class PbrSceneFiles
         {
             HttpResponseMessage? response = null; Stream? stream = null;
             ReadWindow.Reservation? reservation = null;
+            AssetChunkLease? lease = null;
             EncodedInput? result = null;
             try {
                 long? length;
+                var fileName = Path.GetFileName(AssetInput.TryGetHttpUri(location, out var packedUri) ? packedUri!.AbsolutePath : location);
+                if (_packs?.Entries.TryGetValue(fileName, out var packed) == true) {
+                    reservation = await window.Reserve(index, packed.Chunk.Length, token).ConfigureAwait(false);
+                    lease = await _packCache!.AcquireAsync(packed.Chunk, cancellationToken: token).ConfigureAwait(false);
+                    token.ThrowIfCancellationRequested();
+                    window.Complete(reservation.Value, lease.Memory.Length);
+                    result = new EncodedInput(lease.Memory, location, window, reservation.Value, lease);
+                    reservation = null; lease = null;
+                    return result;
+                }
                 if (AssetInput.TryGetHttpUri(location, out var uri)) {
                     using var request = new HttpRequestMessage(HttpMethod.Get, uri);
                     response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
@@ -184,14 +212,15 @@ internal static partial class PbrSceneFiles
             }
             finally {
                 try {
-                    try { stream?.Dispose(); }
+                    try { lease?.Dispose(); stream?.Dispose(); }
                     finally { response?.Dispose(); }
                 }
                 catch { result?.Dispose(); throw; }
             }
         }
 
-        private sealed class EncodedInput(ReadOnlyMemory<byte> bytes, string location, ReadWindow window, ReadWindow.Reservation reservation) : IDisposable
+        private sealed class EncodedInput(ReadOnlyMemory<byte> bytes, string location, ReadWindow window, ReadWindow.Reservation reservation,
+            AssetChunkLease? lease = null) : IDisposable
         {
             private ReadWindow? _window = window;
             internal ReadOnlyMemory<byte> Bytes { get; private set; } = bytes;
@@ -199,6 +228,7 @@ internal static partial class PbrSceneFiles
             public void Dispose()
             {
                 Interlocked.Exchange(ref _window, null)?.Release(reservation);
+                lease?.Dispose();
                 Bytes = default;
             }
         }

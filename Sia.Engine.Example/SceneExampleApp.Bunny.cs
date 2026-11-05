@@ -230,7 +230,16 @@ internal sealed partial class SceneExampleApp
         _lightmapInput = null;
     }
 
-    public ValueTask StopSceneStreamingAsync() => _sceneRenderer?.StopStreamingAsync() ?? ValueTask.CompletedTask;
+    public async ValueTask StopSceneStreamingAsync()
+    {
+        if (_shutdownComplete) return;
+        // Capture on the graphics owner, including the Unlit path without a PBR renderer.
+        var completion = _queue.IsNull ? Task.FromResult(true) : GpuQueueCompletion.AfterSubmittedWork(_queue);
+        if (_sceneRenderer is { } renderer) await renderer.StopStreamingAsync().ConfigureAwait(false);
+        if (!await completion.ConfigureAwait(false))
+            throw new InvalidOperationException("Scene GPU queue shutdown failed; graphics resources remain retained.");
+        _shutdownComplete = true;
+    }
 
     private LightingFiles.Prepared? _preparedLighting;
     private IblEnvironmentAsset? _bakedEnvironment;

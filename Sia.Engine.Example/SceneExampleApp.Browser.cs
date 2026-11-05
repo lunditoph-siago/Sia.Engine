@@ -190,6 +190,11 @@ internal sealed partial class SceneExampleApp
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
         var descriptor = CreateDeviceDescriptor();
         descriptor.RequiredLimits = &required;
+        var blockFeature = WGPUFeatureName.TextureCompressionBC;
+        if (RequiresBlockTextures()) {
+            descriptor.RequiredFeatureCount = 1;
+            descriptor.RequiredFeatures = &blockFeature;
+        }
         return Wgpu.RequestDeviceAsync(_adapter, descriptor);
     }
 }

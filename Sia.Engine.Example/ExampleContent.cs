@@ -8,6 +8,7 @@ internal static partial class ExampleContent
     internal sealed record Entry
     {
         public required string Scene { get; init; }
+        public string? PackIndex { get; init; }
         public string? Lightmaps { get; init; }
         public string? Environment { get; init; }
         public string[] ReflectionCaptures { get; init; } = [];
@@ -45,6 +46,14 @@ internal static partial class ExampleContent
         }
         var entry = catalog.Bunny ?? throw new InvalidDataException("Bunny requires a scene entry.");
         Path(entry.Scene, ".siascene");
+        if (entry.PackIndex is { } pack) {
+            var folder = entry.Scene[..entry.Scene.LastIndexOf('/')];
+            var name = pack[(pack.LastIndexOf('/') + 1)..];
+            if (!pack.StartsWith(folder + "/", StringComparison.Ordinal) || pack != folder + "/" + name
+                || !name.EndsWith(".siapack", StringComparison.Ordinal))
+                throw new InvalidDataException("Storage index must belong to the selected content snapshot.");
+            _ = new Sia.Asset.AssetChunk(name[..^8], 1);
+        }
         if (entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
             || entry.ReflectionCaptures.Distinct(StringComparer.Ordinal).Count() != entry.ReflectionCaptures.Length)
             throw new InvalidDataException("Default captures require at most sixteen distinct references.");
@@ -56,7 +65,8 @@ internal static partial class ExampleContent
     }
 
     internal static Entry MapPaths(Entry entry, Func<string, string> map)
-        => entry with { Scene = map(entry.Scene), Lightmaps = entry.Lightmaps is { } lightmaps ? map(lightmaps) : null,
+        => entry with { Scene = map(entry.Scene), PackIndex = entry.PackIndex is { } pack ? map(pack) : null,
+            Lightmaps = entry.Lightmaps is { } lightmaps ? map(lightmaps) : null,
             Environment = entry.Environment is { } environment ? map(environment) : null,
             ReflectionCaptures = entry.ReflectionCaptures.Select(map).ToArray() };
 

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using Sia;
 using Sia.WebGPU;
 
@@ -9,7 +10,9 @@ public sealed class GpuResources : IDisposable
     private readonly World _world;
     private readonly List<Entity> _owned = [];
     private readonly Dictionary<Entity, ulong> _sizes = [];
+    private HashSet<Entity>? _releasing;
     private bool _disposed;
+    private bool _disposing;
 
     public WgpuHandle<WGPUDevice> Device { get; }
     public WgpuHandle<WGPUQueue> Queue { get; }
@@ -95,21 +98,72 @@ public sealed class GpuResources : IDisposable
     public void Release(Entity entity)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_sizes.Remove(entity, out var bytes))
+        if (!_sizes.ContainsKey(entity) || !(_releasing ??= []).Add(entity))
             throw new InvalidOperationException("Resource belongs to a different owner or was already released.");
-        _owned.Remove(entity);
-        if (entity.IsValid) entity.Destroy();
-        Bytes -= bytes;
+        if (_world.Dispatcher.IsSending) DeferRelease(entity);
+        else ReleaseReservedResource(entity);
+    }
+
+    private void DeferRelease(Entity entity)
+    {
+        try { _world.Dispatcher.RunAfterSend(() => ReleaseReservedResource(entity)); }
+        catch {
+            _releasing!.Remove(entity);
+            throw;
+        }
+    }
+
+    private void ReleaseReservedResource(Entity entity)
+    {
+        try { ReleaseResource(entity); }
+        finally { _releasing!.Remove(entity); }
+    }
+
+    private void ReleaseResource(Entity entity)
+    {
+        if (!_sizes.ContainsKey(entity)) return;
+        try {
+            if (entity.IsValid) entity.Destroy();
+        }
+        finally {
+            // Destruction can fail or be deferred. Retain ownership until the entity
+            // is actually invalid, so a later Dispose can retry the live resource.
+            if (!entity.IsValid && _sizes.Remove(entity, out var bytes)) {
+                _owned.Remove(entity);
+                Bytes -= bytes;
+            }
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposing || (_disposed && _owned.Count == 0)) return;
         _disposed = true;
-        for (var i = _owned.Count - 1; i >= 0; i--)
-            if (_owned[i].IsValid) _owned[i].Destroy();
-        _owned.Clear();
-        _sizes.Clear();
-        Bytes = 0;
+        _disposing = true;
+        try {
+            // Defer the whole cleanup during sends rather than clearing its ledger
+            // while World destruction is still pending. Reentry shares this attempt.
+            _world.Dispatcher.RunAfterSend(DisposeResources);
+        }
+        catch {
+            _disposing = false;
+            throw;
+        }
+    }
+
+    private void DisposeResources()
+    {
+        List<Exception>? errors = null;
+        try {
+            for (var i = _owned.Count - 1; i >= 0; i--) {
+                try { ReleaseResource(_owned[i]); }
+                catch (Exception error) { (errors ??= []).Add(error); }
+            }
+        }
+        finally {
+            _disposing = false;
+        }
+        if (errors is { Count: 1 }) ExceptionDispatchInfo.Capture(errors[0]).Throw();
+        if (errors is { Count: > 1 }) throw new AggregateException(errors);
     }
 }

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Math;
@@ -27,6 +28,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private bool _glfwInitialized;
     private bool _surfaceConfigured;
     private bool _disposed;
+    private bool _disposing;
+    private bool _shutdownComplete;
+    private bool _deviceDestroyed;
     private readonly ScenePipeline _pipeline;
     private static string? _gpuError;
 
@@ -108,6 +112,11 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         ConfigureSceneLimits(ref required);
         var deviceDescriptor = CreateDeviceDescriptor();
         deviceDescriptor.RequiredLimits = &required;
+        var blockFeature = WGPUFeatureName.TextureCompressionBC;
+        if (RequiresBlockTextures()) {
+            deviceDescriptor.RequiredFeatureCount = 1;
+            deviceDescriptor.RequiredFeatures = &blockFeature;
+        }
         _device = Wgpu.RequestDevice(_adapter, deviceDescriptor);
         _queue = Wgpu.GetQueue(_device);
 
@@ -141,6 +150,19 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         descriptor.UncapturedErrorCallbackInfo.Callback = &OnGpuError;
 #endif
         return descriptor;
+    }
+
+    private bool RequiresBlockTextures()
+    {
+        if (_referenceScene is not { } scene || !scene.Textures.Values.Any(texture => texture.Data.Format != PbrTextureFormat.Rgba8))
+            return false;
+        if (WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), WGPUFeatureName.TextureCompressionBC) == 0)
+            throw new NotSupportedException("This content package requires BC texture compression. Select an rgba8 package for an adapter without texture-compression-bc.");
+        if (scene is PbrSceneFiles.PreparedMixed or PbrSceneFiles.PreparedRasterStreaming
+            && scene.Textures.Values.Any(texture => texture.Data.Format != PbrTextureFormat.Rgba8 && texture.Mips is { TailMip: > 0 })
+            && WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), WGPUFeatureName.CoreFeaturesAndLimits) == 0)
+            throw new NotSupportedException("This content package requires WebGPU core for block-compressed mip streaming. Select an rgba8 package for this adapter.");
+        return true;
     }
 
     private void ConfigureSceneLimits(ref WGPULimits required)
@@ -391,35 +413,70 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 #endif
     public void Dispose()
     {
-        if (_disposed) {
-            return;
+        if (_disposed) return;
+        if (_disposing) throw new InvalidOperationException("Scene disposal is already in progress.");
+        _disposing = true;
+        var errors = new List<Exception>();
+        bool Attempt(Action cleanup)
+        {
+            try { cleanup(); return true; }
+            catch (Exception error) { errors.Add(error); return false; }
         }
-        _disposed = true;
+        void ThrowFailures()
+        {
+            if (errors.Count == 1) ExceptionDispatchInfo.Capture(errors[0]).Throw();
+            if (errors.Count != 0) throw new AggregateException("Scene cleanup did not complete.", errors);
+        }
 
-        DisposeRenderGraph();
-        DisposeScene();
+        try {
+            // These simulation-only owners have no pending GPU work. Other stages
+            // remain retained until streaming and queue completion are confirmed.
+            Attempt(() => { _sceneStage?.Dispose(); _sceneStage = null; });
+            Attempt(() => { _sceneWorld?.Dispose(); _sceneWorld = null; });
+            if (!_queue.IsNull && !_shutdownComplete) {
+                errors.Add(new InvalidOperationException("Complete scene streaming and GPU queue shutdown before disposing graphics resources."));
+                ThrowFailures();
+            }
 
-        Wgpu.Release(ref _queue);
+            if (!Attempt(() => { _sceneRenderer?.Dispose(); _sceneRenderer = null; })) {
+                ThrowFailures();
+            }
+            var graphDisposed = Attempt(DisposeRenderGraph);
+            var sceneDisposed = Attempt(DisposeScene);
+            if (!graphDisposed || !sceneDisposed) ThrowFailures();
 
-        if (!_surface.IsNull && _surfaceConfigured) {
-            Wgpu.UnconfigureSurface(_surface);
-            _surfaceConfigured = false;
-        }
-        if (!_device.IsNull) {
-            Wgpu.DestroyDevice(_device);
-        }
-        Wgpu.Release(ref _device);
-        Wgpu.Release(ref _adapter);
-        Wgpu.Release(ref _surface);
-        Wgpu.Release(ref _instance);
+            Attempt(() => Wgpu.Release(ref _queue));
+            Attempt(() => {
+                if (!_surface.IsNull && _surfaceConfigured) {
+                    Wgpu.UnconfigureSurface(_surface);
+                    _surfaceConfigured = false;
+                }
+            });
+            if (_queue.IsNull && !_surfaceConfigured) {
+                if (!_device.IsNull && !_deviceDestroyed)
+                    Attempt(() => { Wgpu.DestroyDevice(_device); _deviceDestroyed = true; });
+                if (_device.IsNull || _deviceDestroyed)
+                    Attempt(() => Wgpu.Release(ref _device));
+            }
+            if (_device.IsNull) Attempt(() => Wgpu.Release(ref _adapter));
+            if (!_surfaceConfigured) Attempt(() => Wgpu.Release(ref _surface));
+            if (_queue.IsNull && _device.IsNull && _adapter.IsNull && _surface.IsNull)
+                Attempt(() => Wgpu.Release(ref _instance));
 
-        if (!_window.IsNull) {
-            Glfw.DestroyWindow(ref _window);
+            if (_surface.IsNull) Attempt(() => {
+                if (!_window.IsNull) Glfw.DestroyWindow(ref _window);
+            });
+            if (_window.IsNull) Attempt(() => {
+                if (_glfwInitialized) {
+                    Glfw.Terminate();
+                    _glfwInitialized = false;
+                }
+            });
+
+            ThrowFailures();
+            _disposed = true;
         }
-        if (_glfwInitialized) {
-            Glfw.Terminate();
-            _glfwInitialized = false;
-        }
+        finally { _disposing = false; }
     }
 
     private static T* Pointer<T>(WgpuHandle<T> handle)

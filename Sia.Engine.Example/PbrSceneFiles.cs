@@ -28,23 +28,23 @@ internal static partial class PbrSceneFiles
 
     internal static Task<Prepared<MeshVirtualRecord>> PrepareVirtualAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, AssetPackIndex? packIndex = null)
         => PrepareAsync(path, client, static m => m.Virtual?.Id ?? throw new InvalidDataException("Selected Mesh has no Virtual product."),
             static (MeshVirtualRecord r) => r.Data.Parts.Length, MeshVirtualRecord.Load,
-            maximumFileBytes, maximumTotalBytes, cancellationToken);
+            maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
 
     internal static Task<Prepared<MeshRasterRecord>> PrepareRasterAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, AssetPackIndex? packIndex = null)
         => PrepareAsync(path, client, static m => m.Raster?.Id ?? throw new InvalidDataException("Selected Mesh has no Raster product."),
             static (MeshRasterRecord r) => r.Data.Sections.Length, MeshRasterRecord.Load,
-            maximumFileBytes, maximumTotalBytes, cancellationToken);
+            maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
 
     private static async Task<Prepared<TProduct>> PrepareAsync<TProduct>(string path, HttpClient client,
         Func<MeshManifest, AssetId> selectProduct, Func<TProduct, int> partCount, Func<Stream, ulong, string?, TProduct> decodeProduct,
-        int maximumFileBytes, long maximumTotalBytes, CancellationToken cancellationToken) where TProduct : class, IAssetRecord
+        int maximumFileBytes, long maximumTotalBytes, CancellationToken cancellationToken, AssetPackIndex? packIndex = null) where TProduct : class, IAssetRecord
     {
-        var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
+        await using var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
         var prepared = await reader.References(); var scene = prepared.Scene;
         var meshes = prepared.Meshes;
         var uses = new int[scene.Data.Bindings.Length];

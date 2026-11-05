@@ -1,15 +1,23 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 
 namespace Sia.Asset;
 
 public readonly record struct AssetChunkCacheStatistics(
     long ReservedBytes, long PeakReservedBytes, int ResidentChunks, int LoadingChunks, int QueuedChunks,
-    long ReadBytes, long ReadAttempts, long CacheHits, long CoalescedRequests, long Evictions);
+    long ReadBytes, long ReadAttempts, long CacheHits, long CoalescedRequests, long Evictions)
+{
+    // Aggregated durations may overlap between physical reads or waiting callers;
+    // neither is a wall-clock stage duration. Read includes retries and validation.
+    public double PhysicalReadMilliseconds { get; init; }
+    public double AcquireWaitMilliseconds { get; init; }
+}
 
 public sealed class AssetChunkCache : IAsyncDisposable
 {
     private readonly Lock _gate = new();
     private readonly Func<AssetChunk, CancellationToken, ValueTask<Stream>> _open;
+    private readonly Func<AssetChunk, AssetChunkSlice?>? _resolve;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly HashSet<Entry> _loading = [];
     private readonly List<Entry> _queued = [];
@@ -21,6 +29,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
     private long _clock;
     private long _readBytes, _attempts;
     private long _hits, _coalesced, _evictions;
+    private long _readTicks, _waitTicks;
     private bool _disposed;
 
     public AssetChunkCacheStatistics Statistics {
@@ -34,13 +43,17 @@ public sealed class AssetChunkCache : IAsyncDisposable
                 }
                 return new(_reserved, _peak, resident, _loading.Count,
                     queued, Interlocked.Read(ref _readBytes),
-                    Interlocked.Read(ref _attempts), _hits, _coalesced, _evictions);
+                    Interlocked.Read(ref _attempts), _hits, _coalesced, _evictions) {
+                    PhysicalReadMilliseconds = (double)Interlocked.Read(ref _readTicks) / Stopwatch.Frequency * 1000,
+                    AcquireWaitMilliseconds = (double)Interlocked.Read(ref _waitTicks) / Stopwatch.Frequency * 1000
+                };
             }
         }
     }
 
     public AssetChunkCache(Func<AssetChunk, CancellationToken, ValueTask<Stream>> open,
-        long byteBudget, int maximumConcurrentReads = 2, int maximumPendingChunks = 128, int maximumReadAttempts = 2)
+        long byteBudget, int maximumConcurrentReads = 2, int maximumPendingChunks = 128, int maximumReadAttempts = 2,
+        Func<AssetChunk, AssetChunkSlice?>? resolve = null)
     {
         ArgumentNullException.ThrowIfNull(open);
         ArgumentOutOfRangeException.ThrowIfLessThan(byteBudget, 2);
@@ -49,6 +62,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumReadAttempts, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumReadAttempts, 8);
         _open = open;
+        _resolve = resolve;
         _budget = byteBudget;
         _concurrency = maximumConcurrentReads;
         _maximumPending = maximumPendingChunks;
@@ -57,6 +71,30 @@ public sealed class AssetChunkCache : IAsyncDisposable
 
     public async ValueTask<AssetChunkLease> AcquireAsync(AssetChunk chunk, int priority = 0,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_resolve?.Invoke(chunk) is not { } slice)
+            return await AcquireStoredAsync(chunk, priority, cancellationToken).ConfigureAwait(false);
+        if (slice.Pack is null || slice.Pack.Encoding != AssetChunkEncoding.Raw || slice.Offset < 0
+            || (long)slice.Offset + chunk.Length > slice.Pack.Length)
+            throw new InvalidDataException("Resolved pack slice exceeds its Raw storage bounds.");
+        // Enter the ordinary physical cache directly, without recursive resolution,
+        // nested caches, or a second reservation/copy for each logical leaf.
+        var lease = await AcquireStoredAsync(slice.Pack, priority, cancellationToken).ConfigureAwait(false);
+        try {
+            cancellationToken.ThrowIfCancellationRequested();
+            var bytes = lease.Memory.Slice(slice.Offset, chunk.Length);
+            if (!SHA256.HashData(bytes.Span).AsSpan().SequenceEqual(Convert.FromHexString(chunk.Id)))
+                throw new InvalidDataException("Packed leaf checksum mismatch.");
+            cancellationToken.ThrowIfCancellationRequested();
+            return new AssetChunkLease(bytes, lease.Dispose);
+        }
+        catch { lease.Dispose(); throw; }
+    }
+
+    private async ValueTask<AssetChunkLease> AcquireStoredAsync(AssetChunk chunk, int priority,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(chunk);
         cancellationToken.ThrowIfCancellationRequested();
@@ -83,6 +121,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
             Pump();
         }
         var transferred = false;
+        var waitStarted = Stopwatch.GetTimestamp();
         try {
             var bytes = await entry.Ready.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -91,7 +130,10 @@ public sealed class AssetChunkCache : IAsyncDisposable
             transferred = true;
             return lease;
         }
-        finally { if (!transferred) { Release(entry); } }
+        finally {
+            Interlocked.Add(ref _waitTicks, Stopwatch.GetTimestamp() - waitStarted);
+            if (!transferred) { Release(entry); }
+        }
     }
 
     private void Pump()
@@ -137,6 +179,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
         await Task.Yield();
         byte[]? bytes = null;
         Exception? failure = null;
+        var readStarted = Stopwatch.GetTimestamp();
         try {
             var token = entry.Cancellation.Token;
             token.ThrowIfCancellationRequested();
@@ -173,6 +216,7 @@ public sealed class AssetChunkCache : IAsyncDisposable
             }
         }
         catch (Exception error) { failure = error; }
+        finally { Interlocked.Add(ref _readTicks, Stopwatch.GetTimestamp() - readStarted); }
         lock (_gate) {
             entry.Reusable = null;
             _loading.Remove(entry);
@@ -297,7 +341,7 @@ public sealed class AssetChunkLease : IDisposable
         }
     }
 
-    internal AssetChunkLease(byte[] bytes, Action release)
+    internal AssetChunkLease(ReadOnlyMemory<byte> bytes, Action release)
     {
         _memory = bytes;
         _release = release;

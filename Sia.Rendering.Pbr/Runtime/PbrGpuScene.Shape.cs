@@ -16,13 +16,17 @@ internal sealed partial class PbrGpuScene
             vertices += (uint)geometry.VertexCount; triangles += geometry.TriangleCount;
         }
         var roots = new HashSet<string>(StringComparer.Ordinal);
+        var instanceRoots = new HashSet<int>();
         foreach (var instance in source.Instances.Span) {
             var tree = source.Hierarchies[instance.AssetIndex];
-            var ids = tree.Nodes.Take(tree.Roots).SelectMany(node => node.Pages).Select(page => page.Id).Distinct(StringComparer.Ordinal);
-            foreach (var id in ids) {
-                if (instanced && !roots.Add(source.ResidentRoots[id].Data?.ContentHash ?? id)) continue;
-                var page = source.PageTable[id]; vertices += (uint)page.Vertices; triangles += (uint)page.Triangles;
-            }
+            instanceRoots.Clear();
+            foreach (var node in tree.Nodes[..tree.Roots])
+                foreach (var part in tree.GetPages(node)) {
+                    if (!instanceRoots.Add(part.Page)) continue;
+                    var page = source.Pages[part.Page];
+                    if (instanced && !roots.Add(source.ResidentRoots[page.Id].Data?.ContentHash ?? page.Id)) continue;
+                    vertices += (uint)page.Vertices; triangles += (uint)page.Triangles;
+                }
         }
         var instanceBytes = instanced ? (ulong)System.Math.Max(1, source.Instances.Length + source.TransparentInstances.Length)
             * (ulong)Unsafe.SizeOf<PbrInstanceGpu>() : 0;

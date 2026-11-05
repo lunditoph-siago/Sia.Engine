@@ -15,11 +15,11 @@ internal static partial class PbrSceneFiles
 
     internal static async Task<PreparedRasterStreaming> PrepareRasterStreamingAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, AssetPackIndex? packIndex = null)
     {
-        var prepared = await PrepareRasterAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
+        var prepared = await PrepareRasterAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
         var source = new PageSource(path, client, new Prepared<MeshVirtualRecord>(prepared.Id, prepared.Scene, prepared.Meshes,
-            new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Materials, prepared.Textures));
+            new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Materials, prepared.Textures), packIndex: packIndex);
         return new(prepared, source) { EncodedBytes = prepared.EncodedBytes };
     }
 

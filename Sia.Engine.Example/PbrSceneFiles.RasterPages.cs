@@ -16,17 +16,17 @@ internal static partial class PbrSceneFiles
     /// <summary>Prepares the complete metadata graph; no Source, whole Raster or geometry leaf is read.</summary>
     internal static async Task<PreparedRasterPagesStreaming> PrepareRasterPagesStreamingAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, AssetPackIndex? packIndex = null)
     {
         var prepared = await PrepareAsync(path, client,
             static manifest => manifest.RasterPages?.Id ?? throw new InvalidDataException("Selected Mesh has no paged Raster product."),
             static (MeshRasterPagesRecord record) => record.Data.Sections.Length, MeshRasterPagesRecord.Load,
-            maximumFileBytes, maximumTotalBytes, cancellationToken);
+            maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
         _ = PbrSceneComposition.ResolveRasterPages(prepared.Scene.Data, r => prepared.Meshes[r.Value].Data,
             r => prepared.Products[r.Value].Data, r => prepared.Materials[r.Value].Data, r => prepared.Textures[r.Value].Data,
             cancellationToken: cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        var source = new PageSource(path, client, prepared);
+        var source = new PageSource(path, client, prepared, packIndex: packIndex);
         return new(prepared, source) { EncodedBytes = prepared.EncodedBytes };
     }
 

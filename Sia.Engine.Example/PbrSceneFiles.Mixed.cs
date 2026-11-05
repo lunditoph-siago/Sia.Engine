@@ -26,11 +26,11 @@ internal static partial class PbrSceneFiles
         bool tracing = false, Func<PbrMeshInstance, MeshManifest, PbrMeshPresentation>? select = null,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
         CancellationToken cancellationToken = default, long maximumRequiredBytes = 512L * 1024 * 1024,
-        IReadOnlySet<Guid>? rasterInstances = null)
+        IReadOnlySet<Guid>? rasterInstances = null, AssetPackIndex? packIndex = null)
     {
         if (!Enum.IsDefined(quality)) throw new ArgumentOutOfRangeException(nameof(quality));
         ArgumentOutOfRangeException.ThrowIfNegative(maximumRequiredBytes);
-        var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken);
+        await using var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
         var prepared = await reader.References(); var choices = new Dictionary<Guid, PbrMeshPresentation>();
         foreach (var instance in prepared.Scene.Data.Instances) {
             cancellationToken.ThrowIfCancellationRequested();
@@ -80,10 +80,12 @@ internal static partial class PbrSceneFiles
             total += page.EncodedBytes;
         }
         var virtualInputs = new Prepared<MeshVirtualRecord>(prepared.Id, prepared.Scene, prepared.Meshes, virtuals, prepared.Materials, prepared.Textures);
-        var source = new PageSource(path, client, virtualInputs);
+        await reader.DisposeAsync();
+        var source = new PageSource(path, client, virtualInputs, packIndex: packIndex);
         try {
-            var pages = new Dictionary<AssetId, MeshVirtualPageRecord>();
-            foreach (var page in required) pages.Add(page.Id, await source.ReadAsync(page.Reference, cancellationToken));
+            var records = await ReadRequiredAsync(required, (page, token) => source.ReadAsync(page.Reference, token), cancellationToken);
+            var pages = new Dictionary<AssetId, MeshVirtualPageRecord>(required.Length);
+            for (var index = 0; index < required.Length; index++) pages.Add(required[index].Id, records[index]);
             return new(prepared.Id, prepared.Scene, prepared.Meshes, prepared.Materials, prepared.Textures,
                 rasters, virtuals, bvhs, choices, pages, source, maximumRequiredBytes) { EncodedBytes = total };
         }

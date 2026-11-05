@@ -21,6 +21,7 @@ internal sealed partial class PbrMaterials : IDisposable
         public readonly Entity Sampler = sampler;
         public Entity Texture = texture, View = view;
         public PbrTextureData[] Sources = [];
+        public TextureBlockLayout Layout;
         public uint Width, Height;
         public int Levels, TailMip, ResidentMip, DesiredMip, MinimumMip;
         public long RetryFrame;
@@ -53,7 +54,7 @@ internal sealed partial class PbrMaterials : IDisposable
         PbrSceneStream? stream = null, PbrTextureStreamingSettings? streaming = null)
     {
         (_frame, _layout, _budget, _stream, _streaming) = (frame, layout, budget, stream, streaming ?? new());
-        if (_streaming.UploadBytesPerFrame < 4 || _streaming.UploadBytesPerFrame % 4 != 0
+        if (_streaming.UploadBytesPerFrame < 4 || _streaming.UploadBytesPerFrame % 4 != 0 || _streaming.BootstrapUploadBytes < 4
             || _streaming.DecodedBytes < 65536 || _streaming.DecodedBytes > 256L * 1024 * 1024 || _streaming.IdleFrames < 1
             || !float.IsFinite(_streaming.MipBias) || _streaming.MipBias is < 0 or > 4)
             throw new ArgumentOutOfRangeException(nameof(streaming));
@@ -62,6 +63,9 @@ internal sealed partial class PbrMaterials : IDisposable
             var assets = source.IsEmpty ? [new PbrMaterialAsset(PbrMaterial.Default)] : source.ToArray();
             if (assets.Length > 256)
                 throw new ArgumentException("The resident material table supports at most 256 materials.");
+            foreach (var material in assets)
+                if (!PbrMaterialValidation.TexturesValid(material.BaseColor, material.Normal, material.MetallicRoughness, material.Occlusion, material.Emissive))
+                    throw new ArgumentException("Material texture encoding or color space does not match its role.", nameof(source));
             HasTransmission = assets.Any(m => m.Transmission > 0);
             Transmission = [.. assets.Select(m => m.Transmission > 0)];
             var whiteSrgb = PbrTextureData.Create(1, 1, true, [new byte[] { 255, 255, 255, 255 }]);
@@ -69,11 +73,12 @@ internal sealed partial class PbrMaterials : IDisposable
             var normal = PbrTextureData.Create(1, 1, false, [new byte[] { 128, 128, 255, 255 }]);
             var maps = assets.Select(m => new[] { m.BaseColor ?? whiteSrgb, m.Normal ?? normal,
                 m.MetallicRoughness ?? white, m.Occlusion ?? white, m.Emissive ?? whiteSrgb }).ToArray();
+            var uniqueTextures = maps.SelectMany(m => m).Distinct<PbrTextureData>(ReferenceEqualityComparer.Instance).ToArray();
+            ValidateBootstrap(uniqueTextures);
             var references = new Dictionary<PbrTextureData, (ArrayTexture Texture, uint Layer)>(ReferenceEqualityComparer.Instance);
-            foreach (var shape in maps.SelectMany(m => m).Distinct<PbrTextureData>(ReferenceEqualityComparer.Instance)
-                .GroupBy(Shape)) {
-                var (Width, Height, Levels, Srgb, Sampler, _, _) = shape.Key;
-                var perLayer = TailBytes(Width, Height, Levels, 0);
+            foreach (var shape in uniqueTextures.GroupBy(Shape)) {
+                var (Width, Height, Levels, Format, Sampler, _, _) = shape.Key;
+                var perLayer = TailBytes(Width, Height, Levels, 0, TextureBlockLayout.For(Format));
                 var layerLimit = stream is null ? (int)_gpu.Limits.MaxTextureArrayLayers
                     : (int)System.Math.Min(_gpu.Limits.MaxTextureArrayLayers, System.Math.Max(1L, _streaming.DecodedBytes / perLayer));
                 // Per-layer explicit LOD clamps preserve filtering when min/mag agree.
@@ -110,6 +115,7 @@ internal sealed partial class PbrMaterials : IDisposable
                 for (var map = 0; map < entries.Length; map++)
                     if (entries[map].Texture.Sources.Length > 1 && !entries[map].Texture.Sources[entries[map].Layer].Sampler.UseMipmaps)
                         streamingFlags |= 1u << (20 + map);
+                if (m.Normal?.Format == PbrTextureFormat.Bc5) streamingFlags |= 1u << 25;
                 parameters[i] = new(new(p.BaseColor, p.Metallic), new(p.EmissiveColor * p.EmissiveStrength, p.Roughness),
                     new(m.NormalScale, m.OcclusionStrength, m.Normal is null ? 0 : 1, m.DoubleSided ? 1 : 0),
                     new(entries[0].Layer, entries[1].Layer, entries[2].Layer, entries[3].Layer),
@@ -117,7 +123,7 @@ internal sealed partial class PbrMaterials : IDisposable
             }
             var tableBytes = checked(((ulong)parameters.Length * (ulong)Marshal.SizeOf<PbrMaterialGpu>())
                 + ((ulong)batchMaps.Count * 16));
-            if (tableBytes > budget - Bytes)
+            if (tableBytes > PbrTextureStreamingPolicy.AvailableBytes(budget, Bytes))
                 throw new InvalidOperationException("Combined material allocation budget exceeded.");
             Table = _gpu.Upload<PbrMaterialGpu>(parameters);
             _parameters = parameters;
@@ -156,14 +162,14 @@ internal sealed partial class PbrMaterials : IDisposable
             Width = first.Width, Height = first.Height, DepthOrArrayLayers = (uint)sources.Length
         };
         descriptor.Dimension = WGPUTextureDimension._2D;
-        descriptor.Format = first.Srgb ? WGPUTextureFormat.RGBA8UnormSrgb : WGPUTextureFormat.RGBA8Unorm;
+        descriptor.Format = first.GpuFormat;
         descriptor.MipLevelCount = (uint)first.MipLevels.Length;
         descriptor.Usage = WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopyDst;
         ulong bytes = 0;
         foreach (var source in sources)
             foreach (var level in source.MipLevels.Span)
                 bytes = checked(bytes + (ulong)level.Length);
-        if (bytes > _budget - Bytes)
+        if (bytes > PbrTextureStreamingPolicy.AvailableBytes(_budget, Bytes))
             throw new InvalidOperationException("Combined material allocation budget exceeded.");
         var texture = _gpu.Texture(descriptor, bytes);
         Textures.Add(texture);
@@ -175,12 +181,15 @@ internal sealed partial class PbrMaterials : IDisposable
                     Texture = (WGPUTexture*)texture.GetWgpu<WGPUTexture>().DangerousGetHandle(),
                     MipLevel = (uint)mip, Origin = new() { Z = (uint)layer }, Aspect = WGPUTextureAspect.All
                 };
-                var dataLayout = new WGPUTexelCopyBufferLayout { BytesPerRow = width * 4, RowsPerImage = height };
-                var size = new WGPUExtent3D { Width = width, Height = height, DepthOrArrayLayers = 1 };
+                var layout = first.BlockLayout;
+                var dataLayout = new WGPUTexelCopyBufferLayout { BytesPerRow = layout.RowBytes(width), RowsPerImage = layout.BlockRows(height) };
+                var size = new WGPUExtent3D { Width = layout.BlockColumns(width) * layout.BlockWidth,
+                    Height = layout.BlockRows(height) * layout.BlockHeight, DepthOrArrayLayers = 1 };
                 fixed (byte* data = sources[layer].MipLevels.Span[mip].Span) {
                     WgpuUnsafe.wgpuQueueWriteTexture((WGPUQueue*)_gpu.Queue.DangerousGetHandle(), &destination, data,
-                        (nuint)(width * height * 4), &dataLayout, &size);
+                        (nuint)layout.MipByteLength(width, height), &dataLayout, &size);
                 }
+                _startupUploaded = checked(_startupUploaded + layout.MipByteLength(width, height));
             }
         }
         var viewDescriptor = WGPUTextureViewDescriptor.Default;
@@ -194,6 +203,29 @@ internal sealed partial class PbrMaterials : IDisposable
         samplerDescriptor.MipmapFilter = first.Sampler.MipFilter;
         samplerDescriptor.LodMaxClamp = first.Sampler.UseMipmaps ? first.MipLevels.Length - 1 : 0;
         return new(texture, view, _gpu.Own(Wgpu.CreateSampler(_gpu.Device, samplerDescriptor)));
+    }
+
+    private unsafe void ValidateBootstrap(PbrTextureData[] textures)
+    {
+        ulong bytes = 0;
+        foreach (var texture in textures) {
+            var layout = texture.BlockLayout;
+            if (!layout.SupportsBaseDimensions(texture.Width, texture.Height)
+                || texture.Width > _gpu.Limits.MaxTextureDimension2D || texture.Height > _gpu.Limits.MaxTextureDimension2D)
+                throw new NotSupportedException("Bootstrap texture dimensions do not fit the device and storage blocks.");
+            if (texture.Format != PbrTextureFormat.Rgba8) {
+                var device = (WGPUDevice*)_gpu.Device.DangerousGetHandle();
+                if (WgpuUnsafe.wgpuDeviceHasFeature(device, WGPUFeatureName.TextureCompressionBC) == 0)
+                    throw new NotSupportedException("Block-compressed textures require texture-compression-bc on the device. Select the RGBA8 product fallback.");
+                if (_stream is not null && _stream.TextureSources.TryGetValue(texture, out var source) && source.TailMip > 0
+                    && WgpuUnsafe.wgpuDeviceHasFeature(device, WGPUFeatureName.CoreFeaturesAndLimits) == 0)
+                    throw new NotSupportedException("Block-compressed mip streaming requires core-features-and-limits for texture copies. Select the RGBA8 product fallback.");
+            }
+            if (_stream is not null && _streaming.UploadBytesPerFrame < layout.BytesPerBlock)
+                throw new ArgumentException("The frame upload allowance must hold at least one texture storage block.", nameof(_streaming));
+            bytes = checked(bytes + texture.PayloadBytes);
+            PbrTextureStreamingPolicy.ValidateBootstrap(bytes, _streaming.BootstrapUploadBytes);
+        }
     }
 
     public void Dispose()

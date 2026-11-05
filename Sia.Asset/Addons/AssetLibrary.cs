@@ -19,6 +19,8 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     private readonly Dictionary<ObjectKey<IAssetRecord>, Entity> _entities = [];
     private readonly Dictionary<AssetId, Entity> _identifiedEntities = [];
     private readonly HashSet<AssetId> _acquiring = [];
+    private readonly HashSet<Entity> _releasing = [];
+    private readonly HashSet<Entity> _pendingReleases = [];
     private bool _initialized;
 
     private static readonly ConcurrentDictionary<Type, AssetEntry> s_assetEntries = [];
@@ -47,6 +49,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
             if (Unsafe.IsNullRef(ref meta)) return;
             ReleaseDependencies(e, ref meta);
         });
+        Listen((Entity e, in AssetMetadata.OnUnreferred _) => QueueAutomaticRelease(e));
     }
 
     public override void OnUninitialize(World world)
@@ -57,29 +60,42 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
             _entities.Clear();
             _identifiedEntities.Clear();
             _acquiring.Clear();
+            _releasing.Clear();
+            _pendingReleases.Clear();
         }
     }
 
     private void ReleaseDependencies(in Entity entity, ref AssetMetadata meta)
     {
-        foreach (var referrer in meta.Referrers.ToArray()) {
-            if (referrer.IsValid) referrer.Unrefer(entity);
-        }
-        foreach (var referred in meta.Dependents.ToArray()) {
-            if (!referred.IsValid) continue;
-            entity.Unrefer(referred);
-
-            ref var refereeMeta = ref referred.Get<AssetMetadata>();
-            if (refereeMeta.AssetLife == AssetLife.Automatic
-                    && refereeMeta.Referrers.Count == 0) {
-                World.Dispatcher.RunAfterSend(() => {
-                    if (!referred.IsValid) return;
-                    ref var current = ref referred.Get<AssetMetadata>();
-                    if (current.AssetLife == AssetLife.Automatic && current.Referrers.Count == 0)
-                        referred.Destroy();
-                });
+        // Persist on the entity through later Remove listeners and failed destruction.
+        // The set below only prevents recursive dependency cleanup during this attempt.
+        meta.IsClosing = true;
+        if (!_releasing.Add(entity)) return;
+        try {
+            foreach (var referrer in meta.Referrers.ToArray()) {
+                if (referrer.IsValid) referrer.Unrefer(entity);
+            }
+            foreach (var referred in meta.Dependents.ToArray()) {
+                if (referred.IsValid) entity.Unrefer(referred);
             }
         }
+        finally { _releasing.Remove(entity); }
+    }
+
+    private void QueueAutomaticRelease(Entity entity)
+    {
+        if (!_initialized || _releasing.Contains(entity) || !entity.IsValid
+            || entity.Get<AssetMetadata>().IsClosing
+            || entity.Get<AssetMetadata>().AssetLife != AssetLife.Automatic
+            || entity.Get<AssetMetadata>().Referrers.Count != 0
+            || !_pendingReleases.Add(entity)) return;
+        World.Dispatcher.RunAfterSend(() => {
+            _pendingReleases.Remove(entity);
+            if (!_initialized || !entity.IsValid || _releasing.Contains(entity)) return;
+            ref var current = ref entity.Get<AssetMetadata>();
+            if (!current.IsClosing && current.AssetLife == AssetLife.Automatic && current.Referrers.Count == 0)
+                entity.Destroy();
+        });
     }
 
     protected override void OnEntityAdded(Entity entity)
@@ -99,9 +115,12 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         ref var metadata = ref entity.Get<AssetMetadata>();
         var assetRecord = metadata.AssetSource;
         if (assetRecord != null) {
-            _entities.Remove(new(assetRecord));
+            var key = new ObjectKey<IAssetRecord>(assetRecord);
+            if (_entities.TryGetValue(key, out var recordEntity) && recordEntity == entity)
+                _entities.Remove(key);
         }
-        if (metadata.Id is { } id) {
+        if (metadata.Id is { } id
+            && _identifiedEntities.TryGetValue(id, out var identifiedEntity) && identifiedEntity == entity) {
             _identifiedEntities.Remove(id);
         }
     }
@@ -109,6 +128,9 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     public Entity CreateEntity(
         IAssetRecord record, AssetLife life = AssetLife.Automatic)
     {
+        ArgumentNullException.ThrowIfNull(record);
+        ObjectDisposedException.ThrowIf(!_initialized || World.IsDisposed, this);
+        World.EnsureOwnerThread();
         var type = record.GetType();
         if (!s_assetEntries.TryGetValue(type, out var entry)) {
             throw new ArgumentException("Unregistered asset record type");
@@ -119,6 +141,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     public Entity CreateEntity(
         IAssetRecord record, Entity referrer, AssetLife life = AssetLife.Automatic)
     {
+        AssetMetadata.RequireReferenceEndpoint(World, referrer, nameof(referrer));
         var entity = CreateEntity(record, life);
         referrer.Refer(entity);
         return entity;
@@ -127,6 +150,9 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     public Entity AcquireEntity(
         IAssetRecord record, AssetLife life = AssetLife.Automatic)
     {
+        ArgumentNullException.ThrowIfNull(record);
+        ObjectDisposedException.ThrowIf(!_initialized || World.IsDisposed, this);
+        World.EnsureOwnerThread();
         var key = new ObjectKey<IAssetRecord>(record);
         if (!_entities.TryGetValue(key, out var entity)) {
             entity = CreateEntity(record, life);
@@ -137,6 +163,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
     public Entity AcquireEntity(
         IAssetRecord record, Entity referrer, AssetLife life = AssetLife.Automatic)
     {
+        AssetMetadata.RequireReferenceEndpoint(World, referrer, nameof(referrer));
         var entity = AcquireEntity(record, life);
         referrer.Refer(entity);
         return entity;
@@ -152,6 +179,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         if (!id.IsValid) throw new ArgumentException("Asset identity must be nonempty.", nameof(id));
         ArgumentNullException.ThrowIfNull(createRecord);
         ObjectDisposedException.ThrowIf(!_initialized || World.IsDisposed, this);
+        World.EnsureOwnerThread();
         if (_identifiedEntities.TryGetValue(id, out var existing)) {
             if (!MatchesRecord<TAssetRecord>(existing))
                 throw new InvalidAssetException("Asset identity is already assigned to a different record type.");
@@ -179,9 +207,7 @@ public class AssetLibrary : ReactorBase<TypeUnion<AssetMetadata>>
         Entity referrer, AssetLife life = AssetLife.Automatic)
         where TAssetRecord : class, IAssetRecord
     {
-        if (!referrer.IsValid || !ReferenceEquals(referrer.Host.World, World)
-            || Unsafe.IsNullRef(ref referrer.GetOrNullRef<AssetMetadata>()))
-            throw new ArgumentException("Referrer must be an asset entity in this world.", nameof(referrer));
+        AssetMetadata.RequireReferenceEndpoint(World, referrer, nameof(referrer));
         var entity = AcquireEntity(id, createRecord, life);
         referrer.Refer(entity);
         return entity;

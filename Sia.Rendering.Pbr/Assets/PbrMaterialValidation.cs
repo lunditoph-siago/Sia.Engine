@@ -16,5 +16,7 @@ internal static class PbrMaterialValidation
     internal static bool TexturesValid(PbrTextureData? baseColor, PbrTextureData? normal, PbrTextureData? metallicRoughness,
         PbrTextureData? occlusion, PbrTextureData? emissive)
         => baseColor is not { Srgb: false } && emissive is not { Srgb: false }
-            && normal is not { Srgb: true } && metallicRoughness is not { Srgb: true } && occlusion is not { Srgb: true };
+            && normal is not { Srgb: true } && metallicRoughness is not { Srgb: true } && occlusion is not { Srgb: true }
+            && baseColor is not { Format: PbrTextureFormat.Bc5 } && emissive is not { Format: PbrTextureFormat.Bc5 }
+            && metallicRoughness is not { Format: PbrTextureFormat.Bc5 } && occlusion is not { Format: PbrTextureFormat.Bc5 };
 }

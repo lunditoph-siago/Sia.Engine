@@ -21,11 +21,12 @@ public static partial class Program
                 content = await ExampleContent.DefaultAsync(directory, streamHttp);
             }
             var scenePath = content?.Scene;
+            var packs = await PbrSceneFiles.ReadPackIndexAsync(content?.PackIndex, streamHttp);
             var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
             await using var mixed = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi) : null;
+                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi, packIndex: packs) : null;
             await using var raster = scenePath is not null && options.Quality == Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareRasterStreamingAsync(scenePath, streamHttp) : null;
+                ? await PbrSceneFiles.PrepareRasterStreamingAsync(scenePath, streamHttp, packIndex: packs) : null;
             PbrSceneFiles.Prepared? references = (PbrSceneFiles.Prepared?)mixed ?? raster;
             var lighting = await LightingFiles.PrepareAsync(content?.Environment, streamHttp);
             var capturePaths = content?.ReflectionCaptures ?? [];
@@ -44,24 +45,34 @@ public static partial class Program
             references = null;
             lighting = null;
 #if BROWSER
+            var errors = new List<Exception>();
             try {
                 SetLoadingState("Preparing graphics", double.NaN);
                 await Task.Delay(20);
                 await app.RunAsync();
             }
-            finally {
+            catch (Exception error) { errors.Add(error); }
+            try {
                 await BrowserOwner.RunGraphicsAsync(async () => {
-                    await app.StopSceneStreamingAsync();
-                    app.Dispose();
+                    try { await app.StopSceneStreamingAsync(); }
+                    catch (Exception error) { errors.Add(error); }
+                    try { app.Dispose(); }
+                    catch (Exception error) { errors.Add(error); }
                     return 0;
                 });
             }
+            catch (Exception error) { errors.Add(error); }
 #else
-            using (app) {
-                try { app.Run(); }
-                finally { app.StopSceneStreaming(); }
-            }
+            var errors = new List<Exception>();
+            try { app.Run(); }
+            catch (Exception error) { errors.Add(error); }
+            try { app.StopSceneStreaming(); }
+            catch (Exception error) { errors.Add(error); }
+            try { app.Dispose(); }
+            catch (Exception error) { errors.Add(error); }
 #endif
+            if (errors.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(errors[0]).Throw();
+            if (errors.Count != 0) throw new AggregateException("Scene execution or shutdown did not complete.", errors);
             return 0;
         }
         catch (Exception exception) {

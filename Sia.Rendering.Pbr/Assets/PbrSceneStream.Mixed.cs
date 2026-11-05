@@ -49,6 +49,7 @@ public sealed partial class PbrSceneStream
         Materials = InitializeTextures(materials.ToArray());
         var hierarchies = Hierarchies.ToList(); var opaque = Instances.ToArray().ToList();
         var nodeCount = hierarchies.Sum(h => (long)h.Nodes.Length);
+        var pageTable = Pages.ToList();
         var transparentGeometry = TransparentGeometry.ToList(); var transparent = TransparentInstances.ToList();
         var rasterShapes = new Dictionary<(MeshRasterData, int), (int Hierarchy, PageGeometry[] Pages, int[]? Transparent)>();
         var required = new HashSet<MeshVirtualPageData>(ReferenceEqualityComparer.Instance);
@@ -61,7 +62,7 @@ public sealed partial class PbrSceneStream
             var geometry = raster.Geometry.Span[instance.Geometry]; var key = (geometry.Product, geometry.Section);
             if (!rasterShapes.TryGetValue(key, out var shape)) {
                 var section = geometry.Product.Sections[geometry.Section];
-                var nodes = new List<NodeInfo>(); var pages = new List<PageGeometry>();
+                var nodes = new List<MeshVirtualPageNode>(); var parts = new List<PagePart>(); var pages = new List<PageGeometry>();
                 for (var first = 0; first < section.IndexCount / 3; first += MeshVirtualPageData.MaximumTriangles) {
                     if (++nodeCount > MeshVirtualPagesData.MaximumNodes)
                         throw new InvalidOperationException("Mixed hierarchy exceeds its node limit.");
@@ -74,13 +75,15 @@ public sealed partial class PbrSceneStream
                     }
                     requiredBytes = checked(requiredBytes + page.VertexCount * 4L + count * 12L);
                     if (requiredBytes > maximumRequiredBytes) throw new InvalidOperationException("Mixed resident metadata exceeds its CPU bootstrap budget.");
-                    if (PageTable.Count >= MeshVirtualPagesData.MaximumPages) throw new InvalidOperationException("Mixed GPU page table exceeds its limit.");
-                    PageTable.Add(id, new(id, page.UploadBytes, page.VertexCount, count, 0)); ResidentRoots.Add(id, page);
-                    nodes.Add(new(-1, 0, 0, 0, [minimum.x, minimum.y, minimum.z, maximum.x, maximum.y, maximum.z], [new(id, 0, count)], count));
+                    if (pageTable.Count >= MeshVirtualPagesData.MaximumPages) throw new InvalidOperationException("Mixed GPU page table exceeds its limit.");
+                    var pageIndex = pageTable.Count;
+                    pageTable.Add(new(id, page.UploadBytes, page.VertexCount, count, 0)); _pageIndices.Add(id, pageIndex); ResidentRoots.Add(id, page);
+                    nodes.Add(new(new(minimum, maximum), 0, -1, 0, 0, parts.Count, 1, count));
+                    parts.Add(new(pageIndex, 0, count));
                     pages.Add(new(page, 0, count));
                 }
                 shape = (hierarchies.Count, pages.ToArray(), null); rasterShapes.Add(key, shape);
-                hierarchies.Add(new(nodes.Count, nodes.ToArray()));
+                hierarchies.Add(new(nodes.Count, nodes.ToArray(), parts.ToArray()));
                 geometryBounds = hasBounds ? Aabb.Union(geometryBounds, geometry.Bounds) : geometry.Bounds; hasBounds = true;
             }
             var material = rasterMaterials[instance.Material];
@@ -100,7 +103,7 @@ public sealed partial class PbrSceneStream
             else opaque.Add(new(instance.Transform, material) { AssetIndex = shape.Hierarchy, AuthoredId = instance.AuthoredId, MaterialSlot = instance.MaterialSlot });
         }
         if (opaque.Count + (long)transparent.Count > PbrSceneData.MaximumInstances) throw new InvalidOperationException("Mixed GPU instances exceed their limit.");
-        Hierarchies = hierarchies.ToArray(); Instances = opaque.ToArray();
+        Hierarchies = hierarchies.ToArray(); Instances = opaque.ToArray(); Pages = pageTable.ToArray();
         TransparentGeometry = transparentGeometry.ToArray(); TransparentInstances = transparent.ToArray(); GeometryBounds = geometryBounds;
     }
 }

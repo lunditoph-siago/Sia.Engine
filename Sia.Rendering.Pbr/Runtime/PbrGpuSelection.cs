@@ -44,6 +44,8 @@ internal sealed class PbrGpuSelection : IDisposable
     public ulong Bytes => _gpu.Bytes;
     public uint VisibleTriangles { get; private set; }
     public uint DeferredRefinements { get; private set; }
+    public uint UnreadyRefinements { get; private set; }
+    public uint LimitedRefinements { get; private set; }
     public long FeedbackDropped { get; private set; }
     public long FeedbackFailures { get; private set; }
     public int PendingReadbacks {
@@ -118,6 +120,7 @@ internal sealed class PbrGpuSelection : IDisposable
         if (_poseRevision != residency.PoseRevision) {
             _poseRevision = residency.PoseRevision;
             VisibleTriangles = 0; DeferredRefinements = 0;
+            UnreadyRefinements = 0; LimitedRefinements = 0;
         }
         foreach (var slot in _slots) {
             if (slot.Mapping is { IsCompleted: true } mapping) {
@@ -140,7 +143,9 @@ internal sealed class PbrGpuSelection : IDisposable
                         // Display statistics still describe only the current pose.
                         if (slot.PoseRevision == _poseRevision) {
                             VisibleTriangles = _latest[offset + 15];
-                            DeferredRefinements = checked(_latest[offset + 9] + _latest[offset + 11]);
+                            LimitedRefinements = _latest[offset + 9];
+                            UnreadyRefinements = _latest[offset + 11];
+                            DeferredRefinements = checked(LimitedRefinements + UnreadyRefinements);
                         }
                     }
                 }

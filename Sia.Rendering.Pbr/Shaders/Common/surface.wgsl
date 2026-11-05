@@ -88,7 +88,10 @@ fn sample_material_with_base(
         let level = resident_level(uv_dx, uv_dy, vec2<f32>(textureDimensions(normal_map)), m.indices.w, 1u);
         if (level >= 0.0) { normal_sample = textureSampleLevel(normal_map, normal_sampler, uv, i32(m.layers.y), level); }
         else { normal_sample = textureSampleGrad(normal_map, normal_sampler, uv, i32(m.layers.y), uv_dx, uv_dy); }
-        let sampled = normal_sample.xyz * 2.0 - 1.0;
+        var sampled = normal_sample.xyz * 2.0 - 1.0;
+        if ((m.indices.w & (1u << 25u)) != 0u) {
+            sampled.z = sqrt(max(0.0, 1.0 - dot(sampled.xy, sampled.xy)));
+        }
         normal = unit(t * (sampled.x * m.factors.x) + cross(normal, t) * select(1.0, -1.0, tangent.w < 0.0) * (sampled.y * m.factors.x) + normal * sampled.z);
     }
     if (m.factors.w != 0.0 && !front) {

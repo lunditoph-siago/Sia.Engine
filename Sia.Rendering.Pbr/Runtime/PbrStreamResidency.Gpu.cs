@@ -29,7 +29,7 @@ internal sealed partial class PbrStreamResidency
             rootCount = checked(rootCount + tree.Roots);
             if (!assets.Add(instance.AssetIndex)) continue;
             nodeCount = checked(nodeCount + tree.Nodes.Length);
-            foreach (var node in tree.Nodes) partCount = checked(partCount + node.Pages.Length);
+            foreach (var node in tree.Nodes) partCount = checked(partCount + node.RangeCount);
         }
         if (((ulong)nodeCount * 64) + (((ulong)partCount + (ulong)rootCount) * 16) > _settings.HierarchyBytes)
             throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget.");
@@ -51,8 +51,8 @@ internal sealed partial class PbrStreamResidency
                     var node = tree.Nodes[n];
                     var bounds = PbrSceneStream.NodeBounds(node);
                     var at = parts.Count;
-                    foreach (var part in node.Pages) {
-                        var key = PageKey(instance, part.Id);
+                    foreach (var part in tree.GetPages(node)) {
+                        var key = PageKey(instance, part.Page);
                         if (!slots.TryGetValue(key, out var slot)) {
                             slot = keys.Count;
                             slots.Add(key, slot);
@@ -62,7 +62,7 @@ internal sealed partial class PbrStreamResidency
                     }
                     var radius = math.length((bounds.Max - bounds.Min) * .5f);
                     nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, radius),
-                        new((uint)(geometry.First + node.Children), (uint)node.ChildCount, (uint)at, (uint)node.Pages.Length),
+                        new((uint)(geometry.First + node.FirstChild), (uint)node.ChildCount, (uint)at, (uint)node.RangeCount),
                         new(node.Parent < 0 ? uint.MaxValue : (uint)(geometry.First + node.Parent),
                             0, 0, 0)));
                     nodeRequests.Add(new(-1, info.AssetIndex, n));
