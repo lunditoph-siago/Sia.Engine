@@ -23,7 +23,7 @@ public sealed partial class MeshPatchTree
 
     private static ulong CalculatePayloadBytes(ReadOnlySpan<int> counts, bool bakeUvs) =>
         (ulong)counts[0] * (ulong)Unsafe.SizeOf<MeshPatchNode>()
-        + (ulong)counts[1] * (ulong)(MeshVertex.Stride + (bakeUvs ? 8 : 0))
+        + (ulong)counts[1] * (ulong)(MeshVertex.Stride + (bakeUvs ? Unsafe.SizeOf<float2>() : 0))
         + (ulong)counts[2] * sizeof(uint) + (ulong)counts[3] * (ulong)Unsafe.SizeOf<Meshlet>()
         + (ulong)counts[4] * sizeof(uint) + (ulong)counts[5] + (ulong)counts[6] * sizeof(uint);
 

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Sia.Asset;
 using Sia.Engine.Mesh;
 using Sia.Math;
@@ -57,6 +58,10 @@ public sealed partial class PbrSceneStream
     internal PbrSceneInstance[] TransparentInstances { get; }
     internal bool RequiresInstancing { get; }
 
+    private static int DecodedPageBytes(in MeshVirtualPageDescriptor descriptor, bool hasBakeUvs)
+        => checked(descriptor.VertexCount * (MeshVertex.Stride + (hasBakeUvs ? Unsafe.SizeOf<float2>() : 0))
+            + descriptor.TriangleCount * 3 * sizeof(uint));
+
     /// <summary>Enumerates only roots and transparent finest pages required before graphics creation.</summary>
     public static MeshVirtualPageDescriptor[] RequiredPages(PbrVirtualScene scene, long maximumBytes = 256L * 1024 * 1024)
     {
@@ -75,8 +80,7 @@ public sealed partial class PbrSceneStream
                         if (prior != descriptor) throw new InvalidAssetException("Page identity has conflicting revisions.");
                         continue;
                     }
-                    bytes = checked(bytes + descriptor.VertexCount * (long)(MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0))
-                        + descriptor.TriangleCount * 12L);
+                    bytes = checked(bytes + DecodedPageBytes(descriptor, index.HasBakeUvs));
                     if (bytes > maximumBytes) throw new InvalidOperationException("Required virtual pages exceed their decoded bootstrap budget.");
                     result.Add(descriptor.Id, descriptor);
                 }
@@ -144,7 +148,7 @@ public sealed partial class PbrSceneStream
             var id = descriptor.Id.Value.ToString("N");
             var number = pageTable.Count;
             var gpuBytes = checked(descriptor.VertexCount * StreamGeometryPage.VertexBytes + descriptor.TriangleCount * 12);
-            var decoded = checked(descriptor.VertexCount * (MeshVertex.Stride + (index.HasBakeUvs ? 8 : 0)) + descriptor.TriangleCount * 12);
+            var decoded = DecodedPageBytes(descriptor, index.HasBakeUvs);
             pageTable.Add(new(id, gpuBytes, descriptor.VertexCount, descriptor.TriangleCount, decoded));
             pageIndices.Add(descriptor.Id, (number, index, page)); _pageIndices.Add(id, number); pageUses.Add((index, page));
             return number;

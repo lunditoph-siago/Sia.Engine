@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Sia.Asset;
 using Sia.Engine.Mesh;
+using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
 using Sia.Math;
 using Xunit;
@@ -154,18 +155,40 @@ public sealed class PbrSceneStreamLayoutTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void BootstrapAndStreamAdmissionCountRetainedBakeUvBytes()
+    {
+        var fixture = Input.Value;
+        var mesh = fixture.Source.CopyGeometry();
+        var bakedMesh = mesh with { BakeUvs = mesh.Vertices.Select(vertex => vertex.UV).ToArray() };
+        var source = MeshSource.Create(bakedMesh, fixture.Source.Sections);
+        var result = MeshVirtualPagesData.Build(source, AssetId.New(), fixture.Index.Settings);
+        var scene = Scene([result.Index], repeatedInstance: true);
+        var required = PbrSceneStream.RequiredPages(scene);
+        Assert.NotEmpty(required);
+        var budget = StreamGeometryPage.MaximumBytes + required.Sum(descriptor => (long)result.Pages[descriptor.Id].PayloadBytes);
+
+        Assert.Throws<InvalidOperationException>(() => PbrSceneStream.RequiredPages(scene, budget - 1));
+        Assert.Equal(required, PbrSceneStream.RequiredPages(scene, budget));
+
+        var stream = Create(scene, result.Pages);
+        Assert.Equal(result.Index.Pages.Length, stream.Pages.Length);
+        foreach (var descriptor in result.Index.Pages) {
+            var page = stream.Pages[stream.GetPageIndex(descriptor.Id.Value.ToString("N"))];
+            Assert.Equal(result.Pages[descriptor.Id].PayloadBytes, (ulong)page.DecodedBytes);
+        }
+    }
+
+    [Fact]
     public void CompactHierarchyReusesNodesAndAllocatesNoTraversalObjects()
     {
         var fixture = Input.Value; var part = fixture.Index.Parts[0];
-        _ = BuildCompact(fixture.Index, 0); _ = BuildLegacy(fixture.Index, 0);
+        var compact = BuildCompact(fixture.Index, 0); var legacy = BuildLegacy(fixture.Index, 0);
         const int iterations = 64;
         var start = Stopwatch.GetTimestamp(); var before = GC.GetAllocatedBytesForCurrentThread();
-        PbrSceneStream.HierarchyInfo? compact = null;
         for (var i = 0; i < iterations; i++) compact = BuildCompact(fixture.Index, 0);
         var compactBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         var compactMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
         start = Stopwatch.GetTimestamp(); before = GC.GetAllocatedBytesForCurrentThread();
-        LegacyNode[]? legacy = null;
         for (var i = 0; i < iterations; i++) legacy = BuildLegacy(fixture.Index, 0);
         var legacyBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         var legacyMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
@@ -173,11 +196,11 @@ public sealed class PbrSceneStreamLayoutTests(ITestOutputHelper output)
         long sum = 0;
         before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < iterations; i++)
-            foreach (var node in compact!.Nodes)
+            foreach (var node in compact.Nodes)
                 foreach (var page in compact.GetPages(node)) sum += page.Count;
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
         Assert.True(sum > 0);
-        output.WriteLine($"Metadata-only controlled comparison: {part.NodeCount} nodes, {compact!.Parts.Length} ranges, {iterations} iterations; compact {compactBytes} B/{compactMs:F3} ms, legacy {legacyBytes} B/{legacyMs:F3} ms. Source build and page payloads excluded; elapsed time is observational, not a gate.");
+        output.WriteLine($"Metadata-only controlled comparison: {part.NodeCount} nodes, {compact.Parts.Length} ranges, {iterations} iterations; compact {compactBytes} B/{compactMs:F3} ms, legacy {legacyBytes} B/{legacyMs:F3} ms. Source build and page payloads excluded; elapsed time is observational, not a gate.");
         GC.KeepAlive(compact); GC.KeepAlive(legacy);
     }
 

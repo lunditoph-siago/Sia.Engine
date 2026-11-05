@@ -57,7 +57,7 @@ public sealed partial class MeshVirtualPageData
             || triangles is <= 0 or > MaximumTriangles || vertices > triangles * 3)
             throw new InvalidDataException("Invalid virtual page header.");
         var encoded = 73ul + (ulong)vertices * (flags == 0 ? 48ul : 56ul) + (ulong)triangles * 12;
-        var owned = (ulong)vertices * (ulong)(MeshVertex.Stride + (flags == 0 ? 0 : 8)) + (ulong)triangles * 12;
+        var owned = OwnedBytes(vertices, triangles * 3, flags != 0);
         if (encoded > maximumBytes || encoded > MaximumEncodedBytes || owned > maximumBytes
             || stream.CanSeek && stream.Length - stream.Position != (long)encoded - 41)
             throw new InvalidDataException("Virtual page exceeds its encoded/owned budget or available bytes.");

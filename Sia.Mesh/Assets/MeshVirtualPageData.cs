@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -14,10 +15,13 @@ public sealed partial class MeshVirtualPageData
     public bool HasBakeUvs => _geometry.HasBakeUvs;
     public Aabb Bounds => _geometry.Bounds;
     public int TriangleCount => _geometry.Indices.Length / 3;
-    public ulong PayloadBytes => (ulong)Vertices.Length * (ulong)(MeshVertex.Stride + (HasBakeUvs ? 8 : 0))
-        + (ulong)Indices.Length * 4;
+    public ulong PayloadBytes => OwnedBytes(Vertices.Length, Indices.Length, HasBakeUvs);
     public int EncodedBytes => checked(73 + Vertices.Length * (HasBakeUvs ? 56 : 48) + Indices.Length * 4);
     public string ContentHash { get; }
+
+    private static ulong OwnedBytes(int vertices, int indices, bool hasBakeUvs)
+        => (ulong)vertices * (ulong)(MeshVertex.Stride + (hasBakeUvs ? Unsafe.SizeOf<float2>() : 0))
+            + (ulong)indices * sizeof(uint);
 
     private MeshVirtualPageData(MeshData geometry, string? contentHash = null, CancellationToken cancellationToken = default)
     {

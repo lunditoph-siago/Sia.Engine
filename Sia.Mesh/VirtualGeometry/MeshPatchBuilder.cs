@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Sia.Math;
 
 namespace Sia.Engine.Mesh;
@@ -113,6 +114,7 @@ public static partial class MeshPatchBuilder
     {
         cancellationToken.ThrowIfCancellationRequested();
         var indexBytes = (ulong)indices.Length * sizeof(uint);
+        var vertexBytes = (ulong)(MeshVertex.Stride + (bakeUvs.IsEmpty ? 0 : Unsafe.SizeOf<float2>()));
         if (indexBytes > maximumBytes) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         var output = new List<MeshVertex>();
         var outputBakeUvs = new List<float2>();
@@ -121,7 +123,7 @@ public static partial class MeshPatchBuilder
         for (var i = 0; i < indices.Length; i++) {
             if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
             if (!remap.TryGetValue(indices[i], out var mapped)) {
-                if (indexBytes + ((ulong)output.Count + 1) * (ulong)(MeshVertex.Stride + (bakeUvs.IsEmpty ? 0 : 8)) > maximumBytes)
+                if (indexBytes + ((ulong)output.Count + 1) * vertexBytes > maximumBytes)
                     throw new ArgumentOutOfRangeException(nameof(maximumBytes), "Compacted Mesh input exceeds its array budget.");
                 remap.Add(indices[i], mapped = (uint)output.Count);
                 output.Add(vertices[(int)indices[i]]);
