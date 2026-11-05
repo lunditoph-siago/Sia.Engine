@@ -27,6 +27,8 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
         }
         color += visibility * direct_lighting(normal, view, -frame.directional[i].direction.xyz, frame.directional[i].radiance.rgb, base, metal, rough);
     }
+    // A directional-only frame has no local-light list to index or traverse.
+    if (frame.counts.x != 0u) {
     let slice = min(u32(max(0.0, log(max(-view_z, 0.00001)) * frame.depth.x - frame.depth.y)), frame.grid.z - 1u);
     let tile = min(vec2<u32>(pixel / vec2<f32>(frame.size.xy) * vec2<f32>(frame.grid.xy)), frame.grid.xy - 1u);
     let cell = tile.x + tile.y * frame.grid.x + slice * frame.grid.x * frame.grid.y;
@@ -60,6 +62,7 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
             attenuation *= shadow_visibility(u32(spot.z), position, surface.geometry_normal);
         }
         color += attenuation * direct_lighting(normal, view, direction, radiance.rgb, base, metal, rough);
+    }
     }
     return color + get_indirect_lighting(surface, view) * surface.ao + surface.emission;
 }

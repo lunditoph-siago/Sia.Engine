@@ -56,6 +56,8 @@ internal sealed partial class PbrMaterials : IDisposable
         (_frame, _layout, _budget, _stream, _streaming) = (frame, layout, budget, stream, streaming ?? new());
         if (_streaming.UploadBytesPerFrame < 4 || _streaming.UploadBytesPerFrame % 4 != 0 || _streaming.BootstrapUploadBytes < 4
             || _streaming.DecodedBytes < 65536 || _streaming.DecodedBytes > 256L * 1024 * 1024 || _streaming.IdleFrames < 1
+            || _streaming.StableDemandFrames is < 1 or > 120 || !double.IsFinite(_streaming.UploadMillisecondsPerFrame)
+            || _streaming.UploadMillisecondsPerFrame is < 0 or > 16
             || !float.IsFinite(_streaming.MipBias) || _streaming.MipBias is < 0 or > 4)
             throw new ArgumentOutOfRangeException(nameof(streaming));
         _gpu = new(frame, budget);
@@ -80,7 +82,7 @@ internal sealed partial class PbrMaterials : IDisposable
                 var (Width, Height, Levels, Format, Sampler, _, _) = shape.Key;
                 var perLayer = TailBytes(Width, Height, Levels, 0, TextureBlockLayout.For(Format));
                 var layerLimit = stream is null ? (int)_gpu.Limits.MaxTextureArrayLayers
-                    : (int)System.Math.Min(_gpu.Limits.MaxTextureArrayLayers, System.Math.Max(1L, _streaming.DecodedBytes / perLayer));
+                    : PbrTextureStreamingPolicy.ArrayLayerLimit(_streaming.DecodedBytes, perLayer, _gpu.Limits.MaxTextureArrayLayers);
                 // Per-layer explicit LOD clamps preserve filtering when min/mag agree.
                 // Distinct filters retain hardware implicit-LOD selection in independent arrays.
                 if (stream is not null && Sampler.MinFilter != Sampler.MagFilter) layerLimit = 1;

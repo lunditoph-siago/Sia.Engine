@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Sia.Asset;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering.Pbr;
@@ -13,7 +14,7 @@ internal static partial class PbrSceneFiles
         IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures) : Prepared(Id, Scene, Meshes, Materials, Textures);
 
     // Application-owned location, cross-kind claims and aggregate encoded admission; streams are scoped per read.
-    private sealed class Reader : IAsyncDisposable
+    private sealed partial class Reader : IAsyncDisposable
     {
         private readonly string _path;
         private readonly string? _root;
@@ -27,6 +28,14 @@ internal static partial class PbrSceneFiles
         private readonly AssetChunkCache? _packCache;
         internal AssetId Id { get; }
         internal long EncodedBytes { get; private set; }
+        private long _readWaitTicks, _decodeTicks, _leafHashTicks;
+        internal PreparationStatistics Statistics => new() {
+            MetadataReadWaitMilliseconds = (double)Interlocked.Read(ref _readWaitTicks) / Stopwatch.Frequency * 1000,
+            MetadataDecodeMilliseconds = (double)Interlocked.Read(ref _decodeTicks) / Stopwatch.Frequency * 1000,
+            MetadataLeafHashMilliseconds = (double)Interlocked.Read(ref _leafHashTicks) / Stopwatch.Frequency * 1000,
+            MetadataLogicalBytes = EncodedBytes,
+            MetadataCache = _packCache?.Statistics ?? default
+        };
 
         internal Reader(string path, HttpClient client, int maximumFileBytes, long maximumTotalBytes, CancellationToken token,
             AssetPackIndex? packs = null)
@@ -59,7 +68,7 @@ internal static partial class PbrSceneFiles
         private async Task<T> Read<T>(AssetId id, string location, Func<Stream, string, T> decode) where T : class, IAssetRecord
         {
             Claim<T>(id);
-            var records = await ReadBatch([id], _ => location, (stream, _, name) => decode(stream, name!));
+            var records = await ReadBatch([id], _ => location, (_, stream, _, name) => decode(stream, name!));
             return records[id];
         }
 
@@ -77,6 +86,10 @@ internal static partial class PbrSceneFiles
 
         internal Task<Dictionary<AssetId, T>> ReadMany<T>(IEnumerable<AssetId> ids,
             Func<Stream, ulong, string?, T> decode) where T : class, IAssetRecord
+            => ReadMany(ids, (_, stream, maximum, name) => decode(stream, maximum, name));
+
+        internal Task<Dictionary<AssetId, T>> ReadMany<T>(IEnumerable<AssetId> ids,
+            Func<AssetId, Stream, ulong, string?, T> decode) where T : class, IAssetRecord
         {
             var selected = new List<AssetId>(); var unique = new HashSet<AssetId>();
             foreach (var id in ids) {
@@ -87,8 +100,10 @@ internal static partial class PbrSceneFiles
         }
 
         private async Task<Dictionary<AssetId, T>> ReadBatch<T>(IReadOnlyList<AssetId> ids,
-            Func<AssetId, string> location, Func<Stream, ulong, string?, T> decode) where T : class, IAssetRecord
+            Func<AssetId, string> location, Func<AssetId, Stream, ulong, string?, T> decode) where T : class, IAssetRecord
         {
+            if (_packs is not null && TryGroupPacked(ids, location, out var groups))
+                return await ReadPackedBatch(ids, groups, decode);
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_token);
             var token = cancellation.Token;
             var window = new ReadWindow(_maximumFileBytes, _maximumTotalBytes - EncodedBytes);
@@ -130,14 +145,20 @@ internal static partial class PbrSceneFiles
                 Fill();
                 for (var index = 0; index < ids.Count; index++) {
                     consuming = index;
+                    var readStarted = Stopwatch.GetTimestamp();
                     using var input = await pending.Dequeue();
+                    Interlocked.Add(ref _readWaitTicks, Stopwatch.GetTimestamp() - readStarted);
                     Fill();
                     T Decode(CancellationToken cpuToken)
                     {
-                        cpuToken.ThrowIfCancellationRequested(); token.ThrowIfCancellationRequested();
-                        if (!MemoryMarshal.TryGetArray(input.Bytes, out var segment)) throw new InvalidOperationException("Expected owned encoded array.");
-                        using var encoded = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
-                        return decode(encoded, (ulong)_maximumFileBytes, input.Location);
+                        var started = Stopwatch.GetTimestamp();
+                        try {
+                            cpuToken.ThrowIfCancellationRequested(); token.ThrowIfCancellationRequested();
+                            if (!MemoryMarshal.TryGetArray(input.Bytes, out var segment)) throw new InvalidOperationException("Expected owned encoded array.");
+                            using var encoded = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
+                            return decode(ids[index], encoded, (ulong)_maximumFileBytes, input.Location);
+                        }
+                        finally { Interlocked.Add(ref _decodeTicks, Stopwatch.GetTimestamp() - started); }
                     }
 #if BROWSER
                     var record = await Program.BrowserOwner.RunCpuAsync(Decode, token);

@@ -124,6 +124,21 @@ public sealed class StreamPageArena : IDisposable
             || !math.all(math.isfinite(transform.c0)) || !math.all(math.isfinite(transform.c1))
             || !math.all(math.isfinite(transform.c2)) || !math.all(math.isfinite(transform.c3)))
             throw new ArgumentException("Invalid vertex destination, source instance, transform or tangent magnitude.");
+        var identity = float4x4.identity;
+        if (MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref transform, 1))
+            .SequenceEqual(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref identity, 1)))) {
+            // Shared pages stay mesh-local. Preserve the scalar identity product's
+            // positive position zeros and tangent sign before the same encoder.
+            for (var i = 0; i < page.VertexCount; i++) {
+                var vertex = page.GetVertex(i); var t = vertex.Tangent; var p = vertex.Position;
+                var value = vertex with {
+                    Position = new(p.x == 0 ? 0 : p.x, p.y == 0 ? 0 : p.y, p.z == 0 ? 0 : p.z),
+                    Tangent = new(t.xyz, (t.w < 0 ? -1 : 1) * tangentMagnitude)
+                };
+                StreamVertexEncoding.PackVertex(packed, i, page.VertexCount, value, page.GetBakeUv(i), page.HasBakeUvs, sourceInstance);
+            }
+            return;
+        }
         var normal = math.transpose(math.inverse(transform));
         if (!math.all(math.isfinite(normal.c0)) || !math.all(math.isfinite(normal.c1))
             || !math.all(math.isfinite(normal.c2)) || !math.all(math.isfinite(normal.c3)))

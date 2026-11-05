@@ -1,15 +1,25 @@
 using Sia;
 using Sia.WebGPU;
+using System.Diagnostics;
 
 namespace Sia.Engine.Rendering.Pbr;
 
+/// <summary>Independent CPU preparation and incremental GPU upload limits for texture mip residency.</summary>
+/// <remarks>Frame, elapsed-time and scheduling allowances combine; existing GPU material storage admission remains separate.</remarks>
 public sealed record PbrTextureStreamingSettings
 {
-    public uint UploadBytesPerFrame { get; init; } = 256 * 1024;
+    public uint UploadBytesPerFrame { get; init; } = 1024 * 1024;
+    /// <summary>Elapsed-time input/copy credit, additionally limited by UploadBytesPerFrame. Zero uses the frame cap alone.</summary>
+    public uint UploadBytesPerSecond { get; init; } = 32 * 1024 * 1024;
+    /// <summary>CPU scheduling allowance for incremental uploads. Zero uses only the byte caps.</summary>
+    public double UploadMillisecondsPerFrame { get; init; } = 1;
     /// <summary>Maximum synchronous texture input during material initialization; separate from the frame allowance.</summary>
     public ulong BootstrapUploadBytes { get; init; } = 32ul * 1024 * 1024;
-    public long DecodedBytes { get; init; } = 32L * 1024 * 1024;
+    /// <summary>Maximum decoded mip data retained by pending requests, including requests being cancelled.</summary>
+    public long DecodedBytes { get; init; } = 64L * 1024 * 1024;
     public int IdleFrames { get; init; } = 60;
+    /// <summary>Consecutive obsolete demand frames before cancellation; prevents short camera changes from restarting useful reads.</summary>
+    public int StableDemandFrames { get; init; } = 3;
     public float MipBias { get; init; } = 1;
 }
 
@@ -30,6 +40,15 @@ public readonly record struct PbrTextureStreamingStatistics(
     public uint CopiedBytes { get; init; }
     public int BudgetLimitedLayers { get; init; }
     public ulong StartupUploadedBytes { get; init; }
+    public uint FrameUploadAllowanceBytes { get; init; }
+    public int WantedLayers { get; init; }
+    public int MissingWantedLayers { get; init; }
+    public int MissingAdmittedLayers { get; init; }
+    public int MaximumMipGap { get; init; }
+    public int DecodedLimitedLayers { get; init; }
+    public long PeakReservedDecodedBytes { get; init; }
+    public long CancelledRequests { get; init; }
+    public long CancelledReservationBytes { get; init; }
 }
 
 internal sealed partial class PbrMaterials
@@ -51,6 +70,7 @@ internal sealed partial class PbrMaterials
         public readonly CancellationTokenSource Cancellation = cancellation;
         public Task<ReadOnlyMemory<byte>[][]> Read = read;
         public TextureArrayUpload? Upload;
+        public int ObsoleteFrames;
     }
 
     private readonly GpuFrame _frame;
@@ -73,6 +93,10 @@ internal sealed partial class PbrMaterials
     private ulong _peak;
     private Task? _stop;
     private bool _stopped;
+    private long _lastUploadFrame = Stopwatch.GetTimestamp();
+    private double _uploadCredit;
+    private uint _uploadAllowance;
+    private long _peakDecoded, _cancelled, _cancelledReservationBytes;
 
     public ulong Revision { get; private set; }
 
@@ -82,18 +106,29 @@ internal sealed partial class PbrMaterials
             foreach (var (Upload, Completion) in _retired) retiring = checked(retiring + Upload.Bytes);
             var deferred = 0;
             var limited = 0;
+            var wanted = 0; var missingWanted = 0; var missingAdmitted = 0; var maximumGap = 0; var decodedLimited = 0;
             foreach (var array in _arrays) {
                 var missing = false;
                 for (var layer = 0; layer < array.ResidentMips.Length; layer++) {
                     missing |= array.WantedMips[layer] < array.ResidentMips[layer];
                     if (array.DesiredMips[layer] > array.WantedMips[layer]) limited++;
+                    wanted++;
+                    if (array.WantedMips[layer] < array.ResidentMips[layer]) missingWanted++;
+                    if (array.DesiredMips[layer] < array.ResidentMips[layer]) missingAdmitted++;
+                    maximumGap = System.Math.Max(maximumGap, array.ResidentMips[layer] - array.WantedMips[layer]);
+                    var wantedMip = array.WantedMips[layer];
+                    if (wantedMip < array.TailMip && array.Layout.MipByteLength(System.Math.Max(1u, array.Width >> wantedMip),
+                        System.Math.Max(1u, array.Height >> wantedMip)) > (ulong)_streaming.DecodedBytes) decodedLimited++;
                 }
                 if (missing) deferred++;
             }
             return new(Bytes, _peak, retiring, _uploaded, _stopped ? 0 : _pending.Sum(p => p.Bytes),
                 _stopped ? 0 : _pending.Count, _installs, _evictions, _failures, deferred, Revision) {
                 CpuUploadedBytes = _uploaded - _copied, CopiedBytes = _copied, BudgetLimitedLayers = limited,
-                StartupUploadedBytes = _startupUploaded
+                StartupUploadedBytes = _startupUploaded, FrameUploadAllowanceBytes = _uploadAllowance,
+                WantedLayers = wanted, MissingWantedLayers = missingWanted, MissingAdmittedLayers = missingAdmitted,
+                MaximumMipGap = maximumGap, DecodedLimitedLayers = decodedLimited, PeakReservedDecodedBytes = _peakDecoded,
+                CancelledRequests = _cancelled, CancelledReservationBytes = _cancelledReservationBytes
             };
         }
     }
@@ -150,6 +185,10 @@ internal sealed partial class PbrMaterials
         if (_stream is null) return;
         if (_stop is not null) throw new ObjectDisposedException(nameof(PbrMaterials));
         _clock++;
+        var now = Stopwatch.GetTimestamp();
+        _uploadAllowance = PbrTextureStreamingPolicy.UploadAllowance(_streaming.UploadBytesPerFrame,
+            _streaming.UploadBytesPerSecond, (double)(now - _lastUploadFrame) / Stopwatch.Frequency, ref _uploadCredit);
+        _lastUploadFrame = now;
         _uploaded = _copied = 0;
         for (var i = _retired.Count - 1; i >= 0; i--) {
             if (!_retired[i].Completion.IsCompleted) continue;
@@ -218,8 +257,12 @@ internal sealed partial class PbrMaterials
         }
         BudgetDemand();
         foreach (var pending in _pending) {
-            if (PbrTextureStreamingPolicy.IsObsolete(pending.Array.ResidentMips, pending.Array.DesiredMips, pending.Mips))
+            var obsolete = PbrTextureStreamingPolicy.IsObsolete(pending.Array.ResidentMips, pending.Array.DesiredMips, pending.Mips);
+            if (!pending.Cancellation.IsCancellationRequested
+                && PbrTextureStreamingPolicy.StableObsolete(obsolete, _streaming.StableDemandFrames, ref pending.ObsoleteFrames)) {
+                _cancelled++; _cancelledReservationBytes += pending.Bytes;
                 pending.Cancellation.Cancel();
+            }
         }
         for (var requestIndex = _pending.Count - 1; requestIndex >= 0; requestIndex--) {
             var request = _pending[requestIndex];
@@ -259,13 +302,16 @@ internal sealed partial class PbrMaterials
 
         // Share this BeginFrame's allowance between already admitted ready arrays.
         // Completed uploads stay owned by their requests until the following BeginFrame.
-        for (var attempt = 0; attempt < _pending.Count && _streaming.UploadBytesPerFrame - _uploaded >= 4; attempt++) {
+        var uploadStarted = Stopwatch.GetTimestamp();
+        while (_uploadAllowance - _uploaded >= 4) {
+            if (_uploaded != 0 && _streaming.UploadMillisecondsPerFrame > 0
+                && Stopwatch.GetElapsedTime(uploadStarted).TotalMilliseconds >= _streaming.UploadMillisecondsPerFrame) break;
             var available = PbrTextureStreamingPolicy.AvailableBytes(_budget, Bytes);
             Request? active = null;
             foreach (var request in _pending) {
                 if (!request.Read.IsCompletedSuccessfully || request.Cancellation.IsCancellationRequested
                     || request.Upload is { Complete: true }
-                    || request.Array.Layout.BytesPerBlock > _streaming.UploadBytesPerFrame - _uploaded
+                    || request.Array.Layout.BytesPerBlock > _uploadAllowance - _uploaded
                     || (request.Upload is null && AllocationBytes(request) > available)) continue;
                 if (active is null || CompareLayer(request.Array, request.Layer, request.Bytes, active.Array, active.Layer, active.Bytes) > 0)
                     active = request;
@@ -279,12 +325,13 @@ internal sealed partial class PbrMaterials
                     : new(_frame, width, height, active.Array.Sources[0].GpuFormat, active.Read.Result, available,
                         active.Array.Texture, active.Array.ResidentMip - active.Mip, active.Array.Levels - active.Mip);
             }
-            var advanced = active.Upload.Advance(_streaming.UploadBytesPerFrame - _uploaded);
+            var advanced = active.Upload.Advance(System.Math.Min(256 * 1024u, _uploadAllowance - _uploaded));
             _uploaded += advanced;
             _copied += active.Upload.CopiedBytes;
             _peak = System.Math.Max(_peak, Bytes);
             if (advanced == 0 && !active.Upload.Complete) break;
         }
+        if (_streaming.UploadBytesPerSecond != 0) _uploadCredit = System.Math.Max(0, _uploadCredit - _uploaded);
     }
 
     private static int CompareDemand(ArrayTexture a, ArrayTexture b)
@@ -367,6 +414,7 @@ internal sealed partial class PbrMaterials
             return result;
         }, cancellation.Token);
         _pending.Add(new(array, mip, demand.Layer, mips, bytes, cancellation, read));
+        _peakDecoded = System.Math.Max(_peakDecoded, _pending.Sum(request => request.Bytes));
     }
 
     private static ulong AllocationBytes(Request request) => request.Mip == request.Array.ResidentMip ? 0
@@ -435,7 +483,11 @@ internal sealed partial class PbrMaterials
 
     private async Task DrainAsync()
     {
-        foreach (var pending in _pending) pending.Cancellation.Cancel();
+        foreach (var pending in _pending) {
+            if (pending.Cancellation.IsCancellationRequested) continue;
+            _cancelled++; _cancelledReservationBytes += pending.Bytes;
+            pending.Cancellation.Cancel();
+        }
         foreach (var pending in _pending) {
             try { await pending.Read.ConfigureAwait(false); }
             catch (Exception) { _ = pending.Read.Exception; }

@@ -16,12 +16,13 @@ internal static partial class PbrSceneFiles
     }
 
     // The application owns location policy and transport. The original cache/loader owns encoded admission.
-    internal sealed class PageSource : IAsyncDisposable
+    internal sealed partial class PageSource : IAsyncDisposable
     {
         private readonly Dictionary<AssetId, (MeshVirtualPagesData Index, int Page)> _pages = [];
         private readonly Dictionary<AssetId, (MeshRasterPagesData Index, int Page)> _rasterPages = [];
         private readonly Dictionary<AssetId, PbrTextureMipReference> _mips = [];
         private readonly AssetChunkCache _cache;
+        private readonly AssetPackIndex? _packs;
         internal AssetChunkCacheStatistics Statistics => _cache.Statistics;
 
         internal PageSource(string scenePath, HttpClient client, Prepared<MeshVirtualRecord> prepared,
@@ -32,10 +33,11 @@ internal static partial class PbrSceneFiles
             long cacheBytes = 32L * 1024 * 1024, AssetPackIndex? packIndex = null)
             : this(scenePath, client, prepared, new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Products, cacheBytes, packIndex) { }
 
-        private PageSource(string scenePath, HttpClient client, Prepared prepared,
+        internal PageSource(string scenePath, HttpClient client, Prepared prepared,
             IReadOnlyDictionary<AssetId, MeshVirtualRecord> virtualProducts,
-            IReadOnlyDictionary<AssetId, MeshRasterPagesRecord> rasterProducts, long cacheBytes, AssetPackIndex? packIndex)
+            IReadOnlyDictionary<AssetId, MeshRasterPagesRecord> rasterProducts, long cacheBytes = 32L * 1024 * 1024, AssetPackIndex? packIndex = null)
         {
+            _packs = packIndex;
             var http = AssetInput.TryGetHttpUri(scenePath, out var uri);
             var root = http ? null : Path.GetDirectoryName(Path.GetFullPath(scenePath));
             var claims = new HashSet<AssetId>(prepared.Meshes.Keys.Concat(prepared.Materials.Keys).Concat(prepared.Textures.Keys).Append(prepared.Id));
@@ -155,7 +157,7 @@ internal static partial class PbrSceneFiles
         }
         var source = new PageSource(path, client, prepared, packIndex: packIndex);
         try {
-            var records = await ReadRequiredAsync(required, (page, token) => source.ReadAsync(page.Reference, token), cancellationToken);
+            var (records, _) = await source.ReadRequiredPagesAsync(required, [], cancellationToken);
             var pages = new Dictionary<AssetId, MeshVirtualPageRecord>(required.Length);
             for (var index = 0; index < required.Length; index++) pages.Add(required[index].Id, records[index]);
             return new(prepared, pages, source, maximumRequiredBytes) { EncodedBytes = total };

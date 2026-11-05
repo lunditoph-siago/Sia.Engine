@@ -130,6 +130,20 @@ public sealed class AssetPackTests
     }
 
     [Fact]
+    public void DecodeStillRejectsConflictingLengthsWhenPhysicalDescriptorsAreShared()
+    {
+        var original = Encode(Fixture().Index).Bytes;
+        var firstName = BinaryPrimitives.ReadUInt16LittleEndian(original.AsSpan(16));
+        var second = 16 + 78 + firstName;
+        var secondName = BinaryPrimitives.ReadUInt16LittleEndian(original.AsSpan(second));
+        var packLength = second + 2 + secondName + 68;
+        BinaryPrimitives.WriteInt32LittleEndian(original.AsSpan(packLength), 8);
+        RehashFooter(original);
+
+        Assert.Throws<InvalidDataException>(() => AssetPackIndex.Load(new FragmentedStream(original), Hash(original)));
+    }
+
+    [Fact]
     public async Task PackedLeavesShareOnePhysicalBufferReservationAndKeepItPinnedIndependently()
     {
         var f = Fixture(); var opens = 0;

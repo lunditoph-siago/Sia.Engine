@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Sia;
 using Sia.Engine.Camera;
 using Sia.Math;
@@ -184,6 +185,8 @@ public sealed partial class PbrRenderer :
     internal DiffuseProbeGpu? Probes { get; }
     internal PbrLightmapGpu? Lightmaps { get; }
     internal PbrRendererSettings Settings { get; }
+    internal PbrInitializationStatistics InitializationStatistics { get; private set; }
+    internal double ViewInitializationMilliseconds { get; private set; }
     internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
     internal float HdrRadianceScale { get; }
@@ -200,6 +203,7 @@ public sealed partial class PbrRenderer :
     private PbrRenderer(in GpuFrame frame, PbrSceneStream? stream, PbrRasterScene? raster,
         WGPUTextureFormat outputFormat, PbrRendererSettings? settings)
     {
+        var initializationStart = Stopwatch.GetTimestamp();
         if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
         Settings.AutoExposure?.Validate();
@@ -263,14 +267,19 @@ public sealed partial class PbrRenderer :
             if (raster is null && stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             var rasterPositionTables=raster is not null && Wgpu.GetLimits(frame.Device.GetWgpu<WGPUDevice>()).MaxStorageBuffersPerShaderStage>=8;
+            var validationComplete = Stopwatch.GetTimestamp();
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 raster is null && stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
                 Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables,cpuStreamInstances,
                 Settings.AutoExposure is not null);
+            var pipelinesComplete = Stopwatch.GetTimestamp();
             Materials = new(frame, (stream?.Materials ?? raster!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
+            var materialsComplete = Stopwatch.GetTimestamp();
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches,Pipelines.RasterGeometryLayout,rasterPositionTables)
                 : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
+            var geometryComplete = Stopwatch.GetTimestamp();
             Environment = new(frame, Settings.BakedEnvironment);
+            var environmentComplete = Stopwatch.GetTimestamp();
             if (captures.Length != 0) Captures = new(frame, captures, Settings.ReflectionCaptureBytes);
             if (Settings.Lightmaps is { } lighting) {
                 var admission = Settings.LightmapStreaming;
@@ -314,6 +323,16 @@ public sealed partial class PbrRenderer :
                     Settings.BakedEnvironment is null ? null : Environment,
                     Settings.DynamicSceneGi && Settings.Lightmaps?.Set.BakeSettings.Environment is not null ? Environment : null);
             }
+            var initializationComplete = Stopwatch.GetTimestamp();
+            static double Milliseconds(long start, long end) => (end - start) * 1000d / Stopwatch.Frequency;
+            InitializationStatistics = new(
+                Milliseconds(initializationStart, validationComplete),
+                Milliseconds(validationComplete, pipelinesComplete),
+                Milliseconds(pipelinesComplete, materialsComplete),
+                Milliseconds(materialsComplete, geometryComplete),
+                Milliseconds(geometryComplete, environmentComplete),
+                Milliseconds(environmentComplete, initializationComplete),
+                Milliseconds(initializationStart, initializationComplete));
         }
         catch {
             Lightmaps?.StopAsync().GetAwaiter().GetResult();
@@ -492,7 +511,9 @@ public sealed partial class PbrRenderer :
             throw new NotSupportedException("Dynamic probes currently require one view per renderer.");
         if (view.PersistentResources.TryGet<PbrView>(out var occupied) && !occupied!.IsDisposed)
             throw new InvalidOperationException("A render view may have only one PBR renderer owner.");
+        var initializationStart = Stopwatch.GetTimestamp();
         var created = new PbrView(this, view, frame);
+        ViewInitializationMilliseconds += Stopwatch.GetElapsedTime(initializationStart).TotalMilliseconds;
         _views.Add(created);
         view.PersistentResources.Set(created);
         return created;

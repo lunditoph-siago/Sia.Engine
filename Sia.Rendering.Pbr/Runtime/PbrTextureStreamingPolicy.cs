@@ -2,6 +2,31 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal static class PbrTextureStreamingPolicy
 {
+    internal static int ArrayLayerLimit(long decodedBytes, long fullLayerBytes, uint maximumLayers)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(decodedBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(fullLayerBytes, 1);
+        // CPU admission may hold one 64 MiB raw mip without enlarging shared
+        // GPU arrays. Preserve the former 32 MiB grouping and lower custom caps.
+        var groupingBytes = System.Math.Min(decodedBytes, 32L * 1024 * 1024);
+        return (int)System.Math.Min(maximumLayers, System.Math.Max(1L, groupingBytes / fullLayerBytes));
+    }
+
+    internal static uint UploadAllowance(uint maximumPerFrame, uint bytesPerSecond, double elapsedSeconds, ref double credit)
+    {
+        if (bytesPerSecond == 0) return maximumPerFrame;
+        var elapsed = double.IsFinite(elapsedSeconds) ? System.Math.Clamp(elapsedSeconds, 0, 0.1) : 0;
+        credit = System.Math.Min(maximumPerFrame, System.Math.Max(0, credit) + elapsed * bytesPerSecond);
+        return (uint)credit & ~3u;
+    }
+
+    internal static bool StableObsolete(bool obsolete, int minimumFrames, ref int frames)
+    {
+        if (!obsolete) { frames = 0; return false; }
+        frames = System.Math.Min(frames, minimumFrames - 1) + 1;
+        return frames >= minimumFrames;
+    }
+
     internal static ulong AvailableBytes(ulong budget, ulong used, ulong reserved = 0)
         => used >= budget || reserved >= budget - used ? 0 : budget - used - reserved;
 

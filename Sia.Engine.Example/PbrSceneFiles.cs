@@ -9,12 +9,25 @@ namespace Sia.Engine.Example;
 // Application file layout and workflow, deliberately outside the asset library.
 internal static partial class PbrSceneFiles
 {
+    internal readonly record struct PreparationStatistics
+    {
+        public double MetadataReadWaitMilliseconds { get; init; }
+        public double MetadataDecodeMilliseconds { get; init; }
+        public double MetadataLeafHashMilliseconds { get; init; }
+        public long MetadataLogicalBytes { get; init; }
+        public AssetChunkCacheStatistics MetadataCache { get; init; }
+        public double CompositionMilliseconds { get; init; }
+        public double RequiredPagePlanMilliseconds { get; init; }
+        public double RequiredPageReadMilliseconds { get; init; }
+    }
+
     internal abstract record Prepared(AssetId Id, PbrSceneRecord Scene,
         IReadOnlyDictionary<AssetId, MeshManifestRecord> Meshes,
         IReadOnlyDictionary<AssetId, PbrMaterialRecord> Materials,
         IReadOnlyDictionary<AssetId, PbrTextureRecord> Textures)
     {
         internal long EncodedBytes { get; init; }
+        internal PreparationStatistics Statistics { get; init; }
     }
 
     internal sealed record Prepared<TProduct>(AssetId Id, PbrSceneRecord Scene,
@@ -45,7 +58,15 @@ internal static partial class PbrSceneFiles
         int maximumFileBytes, long maximumTotalBytes, CancellationToken cancellationToken, AssetPackIndex? packIndex = null) where TProduct : class, IAssetRecord
     {
         await using var reader = new Reader(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
-        var prepared = await reader.References(); var scene = prepared.Scene;
+        var prepared = await reader.References();
+        return await PrepareProductsAsync(reader, prepared, selectProduct, partCount, decodeProduct, cancellationToken);
+    }
+
+    private static async Task<Prepared<TProduct>> PrepareProductsAsync<TProduct>(Reader reader, Prepared prepared,
+        Func<MeshManifest, AssetId> selectProduct, Func<TProduct, int> partCount, Func<Stream, ulong, string?, TProduct> decodeProduct,
+        CancellationToken cancellationToken) where TProduct : class, IAssetRecord
+    {
+        var scene = prepared.Scene;
         var meshes = prepared.Meshes;
         var uses = new int[scene.Data.Bindings.Length];
         for (var i = 0; i < scene.Data.Instances.Length; i++) uses[scene.Data.Instances[i].Binding]++;
@@ -57,21 +78,26 @@ internal static partial class PbrSceneFiles
             if (unique.Add(id)) selectedIds.Add(id);
             productUses[id] = productUses.GetValueOrDefault(id) + uses[i];
         }
-        long expanded = 0; var geometryCount = 0; var decoded = 0;
-        TProduct DecodeProduct(Stream stream, ulong maximumBytes, string? name)
+        long expanded = 0; var geometryCount = 0;
+        var countGate = new object();
+        TProduct DecodeProduct(AssetId id, Stream stream, ulong maximumBytes, string? name)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var product = decodeProduct(stream, maximumBytes, name);
             var parts = partCount(product);
-            geometryCount += parts;
-            if (geometryCount > 4096) throw new InvalidDataException("Resolved geometry table limit exceeded.");
-            // ReadMany decodes in selected-ID order, before publishing each result.
-            expanded += productUses[selectedIds[decoded++]] * parts;
-            if (expanded > PbrSceneData.MaximumInstances) throw new InvalidDataException("Expanded scene instance limit exceeded.");
+            lock (countGate) {
+                geometryCount += parts;
+                if (geometryCount > 4096) throw new InvalidDataException("Resolved geometry table limit exceeded.");
+                expanded += productUses[id] * parts;
+                if (expanded > PbrSceneData.MaximumInstances) throw new InvalidDataException("Expanded scene instance limit exceeded.");
+            }
             return product;
         }
         var products = await reader.ReadMany(selectedIds, DecodeProduct);
         cancellationToken.ThrowIfCancellationRequested();
-        return new(prepared.Id, scene, meshes, products, prepared.Materials, prepared.Textures) { EncodedBytes = reader.EncodedBytes };
+        return new(prepared.Id, scene, meshes, products, prepared.Materials, prepared.Textures) {
+            EncodedBytes = reader.EncodedBytes, Statistics = reader.Statistics
+        };
     }
 
     // Must run synchronously on the target World's owner context after preparation.
