@@ -8,7 +8,10 @@ namespace Sia.Engine.Rendering.Pbr;
 
 public sealed partial class PbrSceneStream
 {
-    internal sealed record PreparedGeometryPage(MeshVirtualPageRecord? Virtual, MeshRasterPageRecord[]? Raster, int DecodedBytes);
+    internal sealed record PreparedGeometryPage(MeshVirtualPageRecord? Virtual, MeshRasterPageRecord[]? Raster, int DecodedBytes)
+    {
+        internal (MeshRasterPagesData Product, int Page, StreamGeometryPage Geometry)? RasterGeometry { get; init; }
+    }
     private sealed record RasterPageUse(MeshRasterPagesData Product, int Page, int PreparationBytes);
     private readonly Dictionary<string, RasterPageUse> _rasterPageUses = new(StringComparer.Ordinal);
     private readonly Func<RasterPageReference, CancellationToken, Task<MeshRasterPageRecord>>? _prepareRaster;
@@ -18,6 +21,18 @@ public sealed partial class PbrSceneStream
     /// <remarks>Includes Raster index/vertex dependencies, compact output and remap scratch; excludes the encoded transport cache and GPU storage.</remarks>
     public int MaximumPagePreparationBytes => System.Math.Max(2 * MeshVirtualPageData.MaximumEncodedBytes,
         Pages.Length == 0 ? 0 : Pages.Max(page => page.DecodedBytes));
+
+    // A prepared compact can coexist with another compact when acquisition returns
+    // different data. Owners whose existing budget cannot retain both keep owner compaction.
+    internal long MaximumWorkerPagePreparationBytes => System.Math.Max(MaximumPagePreparationBytes,
+        _rasterPageUses.Count == 0 ? 0 : _rasterPageUses.Values.Max(WorkerPreparationBytes));
+
+    internal bool CanPrepareRasterGeometry(long maximumBytes)
+        => MaximumWorkerPagePreparationBytes <= System.Math.Min(maximumBytes, int.MaxValue);
+
+    internal PageInfo[] GetPreparationPages(bool compactRaster)
+        => !compactRaster ? Pages : Pages.Select(page => _rasterPageUses.TryGetValue(page.Id, out var use)
+            ? page with { DecodedBytes = checked((int)WorkerPreparationBytes(use)) } : page).ToArray();
 
     /// <summary>Enumerates coarse opaque and exact transparent Raster leaves and their vertex dependencies.</summary>
     /// <remarks>
@@ -64,8 +79,9 @@ public sealed partial class PbrSceneStream
     /// <summary>Streams exact existing Raster LOD pages through the ordinary geometry scheduler and GPU arena.</summary>
     /// <remarks>
     /// Required opaque pages use the existing coarsest LOD; AlphaBlend sections retain complete LOD0.
-    /// Preparation performs cancellable typed reads without World mutation. Acquisition runs synchronously
-    /// on the World owner context and compacts original referenced vertices without altering their channels.
+    /// Preparation performs typed reads without World mutation and can compact original referenced vertices
+    /// when the owner's decoded budget also admits a fallback compact. Acquisition runs synchronously on the
+    /// World owner context and reuses matching prepared geometry or compacts the acquired original channels.
     /// The caller owns the transport and metadata Asset uses and must join streaming before releasing them.
     /// Set the renderer's decoded scheduling budget to at least <see cref="MaximumPagePreparationBytes"/>.
     /// </remarks>
@@ -300,7 +316,10 @@ public sealed partial class PbrSceneStream
         return checked((int)bytes);
     }
 
-    internal async Task<PreparedGeometryPage> ReadPreparedPageAsync(string id, CancellationToken token)
+    private static long WorkerPreparationBytes(RasterPageUse use)
+        => checked((long)use.PreparationBytes + CompactPageBytes(use.Product, use.Product.Pages[use.Page].ElementCount));
+
+    internal async Task<PreparedGeometryPage> ReadPreparedPageAsync(string id, CancellationToken token, bool compactRaster = true)
     {
         token.ThrowIfCancellationRequested();
         if (!_rasterPageUses.TryGetValue(id, out var use)) {
@@ -317,7 +336,12 @@ public sealed partial class PbrSceneStream
             use.Product.ValidatePage(dependencies[i], records[i + 1].Data, token);
         }
         token.ThrowIfCancellationRequested();
-        return new(null, records, use.PreparationBytes);
+        if (!compactRaster) return new(null, records, use.PreparationBytes);
+        var vertices = new Dictionary<int, MeshRasterPageData>(dependencies.Length);
+        for (var i = 0; i < dependencies.Length; i++) vertices.Add(dependencies[i], records[i + 1].Data);
+        var geometry = StreamGeometryPage.Create(use.Product, use.Page, records[0].Data, vertices);
+        token.ThrowIfCancellationRequested();
+        return new(null, records, checked((int)WorkerPreparationBytes(use))) { RasterGeometry = (use.Product, use.Page, geometry) };
     }
 
     internal StreamGeometryPage UsePreparedPage(string id, PreparedGeometryPage prepared)
@@ -329,9 +353,16 @@ public sealed partial class PbrSceneStream
         if (records is null || records.Length != dependencies.Length + 1)
             throw new InvalidDataException("Raster geometry preparation has another dependency closure.");
         var indices = _acquireRaster!(use.Product.Pages[use.Page].Reference, records[0]);
-        var vertices = new Dictionary<int, MeshRasterPageData>();
-        for (var i = 0; i < dependencies.Length; i++)
-            vertices.Add(dependencies[i], _acquireRaster!(use.Product.Pages[dependencies[i]].Reference, records[i + 1]));
+        var sameData = ReferenceEquals(indices, records[0].Data);
+        var vertices = new Dictionary<int, MeshRasterPageData>(dependencies.Length);
+        for (var i = 0; i < dependencies.Length; i++) {
+            var actual = _acquireRaster!(use.Product.Pages[dependencies[i]].Reference, records[i + 1]);
+            sameData &= ReferenceEquals(actual, records[i + 1].Data);
+            vertices.Add(dependencies[i], actual);
+        }
+        if (sameData && prepared.RasterGeometry is { } compact
+            && ReferenceEquals(compact.Product, use.Product) && compact.Page == use.Page)
+            return compact.Geometry;
         return StreamGeometryPage.Create(use.Product, use.Page, indices, vertices);
     }
 }

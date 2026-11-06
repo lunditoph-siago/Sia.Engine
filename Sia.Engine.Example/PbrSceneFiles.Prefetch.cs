@@ -3,7 +3,7 @@ namespace Sia.Engine.Example;
 internal static partial class PbrSceneFiles
 {
     // The complete required set has already passed aggregate admission. Only
-    // this bounded window may acquire/decode concurrently; publication is ordered.
+    // this bounded window may acquire/decode concurrently; results retain input order.
     internal static async Task<TResult[]> ReadRequiredAsync<TInput, TResult>(IReadOnlyList<TInput> inputs,
         Func<TInput, CancellationToken, Task<TResult>> read, CancellationToken token, int concurrency = 2)
     {
@@ -12,13 +12,13 @@ internal static partial class PbrSceneFiles
         ArgumentOutOfRangeException.ThrowIfLessThan(concurrency, 1);
         token.ThrowIfCancellationRequested();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
-        var pending = new Queue<Task<TResult>>(System.Math.Min(concurrency, inputs.Count));
+        var pending = new List<Task<(int Index, TResult Result)>>(System.Math.Min(concurrency, inputs.Count));
         var results = new TResult[inputs.Count];
         var next = 0;
         var failureGate = new object(); Exception? failure = null;
-        async Task<TResult> Fetch(TInput input)
+        async Task<(int Index, TResult Result)> Fetch(int index)
         {
-            try { return await read(input, cancellation.Token); }
+            try { return (index, await read(inputs[index], cancellation.Token)); }
             catch (Exception error) {
                 lock (failureGate) {
                     if (failure is null && !(error is OperationCanceledException && cancellation.IsCancellationRequested))
@@ -32,15 +32,18 @@ internal static partial class PbrSceneFiles
         void Fill()
         {
             while (pending.Count < concurrency && next < inputs.Count) {
-                var input = inputs[next++];
-                pending.Enqueue(Fetch(input));
+                cancellation.Token.ThrowIfCancellationRequested();
+                pending.Add(Fetch(next++));
             }
         }
         try {
             Fill();
-            for (var index = 0; index < results.Length; index++) {
-                results[index] = await pending.Dequeue();
-                token.ThrowIfCancellationRequested();
+            while (pending.Count > 0) {
+                var completed = await Task.WhenAny(pending);
+                pending.Remove(completed);
+                var (index, result) = await completed;
+                results[index] = result;
+                cancellation.Token.ThrowIfCancellationRequested();
                 Fill();
             }
             return results;
@@ -50,7 +53,7 @@ internal static partial class PbrSceneFiles
             // its source/cache can be disposed. Results here own no GPU resources.
             try { await cancellation.CancelAsync(); }
             catch { /* A cancellation callback cannot replace the read failure. */ }
-            while (pending.TryDequeue(out var task)) {
+            foreach (var task in pending) {
                 try { await task; }
                 catch { /* Observe abandoned tasks, retaining the initiating error. */ }
             }

@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
+using Sia;
 using Sia.Asset;
+using Sia.Engine.Example;
 using Sia.Engine.Mesh;
 using Sia.Engine.Rendering;
 using Sia.Engine.Rendering.Pbr;
@@ -51,9 +53,12 @@ public sealed class PbrRasterPageStreamingTests
         var prepared = await stream.ReadPreparedPageAsync(id, CancellationToken.None);
         Assert.Empty(acquired);
         Assert.Null(prepared.Virtual); Assert.NotNull(prepared.Raster);
+        var preparedGeometry = Assert.IsType<StreamGeometryPage>(prepared.RasterGeometry?.Geometry);
         var retained = prepared.Raster.Sum(record => checked((long)record.Data.PayloadBytes));
         Assert.True(prepared.DecodedBytes >= retained + descriptor.ElementCount * sizeof(uint));
         var geometry = stream.UsePreparedPage(id, prepared);
+        Assert.Same(preparedGeometry, geometry);
+        Assert.Equal(ExpectedPreparationBytes(fixture.Product, pageIndex, compactRaster: true), prepared.DecodedBytes);
         Assert.Equal(fixture.Product.GetVertexDependencies(pageIndex).Length + 1, acquired.Count);
         var original = fixture.Raster.GetIndices(0);
         Assert.Equal(descriptor.ElementCount, geometry.Indices.Length);
@@ -65,6 +70,110 @@ public sealed class PbrRasterPageStreamingTests
         Assert.True(geometry.VertexCount <= descriptor.ElementCount);
         Assert.True(prepared.DecodedBytes >= retained + geometry.VertexCount * (Unsafe.SizeOf<MeshVertex>() + Unsafe.SizeOf<float2>())
             + geometry.Indices.Length * (sizeof(uint) + 32));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExistingWorldRasterDataWithAnotherReferenceRebuildsThePreparedCompact(bool replaceIndices)
+    {
+        var fixture = Input.Value; var page = fixture.Product.GetLods(0)[0].FirstPage;
+        var descriptor = fixture.Product.Pages[page];
+        var dependencies = fixture.Product.GetVertexDependencies(page).ToArray();
+        var replacedId = replaceIndices ? descriptor.Id : fixture.Product.Pages[dependencies[0]].Id;
+        var source = fixture.Pages[replacedId];
+        var replacement = source.Kind == MeshRasterPageKind.Indices
+            ? MeshRasterPageData.CreateIndices(source.Indices)
+            : MeshRasterPageData.CreateVertices(source.Vertices, source.BakeUvs);
+        Assert.NotSame(source, replacement); Assert.Equal(source.ContentHash, replacement.ContentHash);
+        var existing = new MeshRasterPageRecord { Data = replacement };
+        using var world = new World(); world.AcquireAddon<AssetLibrary>();
+        AssetLibrary.RegisterAsset<MeshRasterPageAsset, MeshRasterPageRecord>();
+        world.AcquireAsset(replacedId, () => existing);
+        var acquired = new Dictionary<AssetId, MeshRasterPageData>();
+        var stream = PbrSceneStream.Create(Scene(fixture.Product), r => fixture.Pages[r.Value],
+            (r, _) => Task.FromResult(new MeshRasterPageRecord { Data = fixture.Pages[r.Value] }),
+            (r, record) => {
+                var actual = PbrSceneFiles.AcquireRasterPage(world, r, record);
+                acquired.Add(r.Value, actual); return actual;
+            });
+        var id = descriptor.Id.Value.ToString("N");
+        var prepared = await stream.ReadPreparedPageAsync(id, CancellationToken.None);
+        Assert.Empty(acquired);
+        var compact = Assert.IsType<StreamGeometryPage>(prepared.RasterGeometry?.Geometry);
+
+        var geometry = stream.UsePreparedPage(id, prepared);
+
+        Assert.NotSame(compact, geometry);
+        Assert.Same(replacement, acquired[replacedId]);
+        Assert.Same(replacement, new AssetRefer<MeshRasterPageRecord>.Id(replacedId).Find(world)?.Get<MeshRasterPageAsset>().Data);
+        Assert.Equal(dependencies.Length + 1, acquired.Count);
+        Assert.Equal(compact.Indices.ToArray(), geometry.Indices.ToArray());
+        Assert.Equal(compact.VertexCount, geometry.VertexCount);
+        for (var vertex = 0; vertex < geometry.VertexCount; vertex++) {
+            Assert.Equal(compact.GetVertex(vertex), geometry.GetVertex(vertex));
+            Assert.Equal(compact.GetBakeUv(vertex), geometry.GetBakeUv(vertex));
+        }
+    }
+
+    [Fact]
+    public async Task ChangedAcquiredDependencyCannotPublishThePreparedCompact()
+    {
+        var fixture = Input.Value; var page = fixture.Product.GetLods(0)[0].FirstPage;
+        var dependency = fixture.Product.GetVertexDependencies(page)[0]; var replacedId = fixture.Product.Pages[dependency].Id;
+        var original = fixture.Pages[replacedId]; var vertices = original.Vertices.ToArray();
+        vertices[0] = vertices[0] with { UV = new float2(.125f, .25f) };
+        var changed = MeshRasterPageData.CreateVertices(vertices, original.BakeUvs);
+        var stream = PbrSceneStream.Create(Scene(fixture.Product), r => fixture.Pages[r.Value],
+            (r, _) => Task.FromResult(new MeshRasterPageRecord { Data = fixture.Pages[r.Value] }),
+            (r, record) => r.Value == replacedId ? changed : record.Data);
+        var id = fixture.Product.Pages[page].Id.Value.ToString("N");
+        var prepared = await stream.ReadPreparedPageAsync(id, CancellationToken.None);
+        Assert.NotNull(prepared.RasterGeometry);
+
+        Assert.Throws<InvalidDataException>(() => stream.UsePreparedPage(id, prepared));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WorkerPreparationBudgetIncludesPreparedAndFallbackCompacts(bool bakeUvs)
+    {
+        var fixture = CreateFixture(bakeUvs); var stream = Create(Scene(fixture.Product), fixture.Pages);
+        var workerPages = stream.GetPreparationPages(compactRaster: true);
+        foreach (var page in workerPages) {
+            var index = Array.FindIndex(fixture.Product.Pages.ToArray(), descriptor => descriptor.Id.Value.ToString("N") == page.Id);
+            Assert.Equal(ExpectedPreparationBytes(fixture.Product, index, compactRaster: true), page.DecodedBytes);
+            Assert.Equal(ExpectedPreparationBytes(fixture.Product, index, compactRaster: false), stream.Pages[stream.GetPageIndex(page.Id)].DecodedBytes);
+        }
+        Assert.Equal(System.Math.Max(2 * MeshVirtualPageData.MaximumEncodedBytes, workerPages.Max(page => page.DecodedBytes)),
+            stream.MaximumWorkerPagePreparationBytes);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new BoundedPageScheduler<PbrSceneStream.PreparedGeometryPage>(
+            (id, token) => stream.ReadPreparedPageAsync(id, token, compactRaster: true), prepared => prepared.DecodedBytes,
+            checked((int)stream.MaximumWorkerPagePreparationBytes), maximumDecodedBytes: stream.MaximumWorkerPagePreparationBytes - 1));
+    }
+
+    [Fact]
+    public async Task TightAndRoomyOwnersCanPrepareTheSameSourceWithoutChangingItsReservations()
+    {
+        var fixture = CreateFixture(bakeUvs: true, latitudeSegments: 64, longitudeSegments: 128);
+        var stream = Create(Scene(fixture.Product), fixture.Pages); var original = stream.Pages.ToArray();
+        var legacyMaximum = stream.MaximumPagePreparationBytes; var workerMaximum = stream.MaximumWorkerPagePreparationBytes;
+        Assert.True(workerMaximum > legacyMaximum);
+        var tightMode = stream.CanPrepareRasterGeometry(legacyMaximum);
+        var roomyMode = stream.CanPrepareRasterGeometry(workerMaximum);
+        Assert.False(tightMode); Assert.True(roomyMode);
+        var tightPages = stream.GetPreparationPages(tightMode); var roomyPages = stream.GetPreparationPages(roomyMode);
+        Assert.Same(stream.Pages, tightPages); Assert.NotSame(stream.Pages, roomyPages);
+        var selected = roomyPages.MaxBy(page => page.DecodedBytes);
+        var reads = await Task.WhenAll(stream.ReadPreparedPageAsync(selected.Id, CancellationToken.None, tightMode),
+            stream.ReadPreparedPageAsync(selected.Id, CancellationToken.None, roomyMode));
+        Assert.Null(reads[0].RasterGeometry); Assert.NotNull(reads[1].RasterGeometry);
+        Assert.Equal(tightPages[stream.GetPageIndex(selected.Id)].DecodedBytes, reads[0].DecodedBytes);
+        Assert.Equal(roomyPages[stream.GetPageIndex(selected.Id)].DecodedBytes, reads[1].DecodedBytes);
+        Assert.True(reads[0].DecodedBytes <= legacyMaximum);
+        Assert.Equal(original, stream.Pages);
+        Assert.Equal(legacyMaximum, stream.MaximumPagePreparationBytes);
     }
 
     [Fact]
@@ -163,10 +272,22 @@ public sealed class PbrRasterPageStreamingTests
             "exact-raster-page-test", [1, 2, 3], CancellationToken.None);
     }
 
-    private static Fixture CreateFixture()
+    private static int ExpectedPreparationBytes(MeshRasterPagesData product, int page, bool compactRaster)
     {
-        var mesh = ProceduralMesh.Sphere(latitudeSegments: 12, longitudeSegments: 24);
-        var source = MeshSource.Create(mesh, bakeUvs: mesh.Vertices.Select(vertex => vertex.UV).ToArray());
+        var indices = product.Pages[page].ElementCount;
+        var vertexBytes = Unsafe.SizeOf<MeshVertex>() + (product.HasBakeUvs ? Unsafe.SizeOf<float2>() : 0);
+        var sourceBytes = (long)indices * sizeof(uint);
+        foreach (var dependency in product.GetVertexDependencies(page)) sourceBytes += (long)product.Pages[dependency].ElementCount * vertexBytes;
+        var compactBytes = (long)indices * (vertexBytes + sizeof(uint));
+        return checked((int)(sourceBytes + (compactRaster ? 2 : 1) * compactBytes + (long)indices * 32));
+    }
+
+    private static Fixture CreateFixture() => CreateFixture(bakeUvs: true);
+
+    private static Fixture CreateFixture(bool bakeUvs, int latitudeSegments = 12, int longitudeSegments = 24)
+    {
+        var mesh = ProceduralMesh.Sphere(latitudeSegments: latitudeSegments, longitudeSegments: longitudeSegments);
+        var source = MeshSource.Create(mesh, bakeUvs: bakeUvs ? mesh.Vertices.Select(vertex => vertex.UV).ToArray() : []);
         var raster = MeshRasterData.Build(source, MeshRasterBuildSettings.Default with { MaximumLods = 3, MinimumTriangles = 16 });
         var leaves = new Dictionary<AssetId, MeshRasterPageData>();
         var product = MeshRasterPagesData.Build(raster, AssetId.New(), AssetId.New(), (id, page) => leaves.Add(id, page));

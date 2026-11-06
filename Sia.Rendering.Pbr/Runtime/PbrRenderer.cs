@@ -281,10 +281,6 @@ public sealed partial class PbrRenderer :
             Environment = new(frame, Settings.BakedEnvironment);
             var environmentComplete = Stopwatch.GetTimestamp();
             if (captures.Length != 0) Captures = new(frame, captures, Settings.ReflectionCaptureBytes);
-            if (Settings.Lightmaps is { } lighting) {
-                var admission = Settings.LightmapStreaming;
-                Lightmaps = new(frame, lighting, lightmapRows!, admission);
-            }
             if (sceneGi) {
                 var dimensions = Settings.BakedProbes?.Dimensions ?? Settings.ProbeDimensions;
                 var probeBytes = DiffuseProbeGpu.FieldBytes(dimensions, Settings.DynamicSceneGi);
@@ -322,6 +318,12 @@ public sealed partial class PbrRenderer :
                 Probes = new(frame, asset, tracing, Settings.SceneGiBytes, reference,
                     Settings.BakedEnvironment is null ? null : Environment,
                     Settings.DynamicSceneGi && Settings.Lightmaps?.Set.BakeSettings.Environment is not null ? Environment : null);
+            }
+            // Commit the lightmap owner last: stopping it registers asynchronous
+            // queue completion, which a later constructor failure cannot await.
+            if (Settings.Lightmaps is { } lighting) {
+                var admission = Settings.LightmapStreaming;
+                Lightmaps = new(frame, lighting, lightmapRows!, admission);
             }
             var initializationComplete = Stopwatch.GetTimestamp();
             static double Milliseconds(long start, long end) => (end - start) * 1000d / Stopwatch.Frequency;

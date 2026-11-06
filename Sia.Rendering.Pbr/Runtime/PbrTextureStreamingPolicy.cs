@@ -30,6 +30,30 @@ internal static class PbrTextureStreamingPolicy
     internal static ulong AvailableBytes(ulong budget, ulong used, ulong reserved = 0)
         => used >= budget || reserved >= budget - used ? 0 : budget - used - reserved;
 
+    internal static (int Mip, long Bytes) UpgradeRange(uint width, uint height, int levels,
+        int residentMip, int desiredMip, int arrayMip, int layers, long decodedAvailable,
+        ulong allocationAvailable, TextureBlockLayout layout, long readBatchBytes)
+    {
+        var target = residentMip;
+        long bytes = 0;
+        var maximumBytes = System.Math.Min(decodedAvailable, readBatchBytes);
+        for (var mip = residentMip - 1; mip >= desiredMip; mip--) {
+            var nextBytes = checked((long)layout.MipByteLength(System.Math.Max(1u, width >> mip), System.Math.Max(1u, height >> mip)));
+            if (nextBytes > maximumBytes - bytes) break;
+            if (mip < arrayMip) {
+                // CPU reads contain only this layer's missing interval; a finer
+                // GPU base replaces the complete tail of every array layer.
+                ulong allocation = 0;
+                for (var level = mip; level < levels; level++)
+                    allocation = checked(allocation + layout.MipByteLength(System.Math.Max(1u, width >> level), System.Math.Max(1u, height >> level)));
+                if (checked(allocation * (ulong)layers) > allocationAvailable) break;
+            }
+            target = mip;
+            bytes = checked(bytes + nextBytes);
+        }
+        return (target, bytes);
+    }
+
     internal static int MinimumMip(uint width, uint height, int tailMip, uint maximumDimension,
         long decodedBytes, TextureBlockLayout layout)
     {

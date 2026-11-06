@@ -80,6 +80,104 @@ public sealed class TextureStreamingPolicyTests
         Assert.Equal(0, PbrTextureStreamingPolicy.MinimumMip(4096, 4096, 6, 8192, decoded, layout));
     }
 
+    [Theory]
+    [InlineData(WGPUTextureFormat.BC7RGBAUnormSrgb)]
+    [InlineData(WGPUTextureFormat.BC5RGUnorm)]
+    public void CompressedUpgradeCanReachTheDesiredMipInOneBoundedRequest(WGPUTextureFormat format)
+    {
+        var request = PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, 6, 0, 6, 1,
+            64L * 1024 * 1024, 128ul * 1024 * 1024, TextureBlockLayout.For(format), long.MaxValue);
+        Assert.Equal(0, request.Mip);
+        Assert.Equal(22_364_160, request.Bytes);
+    }
+
+    [Fact]
+    public void FourKRawUpgradeSplitsBeforeTheTopMipToPreserveTheDecodedLimit()
+    {
+        var layout = TextureBlockLayout.For(WGPUTextureFormat.RGBA8Unorm);
+        const long decoded = 64L * 1024 * 1024;
+        var first = PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, 6, 0, 6, 1,
+            decoded, 128ul * 1024 * 1024, layout, long.MaxValue);
+        Assert.Equal((1, 22_347_776L), first);
+        var second = PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, first.Mip, 0, first.Mip, 1,
+            decoded, 128ul * 1024 * 1024, layout, long.MaxValue);
+        Assert.Equal((0, decoded), second);
+    }
+
+    [Fact]
+    public void PendingDecodedReservationsLimitTheEntireMissingRange()
+    {
+        var layout = TextureBlockLayout.For(WGPUTextureFormat.RGBA8Unorm);
+        // A sibling read holds 60 MiB until completion, including cancellation.
+        var request = PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, 6, 0, 6, 1,
+            4L * 1024 * 1024, 128ul * 1024 * 1024, layout, long.MaxValue);
+        Assert.Equal((3, 1_376_256L), request);
+        Assert.Equal((6, 0L), PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, 6, 0, 6, 1,
+            65_535, 128ul * 1024 * 1024, layout, long.MaxValue));
+    }
+
+    [Fact]
+    public void ReplacementAdmissionCountsEveryLayerAndTheCompleteGpuTail()
+    {
+        var layout = TextureBlockLayout.For(WGPUTextureFormat.RGBA8Unorm);
+        // A 256-square complete raw tail costs 349,524 bytes per layer.
+        const ulong replacement = 349_524ul * 4;
+        Assert.Equal((2, 327_680L), PbrTextureStreamingPolicy.UpgradeRange(1024, 1024, 11, 4, 0, 4, 4,
+            64L * 1024 * 1024, replacement, layout, long.MaxValue));
+        Assert.Equal((3, 65_536L), PbrTextureStreamingPolicy.UpgradeRange(1024, 1024, 11, 4, 0, 4, 4,
+            64L * 1024 * 1024, replacement - 1, layout, long.MaxValue));
+        Assert.Equal((4, 0L), PbrTextureStreamingPolicy.UpgradeRange(1024, 1024, 11, 4, 0, 4, 4,
+            64L * 1024 * 1024, 0, layout, long.MaxValue));
+    }
+
+    [Fact]
+    public void CoarserLayerCanFillAlreadyAllocatedMipsWithoutAnotherGpuAllocation()
+    {
+        var layout = TextureBlockLayout.For(WGPUTextureFormat.RGBA8Unorm);
+        // Another layer already owns base mip 2. This layer can reach its own
+        // desired mip 3 while the array has no replacement headroom.
+        Assert.Equal((3, 65_536L), PbrTextureStreamingPolicy.UpgradeRange(1024, 1024, 11, 4, 3, 2, 4,
+            64L * 1024 * 1024, 0, layout, long.MaxValue));
+        Assert.Equal((2, 327_680L), PbrTextureStreamingPolicy.UpgradeRange(1024, 1024, 11, 4, 0, 2, 4,
+            64L * 1024 * 1024, 0, layout, long.MaxValue));
+    }
+
+    [Fact]
+    public void OversizedReplacementCannotOverflowIntoAnAdmissibleAllocation()
+    {
+        Assert.Throws<OverflowException>(() => PbrTextureStreamingPolicy.UpgradeRange(
+            536_870_912, 536_870_912, 2, 1, 0, 1, int.MaxValue, long.MaxValue, ulong.MaxValue,
+            TextureBlockLayout.For(WGPUTextureFormat.RGBA8Unorm), long.MaxValue));
+    }
+
+    [Theory]
+    [InlineData(WGPUTextureFormat.RGBA8Unorm, 4, 327_680L)]
+    [InlineData(WGPUTextureFormat.BC7RGBAUnormSrgb, 3, 344_064L)]
+    [InlineData(WGPUTextureFormat.BC5RGUnorm, 3, 344_064L)]
+    public void FrameInputQuotaPublishesSmallMipBatchesBeforeReadingTheFinestLevels(
+        WGPUTextureFormat format, int expectedMip, long expectedBytes)
+    {
+        var settings = new PbrTextureStreamingSettings();
+        var request = PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, 6, 0, 6, 1,
+            settings.DecodedBytes, 128ul * 1024 * 1024, TextureBlockLayout.For(format), settings.UploadBytesPerFrame);
+        Assert.Equal((expectedMip, expectedBytes), request);
+        Assert.True(request.Mip > 0);
+        Assert.True(request.Bytes <= settings.UploadBytesPerFrame);
+    }
+
+    [Theory]
+    [InlineData(WGPUTextureFormat.RGBA8Unorm, 67_108_864L)]
+    [InlineData(WGPUTextureFormat.BC7RGBAUnormSrgb, 16_777_216L)]
+    public void OneLargeIndependentlyReadableMipStillFitsTheRequestWindow(WGPUTextureFormat format, long nextMipBytes)
+    {
+        var settings = new PbrTextureStreamingSettings();
+        var request = PbrTextureStreamingPolicy.UpgradeRange(4096, 4096, 13, 1, 0, 1, 1,
+            settings.DecodedBytes, 128ul * 1024 * 1024, TextureBlockLayout.For(format),
+            System.Math.Max(nextMipBytes, settings.UploadBytesPerFrame));
+        Assert.Equal((0, nextMipBytes), request);
+        Assert.True(request.Bytes > settings.UploadBytesPerFrame);
+    }
+
     [Fact]
     public void FullEightKTextureCanAdmitItsTopMipWithoutDecodingItsWholeReplacement()
     {

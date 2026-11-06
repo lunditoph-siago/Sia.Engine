@@ -1,6 +1,11 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Sia.WebGPU;
+#if BROWSER
+using unsafe QueueCompletionMessage = Sia.WebGPU.WGPUStringView*;
+#else
+using QueueCompletionMessage = Sia.WebGPU.WGPUStringView;
+#endif
 
 namespace Sia.Engine.Rendering;
 
@@ -14,7 +19,8 @@ public static unsafe class GpuQueueCompletion
         try {
             var callback = new WGPUQueueWorkDoneCallbackInfo {
                 Mode = WGPUCallbackMode.AllowSpontaneous,
-                Callback = (delegate* unmanaged[Cdecl]<WGPUQueueWorkDoneStatus, WGPUStringView, void*, void*, void>)&Completed,
+                Callback = (delegate* unmanaged[Cdecl]<WGPUQueueWorkDoneStatus, WGPUStringView, void*, void*, void>)
+                    (delegate* unmanaged[Cdecl]<WGPUQueueWorkDoneStatus, QueueCompletionMessage, void*, void*, void>)&Completed,
                 Userdata1 = (void*)GCHandle.ToIntPtr(handle)
             };
             WgpuUnsafe.wgpuQueueOnSubmittedWorkDone((WGPUQueue*)queue.DangerousGetHandle(), callback);
@@ -24,7 +30,7 @@ public static unsafe class GpuQueueCompletion
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static void Completed(WGPUQueueWorkDoneStatus status, WGPUStringView message, void* user, void* unused)
+    private static void Completed(WGPUQueueWorkDoneStatus status, QueueCompletionMessage message, void* user, void* unused)
     {
         var handle = GCHandle.FromIntPtr((nint)user);
         try {

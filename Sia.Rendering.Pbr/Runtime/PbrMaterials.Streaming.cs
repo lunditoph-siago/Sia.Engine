@@ -297,7 +297,7 @@ internal sealed partial class PbrMaterials
                 if (best is null || CompareDemand(array, best) > 0) best = array;
             }
             if (best is null) break;
-            StartRequest(best);
+            StartRequest(best, decodedAvailable, available);
         }
 
         // Share this BeginFrame's allowance between already admitted ready arrays.
@@ -396,20 +396,30 @@ internal sealed partial class PbrMaterials
         }
     }
 
-    private void StartRequest(ArrayTexture array)
+    private void StartRequest(ArrayTexture array, long decodedAvailable, ulong allocationAvailable)
     {
         var demand = DescribeDemand(array);
         var mip = demand.Mip; var bytes = demand.Bytes;
         var mips = array.ResidentMips.ToArray();
-        if (demand.Layer >= 0) mips[demand.Layer]--;
+        if (demand.Layer >= 0) {
+            // Publish small refinements promptly when demand changes during IO;
+            // one independently readable mip may still exceed the frame quota.
+            var range = PbrTextureStreamingPolicy.UpgradeRange(array.Width, array.Height, array.Levels,
+                array.ResidentMips[demand.Layer], array.DesiredMips[demand.Layer], array.ResidentMip,
+                array.Sources.Length, decodedAvailable, allocationAvailable, array.Layout,
+                System.Math.Max(demand.Bytes, _streaming.UploadBytesPerFrame));
+            mips[demand.Layer] = range.Mip;
+            mip = System.Math.Min(array.ResidentMip, range.Mip);
+            bytes = range.Bytes;
+        }
         else for (var layer = 0; layer < mips.Length; layer++) mips[layer] = System.Math.Max(mip, mips[layer]);
         var cancellation = new CancellationTokenSource();
         var read = Task.Run(async () => {
             var result = new ReadOnlyMemory<byte>[array.Sources.Length][];
             for (var layer = 0; layer < result.Length; layer++) {
                 result[layer] = new ReadOnlyMemory<byte>[array.Levels - mip];
-                if (mips[layer] < array.ResidentMips[layer])
-                    result[layer][mips[layer] - mip] = await _stream!.ReadTextureMipAsync(array.Sources[layer], mips[layer], cancellation.Token).ConfigureAwait(false);
+                for (var level = mips[layer]; level < array.ResidentMips[layer]; level++)
+                    result[layer][level - mip] = await _stream!.ReadTextureMipAsync(array.Sources[layer], level, cancellation.Token).ConfigureAwait(false);
             }
             return result;
         }, cancellation.Token);

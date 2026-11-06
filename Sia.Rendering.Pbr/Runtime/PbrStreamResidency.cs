@@ -148,7 +148,8 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         SelectionNodeLimit = settings.MaximumSelectionNodesPerView == 0
             ? checked((int)System.Math.Max(1024, selectionNodes)) : settings.MaximumSelectionNodesPerView;
         _instances = source.Instances.ToArray();
-        _pages = source.Pages;
+        var compactRaster = source.CanPrepareRasterGeometry(settings.DecodedBytes);
+        _pages = source.GetPreparationPages(compactRaster);
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
         _canonicalPages = Enumerable.Range(0, _pages.Length).ToArray();
         if (SharedInstances) {
@@ -164,8 +165,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             }
         }
         InitializeBudgetLayout();
-        _requests = new(source.ReadPreparedPageAsync, static r => r.DecodedBytes,
-            source.MaximumPagePreparationBytes, settings.MaximumRequests, settings.DecodedBytes);
+        _requests = new((id, token) => source.ReadPreparedPageAsync(id, token, compactRaster), static r => r.DecodedBytes,
+            compactRaster ? checked((int)source.MaximumWorkerPagePreparationBytes) : source.MaximumPagePreparationBytes,
+            settings.MaximumRequests, settings.DecodedBytes);
         _norms = new float[source.Instances.Length];
         for (var i = 0; i < _norms.Length; i++) _norms[i] = PbrGpuScene.TransformNorm(source.Instances.Span[i].Transform);
         _bounds = new Aabb[source.Instances.Length][];
