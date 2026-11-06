@@ -22,7 +22,7 @@ internal sealed partial class PbrGpuScene
             var sharedInstances = streaming.GpuTraversal || source.RequiresInstancing;
             var shape = RootShape(source, sharedInstances);
             var shapeComplete = Stopwatch.GetTimestamp();
-            var required = checked(shape.Vertices * StreamGeometryPage.VertexBytes + shape.Triangles * 12 + shape.Instances);
+            var required = checked(StreamStorageBytes(shape.Vertices, shape.Triangles) + shape.Instances);
             if (required > budget) throw new ArgumentException($"Stream roots/bootstrap/instances require {required} bytes, exceeding budget {budget}.");
             if (shape.Instances > _gpu.Limits.MaxStorageBufferBindingSize)
                 throw new NotSupportedException("Stream instance table exceeds storage binding limits.");
@@ -50,15 +50,20 @@ internal sealed partial class PbrGpuScene
             using var bootstrap = new PbrGpuScene(frame, source, layout, arenaBudget, materialBatches, Instances);
             var bootstrapComplete = Stopwatch.GetTimestamp();
             var rootsV = shape.Vertices; var rootsT = shape.Triangles;
-            var rootBytes = checked((rootsV * StreamGeometryPage.VertexBytes) + (rootsT * 12));
+            var rootBytes = StreamStorageBytes(rootsV, rootsT);
             if (rootBytes > arenaBudget)
                 throw new ArgumentException($"Stream roots/bootstrap require {rootBytes} bytes, exceeding remaining geometry budget {arenaBudget}.");
             var detailBytes = System.Math.Min(streaming.DetailBytes, arenaBudget - rootBytes);
             var maxBinding = _gpu.Limits.MaxStorageBufferBindingSize;
-            var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes), maxBinding / StreamGeometryPage.VertexBytes);
+            var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes),
+                (maxBinding & ~15ul) / StreamGeometryPage.VertexBytes);
             var triangleCapacity = System.Math.Min(rootsT + (detailBytes / 5 / 12), maxBinding / 12);
             if (sharedInstances && !streaming.GpuTraversal && source.Instances.Length > 0)
                 triangleCapacity = System.Math.Min(triangleCapacity, (uint.MaxValue - 1ul) / (ulong)source.Instances.Length);
+            // Padding consumes at most twelve additional bytes. Leave it in
+            // the existing arena cap, rather than raising the allocation budget.
+            if (StreamStorageBytes(vertexCapacity, triangleCapacity) > arenaBudget && vertexCapacity > rootsV)
+                vertexCapacity--;
             if (vertexCapacity < rootsV || triangleCapacity < rootsT)
                 throw new NotSupportedException("Stream roots exceed storage binding or CPU visibility addressing limits.");
             _arena = new(frame, checked((uint)System.Math.Max(1ul, vertexCapacity)), checked((uint)System.Math.Max(1ul, triangleCapacity)), arenaBudget);

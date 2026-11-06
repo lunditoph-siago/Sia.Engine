@@ -12,6 +12,8 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
     let view_z = (frame.view * vec4<f32>(position, 1.0)).z;
     var color = vec3<f32>(0.0);
     for (var i = 0u; i < frame.counts.y; i++) {
+        // Keep authored light/shadow indices stable while avoiding a zero contribution.
+        if (all(frame.directional[i].radiance.rgb == vec3<f32>(0.0))) { continue; }
         if (dot(normal, -frame.directional[i].direction.xyz) <= 0.0) { continue; }
         var visibility = 1.0;
         if (i == frame.counts.z && frame.shadow.x != 0u) {
@@ -40,9 +42,10 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
         if (!overflow) {
             index = clusters[start + 1u + i];
         }
+        let radiance = scene_data[index * 4u + 2u];
+        if (all(radiance.rgb == vec3<f32>(0.0))) { continue; }
         let p = scene_data[index * 4u];
         let d = scene_data[index * 4u + 1u];
-        let radiance = scene_data[index * 4u + 2u];
         let spot = scene_data[index * 4u + 3u];
         let delta = p.xyz - position;
         let distance = length(delta);

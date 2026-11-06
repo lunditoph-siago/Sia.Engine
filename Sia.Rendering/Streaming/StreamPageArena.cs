@@ -59,7 +59,11 @@ public sealed class StreamPageArena : IDisposable
         _vertices = new(vertexCapacity);
         _triangles = new(triangleCapacity);
         try {
-            Vertices = _gpu.Buffer((ulong)vertexCapacity * StreamGeometryPage.VertexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
+            // Three vec4 planes and a scalar metadata tail share this buffer.
+            // The last metadata word must remain addressable through vec4
+            // storage even when the logical vertex capacity is not four-aligned.
+            var vertexBytes = checked(((ulong)vertexCapacity * StreamGeometryPage.VertexBytes + 15) & ~15ul);
+            Vertices = _gpu.Buffer(vertexBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
             Topology = _gpu.Buffer((ulong)triangleCapacity * 12, WGPUBufferUsage.Storage | WGPUBufferUsage.Index | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
         }
         catch { _gpu.Dispose(); throw; }
