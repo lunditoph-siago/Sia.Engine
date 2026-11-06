@@ -43,6 +43,7 @@ internal sealed class PbrGpuSelection : IDisposable
     internal bool ShadowCacheEnabled => _shadowWords != 0;
     internal string ShadowCacheStatus { get; }
     private readonly uint _shadowWords;
+    private readonly uint _stableScanBlocks;
     public Entity CaptureBuffer => _capture < 0 ? default : _slots[_capture].Buffer;
 
     public ulong Bytes => _gpu.Bytes;
@@ -96,6 +97,7 @@ internal sealed class PbrGpuSelection : IDisposable
             Feedback = _gpu.Buffer(FeedbackBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
             ShadowCuts = _gpu.Buffer(ShadowCacheEnabled ? (ulong)_shadowWords * 8 * sizeof(uint) : 16ul,
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
+            _stableScanBlocks = StableScanBlocks(_shadowWords, hierarchy.NodeCapacity);
             for (var i = 0; i < _groups.Length; i++) {
                 _configuration[i] = _gpu.Buffer((ulong)Marshal.SizeOf<PbrGpuHierarchy.Configuration>(),
                     WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
@@ -260,6 +262,69 @@ internal sealed class PbrGpuSelection : IDisposable
             Wgpu.DispatchWorkgroups(pass, 1);
         }
         finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        if (view == 7) StabilizeWork(encoder, view);
+    }
+
+    private void StabilizeWork(WgpuHandle<WGPUCommandEncoder> encoder, int view)
+    {
+        // The existing separate indirect buffer avoids binding writable args
+        // as indirect input in either stabilization dispatch.
+        Wgpu.CopyBufferToBuffer(encoder, Arguments.GetWgpu<WGPUBuffer>(), 64,
+            DispatchArguments.GetWgpu<WGPUBuffer>(), 0, 12);
+        if (_stableScanBlocks != 0) {
+            ScanStableWork(encoder, view);
+            return;
+        }
+        var pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
+        try {
+            Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+            Wgpu.SetComputePipeline(pass, _hierarchy.PrepareStableWork.GetWgpu<WGPUComputePipeline>());
+            Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+        }
+        finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
+        try {
+            Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+            Wgpu.SetComputePipeline(pass, _hierarchy.PrefixStableWork.GetWgpu<WGPUComputePipeline>());
+            Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+        }
+        finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+    }
+
+    // One vec4 per padded source ordinal and one per 64-ordinal block fit in
+    // the two dead frontiers. The disabled-cache 16B buffer is not a domain.
+    internal static uint StableScanBlocks(uint shadowWords, uint nodeCapacity)
+    {
+        var domain = (ulong)shadowWords * 32;
+        var blocks = (domain + 63) / 64;
+        return domain != 0 && domain + blocks <= uint.MaxValue - 63ul && domain + blocks <= (ulong)nodeCapacity * 2
+            ? (uint)blocks : 0;
+    }
+
+    private void ScanStableWork(WgpuHandle<WGPUCommandEncoder> encoder, int view)
+    {
+        // Shadow comparisons have already copied scratch plane7 into their
+        // persistent planes0..6. Every later shadow selection clears plane7.
+        // Main selection owns the shared buffers through WriteStreamWork.
+        var domain = (ulong)_shadowWords * 32;
+        var clearGroups = checked((uint)((domain + _stableScanBlocks + 63) / 64));
+        Dispatch(_hierarchy.ClearStableScan, clearGroups);
+        Dispatch(_hierarchy.CountStableScan, 0);
+        Dispatch(_hierarchy.ScanStableBlocks, _stableScanBlocks);
+        Dispatch(_hierarchy.PrefixStableBlocks, 1);
+        Dispatch(_hierarchy.AssignStableScan, 0);
+
+        void Dispatch(Entity pipeline, uint groups)
+        {
+            var pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
+            try {
+                Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+                Wgpu.SetComputePipeline(pass, pipeline.GetWgpu<WGPUComputePipeline>());
+                if (groups == 0) Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+                else Wgpu.DispatchWorkgroups(pass, System.Math.Min(groups, 65535u), (groups + 65534u) / 65535u);
+            }
+            finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        }
     }
 
     internal void ClearShadow(WgpuHandle<WGPURenderPassEncoder> pass)

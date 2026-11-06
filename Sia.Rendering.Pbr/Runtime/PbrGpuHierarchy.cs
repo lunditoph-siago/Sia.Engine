@@ -39,6 +39,13 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public Entity TraverseEven { get; }
     public Entity TraverseOdd { get; }
     public Entity PrepareExpansion { get; }
+    public Entity PrepareStableWork { get; }
+    public Entity PrefixStableWork { get; }
+    public Entity ClearStableScan { get; }
+    public Entity CountStableScan { get; }
+    public Entity ScanStableBlocks { get; }
+    public Entity PrefixStableBlocks { get; }
+    public Entity AssignStableScan { get; }
     public Entity Expand { get; }
     public Entity CompareShadowCut { get; }
     public Entity ShadowClear { get; }
@@ -108,6 +115,13 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
             TraverseEven = Compute(shader, pipelineLayout, "traverse_even");
             TraverseOdd = Compute(shader, pipelineLayout, "traverse_odd");
             PrepareExpansion = Compute(shader, pipelineLayout, "prepare_expansion");
+            PrepareStableWork = Compute(shader, pipelineLayout, "prepare_stable_work");
+            PrefixStableWork = Compute(shader, pipelineLayout, "prefix_stable_work");
+            ClearStableScan = Compute(shader, pipelineLayout, "clear_stable_scan");
+            CountStableScan = Compute(shader, pipelineLayout, "count_stable_scan");
+            ScanStableBlocks = Compute(shader, pipelineLayout, "scan_stable_blocks");
+            PrefixStableBlocks = Compute(shader, pipelineLayout, "prefix_stable_blocks");
+            AssignStableScan = Compute(shader, pipelineLayout, "assign_stable_scan");
             CompareShadowCut = Compute(shader, pipelineLayout, "compare_shadow_cut");
             ShadowClear = CreateShadowClear(shader);
             var traversalComplete = Stopwatch.GetTimestamp();
