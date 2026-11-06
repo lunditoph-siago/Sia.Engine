@@ -11,7 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="Sia.Prelude" Version="2.1.6" />
-    <PackageReference Include="Sia.Math" Version="0.0.3" />
+    <PackageReference Include="Sia.Math" Version="0.0.4" />
     <ProjectReference Include="../Sia.Rendering/Sia.Rendering.csproj" />
   </ItemGroup>
 

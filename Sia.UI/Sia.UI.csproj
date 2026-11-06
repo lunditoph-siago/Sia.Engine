@@ -9,14 +9,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sia.Graphics" Version="0.0.20" />
-    <PackageReference Include="Sia.RenderGraph" Version="0.0.20" />
-    <PackageReference Include="Sia.WebGPU" Version="0.0.20" />
+    <PackageReference Include="Sia.Graphics" Version="0.0.25" />
+    <PackageReference Include="Sia.RenderGraph" Version="0.0.25" />
+    <PackageReference Include="Sia.WebGPU" Version="0.0.25" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Sia" Version="2.1.6" />
-    <PackageReference Include="Sia.Input" Version="0.0.4" />
+    <PackageReference Include="Sia.Input" Version="0.0.8" />
     <PackageReference Include="Sia.Prelude" Version="2.1.6" />
   </ItemGroup>
 
