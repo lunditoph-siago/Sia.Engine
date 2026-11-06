@@ -63,9 +63,10 @@ internal sealed partial class PbrMaterials
         Task<ReadOnlyMemory<byte>[][]> read)
     {
         public readonly ArrayTexture Array = array;
-        public readonly int Mip = mip;
+        public readonly int ReadMip = mip;
+        public int Mip = mip;
         public readonly int Layer = layer;
-        public readonly int[] Mips = mips;
+        public readonly int[] Mips = mips.ToArray();
         public readonly long Bytes = bytes;
         public readonly CancellationTokenSource Cancellation = cancellation;
         public Task<ReadOnlyMemory<byte>[][]> Read = read;
@@ -84,8 +85,9 @@ internal sealed partial class PbrMaterials
     private readonly PbrMaterialGpu[] _parameters;
     private readonly List<ArrayTexture[]> _batchMaps;
     private readonly List<Request> _pending = [];
-    private readonly PriorityQueue<(ArrayTexture Array, int Order), (double Score, int Order)> _budgetDrops = new();
-    private readonly PriorityQueue<ArrayTexture, long> _budgetHeadroom = new();
+    private readonly bool[] _dirtyMaterials, _dirtyGroups;
+    private bool _planDirty = true;
+    private bool _bindingsDirty;
     private long _clock;
     private long _installs, _evictions, _failures;
     private uint _uploaded, _copied;
@@ -170,8 +172,13 @@ internal sealed partial class PbrMaterials
                 ResidentMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
                 WantedMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
                 DesiredMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
+                PlanMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
+                PriorityBands = new int[sources.Length],
                 Idle = new int[sources.Length], Priorities = new float[sources.Length]
             };
+            result.TailCosts = new ulong[info.TailMip + 1];
+            for (var mip = 0; mip <= info.TailMip; mip++)
+                result.TailCosts[mip] = checked((ulong)TailBytes(result.Width, result.Height, result.Levels, mip, result.Layout) * (ulong)sources.Length);
             result.MinimumMip = PbrTextureStreamingPolicy.MinimumMip(result.Width, result.Height, result.TailMip,
                 _gpu.Limits.MaxTextureDimension2D, _streaming.DecodedBytes, result.Layout);
             Textures.Add(result.Texture);
@@ -205,7 +212,7 @@ internal sealed partial class PbrMaterials
             if (replacement) {
                 _retired.Add((array.Residency!, GpuQueueCompletion.AfterSubmittedWork(_gpu.Queue)));
                 array.Texture = next.Texture; array.View = next.View; array.Residency = next;
-                Textures[_arrays.IndexOf(array)] = next.Texture;
+                Textures[array.Index] = next.Texture;
             }
             else next.Dispose();
             var evicted = false;
@@ -222,6 +229,7 @@ internal sealed partial class PbrMaterials
             pending.Cancellation.Dispose();
             _pending.RemoveAt(requestIndex);
         }
+        FlushBindings();
         foreach (var array in _arrays) {
             Array.Fill(array.WantedMips, array.TailMip); Array.Clear(array.Priorities);
         }
@@ -245,19 +253,23 @@ internal sealed partial class PbrMaterials
     {
         if (_stream is null || _stop is not null) return;
         foreach (var array in _arrays) {
-            array.DesiredMip = array.TailMip;
             for (var layer = 0; layer < array.Sources.Length; layer++) {
-                array.Idle[layer] = array.WantedMips[layer] > array.ResidentMips[layer]
-                    ? System.Math.Min(_streaming.IdleFrames, array.Idle[layer] + 1) : 0;
-                array.DesiredMips[layer] = array.WantedMips[layer] <= array.ResidentMips[layer] || array.Idle[layer] >= _streaming.IdleFrames
-                    ? array.WantedMips[layer] : array.ResidentMips[layer];
-                array.DesiredMips[layer] = System.Math.Max(array.MinimumMip, array.DesiredMips[layer]);
-                array.DesiredMip = System.Math.Min(array.DesiredMip, array.DesiredMips[layer]);
+                // The idle grace protects resident detail, not uninstalled IO.
+                // PlanMips caches the resulting input without extending demand.
+                var wanted = PbrTextureStreamingPolicy.DemandMip(array.WantedMips[layer], array.ResidentMips[layer],
+                    array.MinimumMip, _streaming.IdleFrames, ref array.Idle[layer]);
+                var band = PbrTextureStreamingPolicy.PriorityBand(array.Priorities[layer], array.PriorityBands[layer]);
+                _planDirty |= wanted != array.PlanMips[layer] || band != array.PriorityBands[layer];
+                array.PlanMips[layer] = wanted; array.PriorityBands[layer] = band;
             }
         }
-        BudgetDemand();
+        if (_planDirty) BudgetDemand();
         foreach (var pending in _pending) {
-            var obsolete = PbrTextureStreamingPolicy.IsObsolete(pending.Array.ResidentMips, pending.Array.DesiredMips, pending.Mips);
+            // Once finer GPU writes begin, finish their atomic publication.
+            // Downgrades still cancel when a returning view needs their mips.
+            if (pending.Layer >= 0 && pending.Upload is not null) continue;
+            var obsolete = PbrTextureStreamingPolicy.IsObsolete(pending.Array.ResidentMips, pending.Array.DesiredMips, pending.Mips,
+                pending.Layer < 0 ? pending.Mip : -1);
             if (!pending.Cancellation.IsCancellationRequested
                 && PbrTextureStreamingPolicy.StableObsolete(obsolete, _streaming.StableDemandFrames, ref pending.ObsoleteFrames)) {
                 _cancelled++; _cancelledReservationBytes += pending.Bytes;
@@ -292,8 +304,8 @@ internal sealed partial class PbrMaterials
                 if (array.Residency is null || !demand.Changed || array.RetryFrame > _clock
                     || _pending.Any(p => ReferenceEquals(p.Array, array)))
                     continue;
-                var allocation = demand.Mip == array.ResidentMip ? 0 : checked(TailBytes(array.Width, array.Height, array.Levels, demand.Mip, array.Layout) * array.Sources.Length);
-                if (demand.Bytes > decodedAvailable || (ulong)allocation > available) continue;
+                var allocation = demand.Mip == array.ResidentMip ? 0 : array.TailCosts[demand.Mip];
+                if (demand.Bytes > decodedAvailable || allocation > available) continue;
                 if (best is null || CompareDemand(array, best) > 0) best = array;
             }
             if (best is null) break;
@@ -311,18 +323,26 @@ internal sealed partial class PbrMaterials
             foreach (var request in _pending) {
                 if (!request.Read.IsCompletedSuccessfully || request.Cancellation.IsCancellationRequested
                     || request.Upload is { Complete: true }
+                    || (request.Layer >= 0 && request.Upload is null
+                        && request.Array.DesiredMips[request.Layer] >= request.Array.ResidentMips[request.Layer])
                     || request.Array.Layout.BytesPerBlock > _uploadAllowance - _uploaded
-                    || (request.Upload is null && AllocationBytes(request) > available)) continue;
+                    || (request.Upload is null && AllocationBytes(request, UploadMip(request)) > available)) continue;
                 if (active is null || CompareLayer(request.Array, request.Layer, request.Bytes, active.Array, active.Layer, active.Bytes) > 0)
                     active = request;
             }
             if (active is null) break;
             if (active.Upload is null) {
+                active.Mip = UploadMip(active);
+                if (active.Layer >= 0)
+                    active.Mips[active.Layer] = PbrTextureStreamingPolicy.TrimUpgradeMip(active.Array.ResidentMips[active.Layer],
+                        active.Array.DesiredMips[active.Layer], active.Mips[active.Layer]);
+                var levels = PbrTextureStreamingPolicy.TrimUpload(active.Read.Result, active.ReadMip, active.Mip,
+                    active.Array.ResidentMips, active.Mips);
                 var width = System.Math.Max(1u, active.Array.Width >> active.Mip);
                 var height = System.Math.Max(1u, active.Array.Height >> active.Mip);
                 active.Upload = active.Mip == active.Array.ResidentMip
-                    ? TextureArrayUpload.Update(_frame, width, height, active.Array.Texture, active.Array.View, active.Array.Sources[0].GpuFormat, active.Read.Result)
-                    : new(_frame, width, height, active.Array.Sources[0].GpuFormat, active.Read.Result, available,
+                    ? TextureArrayUpload.Update(_frame, width, height, active.Array.Texture, active.Array.View, active.Array.Sources[0].GpuFormat, levels)
+                    : new(_frame, width, height, active.Array.Sources[0].GpuFormat, levels, available,
                         active.Array.Texture, active.Array.ResidentMip - active.Mip, active.Array.Levels - active.Mip);
             }
             var advanced = active.Upload.Advance(System.Math.Min(256 * 1024u, _uploadAllowance - _uploaded));
@@ -344,56 +364,29 @@ internal sealed partial class PbrMaterials
     {
         var coarser = (aLayer < 0).CompareTo(bLayer < 0);
         if (coarser != 0) return coarser;
+        var visibility = (aLayer >= 0 && a.Priorities[aLayer] > 0).CompareTo(bLayer >= 0 && b.Priorities[bLayer] > 0);
+        if (visibility != 0) return visibility;
         var aGap = aLayer < 0 ? 0 : a.ResidentMips[aLayer] - a.DesiredMips[aLayer];
         var bGap = bLayer < 0 ? 0 : b.ResidentMips[bLayer] - b.DesiredMips[bLayer];
         var gap = aGap.CompareTo(bGap);
         if (gap != 0) return gap;
-        var aScore = aLayer < 0 ? 0 : (double)a.Priorities[aLayer] / System.Math.Max(1, aBytes);
-        var bScore = bLayer < 0 ? 0 : (double)b.Priorities[bLayer] / System.Math.Max(1, bBytes);
+        var aScore = aLayer < 0 ? 0 : System.Math.ScaleB(1, a.PriorityBands[aLayer]) / System.Math.Max(1, aBytes);
+        var bScore = bLayer < 0 ? 0 : System.Math.ScaleB(1, b.PriorityBands[bLayer]) / System.Math.Max(1, bBytes);
         return aScore.CompareTo(bScore);
     }
 
     private void BudgetDemand()
     {
         var available = PbrTextureStreamingPolicy.AvailableBytes(_budget, _gpu.Bytes);
-        _budgetDrops.Clear(); _budgetHeadroom.Clear();
-        ulong target = 0;
-        ulong Size(ArrayTexture array, int mip) => checked((ulong)TailBytes(array.Width, array.Height, array.Levels, mip, array.Layout) * (ulong)array.Sources.Length);
-        void Add(ArrayTexture array, int order) {
-            if (array.DesiredMip >= array.TailMip) return;
-            var coarser = Size(array, array.DesiredMip + 1);
-            double pixels = 0;
-            for (var layer = 0; layer < array.Sources.Length; layer++)
-                if (array.DesiredMips[layer] == array.DesiredMip)
-                    pixels = System.Math.Max(pixels, array.Priorities[layer]);
-            var score = (Size(array, array.DesiredMip) - coarser) / (1 + pixels * pixels);
-            _budgetDrops.Enqueue((array, order), (-score, order));
-            _budgetHeadroom.Enqueue(array, -(long)coarser);
+        var arrays = _arrays.Where(array => array.Residency is not null).ToArray();
+        var inputs = arrays.Select(array => new PbrTextureStreamingPolicy.BudgetInput(
+            array.TailCosts, array.PlanMips, array.DesiredMips, array.PriorityBands)).ToArray();
+        var targets = PbrTextureStreamingPolicy.BudgetTargets(inputs, available);
+        for (var index = 0; index < arrays.Length; index++) {
+            targets[index].CopyTo(arrays[index].DesiredMips, 0);
+            arrays[index].DesiredMip = targets[index].Min();
         }
-        for (var order = 0; order < _arrays.Count; order++) {
-            var array = _arrays[order]; if (array.Residency is null) continue;
-            target = checked(target + Size(array, array.DesiredMip)); Add(array, order);
-        }
-        while (true) {
-            ulong replacement = 0;
-            while (_budgetHeadroom.TryPeek(out var array, out var priority)) {
-                if (array.DesiredMip < array.TailMip && (ulong)(-priority) == Size(array, array.DesiredMip + 1)) {
-                    replacement = (ulong)(-priority); break;
-                }
-                _budgetHeadroom.Dequeue();
-            }
-            // Keep space for the old coarser tail during one fine replacement.
-            // All actual pending/retiring allocations are still admitted separately below.
-            if (target <= available && replacement <= available - target) return;
-            if (!_budgetDrops.TryDequeue(out var drop, out _)) return;
-            var victim = drop.Array;
-            var bytes = Size(victim, victim.DesiredMip);
-            for (var layer = 0; layer < victim.Sources.Length; layer++)
-                if (victim.DesiredMips[layer] == victim.DesiredMip) victim.DesiredMips[layer]++;
-            victim.DesiredMip++;
-            target -= bytes - Size(victim, victim.DesiredMip);
-            Add(victim, drop.Order);
-        }
+        _planDirty = false;
     }
 
     private void StartRequest(ArrayTexture array, long decodedAvailable, ulong allocationAvailable)
@@ -413,12 +406,13 @@ internal sealed partial class PbrMaterials
             bytes = range.Bytes;
         }
         else for (var layer = 0; layer < mips.Length; layer++) mips[layer] = System.Math.Max(mip, mips[layer]);
+        var resident = array.ResidentMips.ToArray();
         var cancellation = new CancellationTokenSource();
         var read = Task.Run(async () => {
             var result = new ReadOnlyMemory<byte>[array.Sources.Length][];
             for (var layer = 0; layer < result.Length; layer++) {
                 result[layer] = new ReadOnlyMemory<byte>[array.Levels - mip];
-                for (var level = mips[layer]; level < array.ResidentMips[layer]; level++)
+                for (var level = mips[layer]; level < resident[layer]; level++)
                     result[layer][level - mip] = await _stream!.ReadTextureMipAsync(array.Sources[layer], level, cancellation.Token).ConfigureAwait(false);
             }
             return result;
@@ -427,8 +421,13 @@ internal sealed partial class PbrMaterials
         _peakDecoded = System.Math.Max(_peakDecoded, _pending.Sum(request => request.Bytes));
     }
 
-    private static ulong AllocationBytes(Request request) => request.Mip == request.Array.ResidentMip ? 0
-        : checked((ulong)TailBytes(request.Array.Width, request.Array.Height, request.Array.Levels, request.Mip, request.Array.Layout) * (ulong)request.Array.Sources.Length);
+    private static int UploadMip(Request request) => request.Upload is not null || request.Layer < 0 ? request.Mip
+        : System.Math.Min(request.Array.ResidentMip, PbrTextureStreamingPolicy.TrimUpgradeMip(
+            request.Array.ResidentMips[request.Layer], request.Array.DesiredMips[request.Layer], request.Mips[request.Layer]));
+
+    private static ulong AllocationBytes(Request request) => AllocationBytes(request, request.Mip);
+
+    private static ulong AllocationBytes(Request request, int mip) => mip == request.Array.ResidentMip ? 0 : request.Array.TailCosts[mip];
 
     private static (int Mip, long Bytes, bool Changed, int Layer) DescribeDemand(ArrayTexture array)
     {
@@ -439,23 +438,35 @@ internal sealed partial class PbrMaterials
             var gap = array.ResidentMips[layer] - array.DesiredMips[layer];
             if (gap <= 0) continue;
             var next = array.ResidentMips[layer] - 1;
-            var cost = (long)array.Layout.MipByteLength(System.Math.Max(1u, array.Width >> next), System.Math.Max(1u, array.Height >> next));
-            var score = (double)array.Priorities[layer] / cost;
-            if (selected < 0 || gap > bestGap || (gap == bestGap && score > bestScore)) {
+            var cost = (array.TailCosts[next] - array.TailCosts[next + 1]) / (ulong)array.Sources.Length;
+            var score = System.Math.ScaleB(1, array.PriorityBands[layer]) / cost;
+            var visible = array.Priorities[layer] > 0;
+            var selectedVisible = selected >= 0 && array.Priorities[selected] > 0;
+            if (selected < 0 || (visible && !selectedVisible)
+                || (visible == selectedVisible && (gap > bestGap || (gap == bestGap && score > bestScore)))) {
                 selected = layer; bestGap = gap; bestScore = score;
             }
         }
         if (selected < 0) return (array.ResidentMip, 0, false, -1);
         var nextMip = array.ResidentMips[selected] - 1;
-        var bytes = checked((long)array.Layout.MipByteLength(System.Math.Max(1u, array.Width >> nextMip), System.Math.Max(1u, array.Height >> nextMip)));
+        var bytes = checked((long)((array.TailCosts[nextMip] - array.TailCosts[nextMip + 1]) / (ulong)array.Sources.Length));
         return (System.Math.Min(array.ResidentMip, nextMip), bytes, true, selected);
     }
 
     private void UpdateMipClamps(ArrayTexture changed)
     {
-        for (var material = 0; material < _materialUses.Length; material++) {
+        foreach (var material in changed.MaterialRows) {
+            _dirtyMaterials[material] = true;
+            _bindingsDirty = true;
+        }
+    }
+
+    private void FlushBindings()
+    {
+        if (!_bindingsDirty) return;
+        for (var material = 0; material < _dirtyMaterials.Length; material++) {
+            if (!_dirtyMaterials[material]) continue;
             var uses = _materialUses[material];
-            if (!uses.Any(use => ReferenceEquals(use.Texture, changed))) continue;
             uint packed = 0;
             for (var map = 0; map < uses.Length; map++) {
                 var (array, layer) = uses[map];
@@ -465,18 +476,22 @@ internal sealed partial class PbrMaterials
             }
             packed |= _parameters[material].Indices.w & (1u << 25);
             var old = _parameters[material];
+            if (packed == old.Indices.w) { _dirtyMaterials[material] = false; continue; }
             _parameters[material] = old with { Indices = new(old.Indices.x, old.Indices.y, old.Indices.z, packed) };
-            Wgpu.WriteBuffer<PbrMaterialGpu>(_gpu.Queue, Table.GetWgpu<WGPUBuffer>(),
-                (ulong)material * (ulong)System.Runtime.InteropServices.Marshal.SizeOf<PbrMaterialGpu>(), _parameters.AsSpan(material, 1));
         }
-    }
-
-    private void RebuildGroups(ArrayTexture changed)
-    {
+        for (var first = 0; first < _dirtyMaterials.Length;) {
+            if (!_dirtyMaterials[first]) { first++; continue; }
+            var end = first + 1;
+            while (end < _dirtyMaterials.Length && _dirtyMaterials[end]) end++;
+            Wgpu.WriteBuffer<PbrMaterialGpu>(_gpu.Queue, Table.GetWgpu<WGPUBuffer>(),
+                (ulong)first * (ulong)System.Runtime.InteropServices.Marshal.SizeOf<PbrMaterialGpu>(), _parameters.AsSpan(first, end - first));
+            Array.Clear(_dirtyMaterials, first, end - first);
+            first = end;
+        }
         Span<WGPUBindGroupEntry> entries = stackalloc WGPUBindGroupEntry[12];
         for (var batch = 0; batch < Groups.Length; batch++) {
+            if (!_dirtyGroups[batch]) continue;
             var maps = _batchMaps[batch];
-            if (!maps.Contains(changed)) continue;
             entries.Clear();
             entries[0] = GpuBinding.Buffer(0, Table); entries[1] = GpuBinding.Buffer(1, Uniforms[batch]);
             for (var map = 0; map < 5; map++) {
@@ -486,6 +501,16 @@ internal sealed partial class PbrMaterials
             var next = GpuBinding.Group(_gpu, _layout, entries);
             _gpu.Release(Groups[batch]);
             Groups[batch] = next;
+            _dirtyGroups[batch] = false;
+        }
+        _bindingsDirty = false;
+    }
+
+    private void RebuildGroups(ArrayTexture changed)
+    {
+        foreach (var batch in changed.Batches) {
+            _dirtyGroups[batch] = true;
+            _bindingsDirty = true;
         }
     }
 

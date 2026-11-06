@@ -3,7 +3,7 @@
 struct StreamSelection {
     vp: mat4x4<f32>,
     table: vec4<u32>, // root entries base, root count, page count, refinement limit
-    screen: vec4<f32>, // width, height, error, unused
+    screen: vec4<f32>, // width, height, error, shadow cut cache: 0 off, 1 compare, 2 force
     output: vec4<u32>, // single capacity, double capacity, shadow layer, selected-node base
     eye_near: vec4<f32>,
     forward_pixels: vec4<f32>

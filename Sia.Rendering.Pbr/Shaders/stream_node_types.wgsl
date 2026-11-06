@@ -3,5 +3,5 @@
 struct Node {
     lo: vec4<f32>, hi: vec4<f32>,
     links: vec4<u32>, // first child, child count, first part, part count
-    owner: vec4<u32>  // parent, unused, unused, unused
+    owner: vec4<u32>  // parent, source-tree base, unused, unused
 }

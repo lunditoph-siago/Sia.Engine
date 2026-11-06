@@ -14,18 +14,27 @@
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> feedback: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read> instances: array<Instance>;
+@group(0) @binding(8) var<storage, read_write> shadow_cuts: array<atomic<u32>>;
 
 @compute @workgroup_size(64)
 fn reset_feedback(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x < selection.table.z + arrayLength(&nodes)) { atomicStore(&feedback[id.x], 0u); }
 }
 
-@compute @workgroup_size(1)
-fn reset_draws() {
-    for (var i = 0u; i < 20u; i++) { atomicStore(&args[i], 0u); }
-    atomicStore(&args[0], STREAM_WORK_BLOCK_TRIANGLES * 3u);
-    atomicStore(&args[4], STREAM_WORK_BLOCK_TRIANGLES * 3u);
-    atomicStore(&args[6], selection.output.x * STREAM_WORK_BLOCK_TRIANGLES * 3u);
+@compute @workgroup_size(64)
+fn reset_draws(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let index = (group.y * 65535u + group.x) * 64u + lane;
+    if (index == 0u) {
+        for (var i = 0u; i < 20u; i++) { atomicStore(&args[i], 0u); }
+        atomicStore(&args[0], STREAM_WORK_BLOCK_TRIANGLES * 3u);
+        atomicStore(&args[4], STREAM_WORK_BLOCK_TRIANGLES * 3u);
+        atomicStore(&args[6], selection.output.x * STREAM_WORK_BLOCK_TRIANGLES * 3u);
+        if (selection.screen.w >= 2.0) { atomicStore(&args[19], 1u); }
+    }
+    if (selection.screen.w > 0.0) {
+        let words = arrayLength(&shadow_cuts) / 8u;
+        if (index < words) { atomicStore(&shadow_cuts[7u * words + index], 0u); }
+    }
 }
 
 fn touch(n: Node) {
@@ -68,7 +77,7 @@ fn children_ready(n: Node, instance: Instance, priority: f32) -> bool {
     return ready;
 }
 
-fn emit(node: u32, n: Node, instance: u32, side: u32) {
+fn emit(node: u32, n: Node, instance: u32, side: u32, shadow_base: u32) {
     var count = 0u;
     var triangles = 0u;
     for (var p = 0u; p < n.links.w; p++) {
@@ -86,12 +95,43 @@ fn emit(node: u32, n: Node, instance: u32, side: u32) {
     let record = selection.output.w + selected;
     work[record] = vec4<u32>(node, instance, base + first, 0u);
     atomicAdd(&args[15], triangles);
+    if (selection.screen.w > 0.0) {
+        // Each actual instance owns a disjoint source-tree domain. No hash or
+        // traversal ordering participates in depth-cache identity.
+        let ordinal = shadow_base + (node - n.owner.y);
+        let words = arrayLength(&shadow_cuts) / 8u;
+        if (ordinal / 32u >= words) { atomicAdd(&args[10], 1u); return; }
+        atomicOr(&shadow_cuts[7u * words + ordinal / 32u], 1u << (ordinal % 32u));
+    }
+}
+
+@compute @workgroup_size(64)
+fn compare_shadow_cut(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let index = (group.y * 65535u + group.x) * 64u + lane;
+    let words = arrayLength(&shadow_cuts) / 8u;
+    if (index >= words) { return; }
+    let current = atomicLoad(&shadow_cuts[7u * words + index]);
+    let previous_at = selection.output.z * words + index;
+    if (current != atomicLoad(&shadow_cuts[previous_at])) { atomicOr(&args[19], 1u); }
+    atomicStore(&shadow_cuts[previous_at], current);
 }
 
 @compute @workgroup_size(1)
 fn prepare_expansion() {
     let capacity = frontier_capacity();
-    let count = min(atomicLoad(&args[12]), capacity);
+    var count = min(atomicLoad(&args[12]), capacity);
+    if (selection.screen.w > 0.0) {
+        let changed = atomicLoad(&args[19]) != 0u || atomicLoad(&args[10]) != 0u;
+        atomicStore(&args[20], 3u);
+        atomicStore(&args[21], select(0u, 1u, changed));
+        atomicStore(&args[22], 0u);
+        atomicStore(&args[23], 0u);
+        if (!changed) {
+            atomicStore(&args[1], 0u);
+            atomicStore(&args[5], 0u);
+            count = 0u;
+        }
+    }
     atomicStore(&args[16], min(count, 65535u));
     atomicStore(&args[17], (count + 65534u) / 65535u);
     atomicStore(&args[18], 1u);
@@ -166,7 +206,7 @@ fn visit(index: u32, odd: bool) {
                     if (first <= capacity && n.links.y <= capacity - first) {
                         let next = frontier_base(!odd) + first;
                         for (var c = 0u; c < n.links.y; c++) {
-                            work[next + c] = vec4<u32>(n.links.x + c, entry.y, side, 0u);
+                            work[next + c] = vec4<u32>(n.links.x + c, entry.y, side, entry.w);
                         }
                         return;
                     }
@@ -176,7 +216,7 @@ fn visit(index: u32, odd: bool) {
             }
             else { atomicAdd(&args[11], 1u); }
         }
-        emit(current, n, entry.y, side);
+        emit(current, n, entry.y, side, entry.w);
     }
 }
 
@@ -188,3 +228,12 @@ fn traverse_even(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocat
 fn traverse_odd(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     visit((group.y * 65535u + group.x) * 64u + lane, true);
 }
+
+@vertex
+fn clear_shadow_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let corner = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
+    return vec4<f32>(corner * 2.0 - 1.0, 1.0, 1.0);
+}
+
+@fragment
+fn clear_shadow_depth() -> @builtin(frag_depth) f32 { return 1.0; }

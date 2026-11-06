@@ -23,9 +23,11 @@ internal sealed partial class PbrMaterials : IDisposable
         public PbrTextureData[] Sources = [];
         public TextureBlockLayout Layout;
         public uint Width, Height;
-        public int Levels, TailMip, ResidentMip, DesiredMip, MinimumMip;
+        public int Levels, TailMip, ResidentMip, DesiredMip, MinimumMip, Index;
         public long RetryFrame;
-        public int[] ResidentMips = [], WantedMips = [], DesiredMips = [], Idle = [];
+        public int[] ResidentMips = [], WantedMips = [], DesiredMips = [], PlanMips = [], PriorityBands = [], Idle = [];
+        public int[] MaterialRows = [], Batches = [];
+        public ulong[] TailCosts = [];
         public float[] Priorities = [];
         public TextureArrayUpload? Residency;
     }
@@ -89,6 +91,7 @@ internal sealed partial class PbrMaterials : IDisposable
                 foreach (var textures in shape.Chunk(layerLimit)) {
                     var array = stream is not null && stream.TextureSources.ContainsKey(textures[0])
                         ? UploadStreamTail(textures) : UploadArray(textures);
+                    array.Index = _arrays.Count;
                     _arrays.Add(array);
                     for (var i = 0; i < textures.Length; i++)
                         references.Add(textures[i], (array, (uint)i));
@@ -130,6 +133,13 @@ internal sealed partial class PbrMaterials : IDisposable
             Table = _gpu.Upload<PbrMaterialGpu>(parameters);
             _parameters = parameters;
             _batchMaps = batchMaps;
+            _dirtyMaterials = new bool[parameters.Length];
+            _dirtyGroups = new bool[batchMaps.Count];
+            foreach (var array in _arrays) {
+                array.MaterialRows = [.. Enumerable.Range(0, _materialUses.Length)
+                    .Where(row => _materialUses[row].Any(use => ReferenceEquals(use.Texture, array)))];
+                array.Batches = [.. Enumerable.Range(0, batchMaps.Count).Where(batch => batchMaps[batch].Contains(array))];
+            }
             Groups = new Entity[batchMaps.Count];
             for (var batch = 0; batch < Groups.Length; batch++) {
                 var uniform = _gpu.Upload<uint4>([new((uint)batch, 0, 0, 0)], WGPUBufferUsage.Uniform);
