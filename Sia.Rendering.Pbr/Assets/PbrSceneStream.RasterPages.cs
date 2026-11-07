@@ -14,6 +14,8 @@ public sealed partial class PbrSceneStream
     }
     private sealed record RasterPageUse(MeshRasterPagesData Product, int Page, int PreparationBytes);
     private readonly Dictionary<string, RasterPageUse> _rasterPageUses = new(StringComparer.Ordinal);
+    internal bool IsRasterPage(string id) => _rasterPageUses.ContainsKey(id)
+        || (ResidentRoots.TryGetValue(id, out var root) && root.Data is null);
     private readonly Func<RasterPageReference, CancellationToken, Task<MeshRasterPageRecord>>? _prepareRaster;
     private readonly Func<RasterPageReference, MeshRasterPageRecord, MeshRasterPageData>? _acquireRaster;
 

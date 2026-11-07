@@ -4,16 +4,17 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed partial class PbrStreamResidency
 {
-    private sealed class Relocation(Key key, Key target, Resident source, StreamPageAllocation destination)
+    private sealed class Relocation(Key key, Key target, PageShape targetShape, Resident source, StreamPageAllocation destination)
     {
         public readonly Key Key = key, Target = target;
         public readonly Resident Source = source;
+        public readonly PageShape TargetShape = targetShape;
         public readonly StreamPageAllocation Destination = destination;
         public StreamPageArena.Upload? Upload;
     }
 
     private Relocation? _relocation;
-    private (Key Key, StreamPageAllocation Allocation)? _relocationReservation;
+    private (Key Key, StreamPageAllocation Allocation, PageShape Shape)? _relocationReservation;
 
     private void BeginRelocationFrame()
     {
@@ -21,16 +22,15 @@ internal sealed partial class PbrStreamResidency
         if (!RelocationRequired(move)) { AbortRelocation(); return; }
         // The preceding prepared draws have been submitted or discarded before
         // this Begin. Their old addresses remain untouched throughout End.
-        _resident[move.Key] = new(move.Destination, false, move.Source.LastUsed);
+        _resident[move.Key] = new(move.Destination, move.Source.Shape, false, move.Source.LastUsed);
         Changed(move.Key);
         _arena.Free(move.Source.Allocation);
         _relocation = null;
-        var target = _pages[move.Target.Page];
-        if (!_arena.TryReserve((uint)target.Vertices, (uint)target.Triangles, out var allocation))
+        if (!_arena.TryReserve(move.TargetShape.Vertices, move.TargetShape.Triangles, out var allocation))
             throw new InvalidOperationException("Geometry relocation lost its reserved free-space proof.");
         // Keep the recovered hole for its waiting page while the bounded source
         // read restarts. Other ready pages cannot consume this space first.
-        _relocationReservation = (move.Target, allocation);
+        _relocationReservation = (move.Target, allocation, move.TargetShape);
     }
 
     private bool RelocationRequired(Relocation move)
@@ -49,11 +49,12 @@ internal sealed partial class PbrStreamResidency
     private void TryBeginRelocation(Key target, StreamGeometryPage page)
     {
         if (_relocationReservation is not null) return;
+        var targetShape = AcquiredPageShape(target, page);
         foreach (var pair in _resident) {
             if (pair.Value.Root || !IsAdmitted(pair.Key) || !_wanted.ContainsKey(pair.Key)) continue;
             if (!_arena.TryReserveRelocation(pair.Value.Allocation, (uint)page.VertexCount, (uint)page.TriangleCount,
                 out var destination)) continue;
-            _relocation = new(pair.Key, target, pair.Value, destination);
+            _relocation = new(pair.Key, target, targetShape, pair.Value, destination);
             // Exclusive recovery cancels ordinary ready pages as well as reads.
             // Drop their borrowed data when their scheduler reservations retire.
             _prepared.Clear();
@@ -85,6 +86,8 @@ internal sealed partial class PbrStreamResidency
                 if (!_requests.TryGetReady(page.Id, out var record)) return;
                 _requests.BeginInstall(page.Id);
                 var geometry = _source.UsePreparedPage(page.Id, record!);
+                if (AcquiredPageShape(move.Key, geometry) != move.Source.Shape)
+                    throw new InvalidDataException("Relocation source changed its exact acquired shape.");
                 var transform = float4x4.identity;
                 var material = 1;
                 if (!SharedInstances) {
