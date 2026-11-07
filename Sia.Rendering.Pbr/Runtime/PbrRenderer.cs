@@ -271,10 +271,12 @@ public sealed partial class PbrRenderer :
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 raster is null && stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
                 Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables,cpuStreamInstances,
-                Settings.AutoExposure is not null);
+                Settings.AutoExposure is not null, deferMaterialPipelines: true);
             var pipelinesComplete = Stopwatch.GetTimestamp();
             Materials = new(frame, (stream?.Materials ?? raster!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
             var materialsComplete = Stopwatch.GetTimestamp();
+            Pipelines.PrewarmMaterialPipelines(Materials.Groups.Length, (stream?.Materials ?? raster!.Materials).Span);
+            var materialPipelinesComplete = Stopwatch.GetTimestamp();
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches,Pipelines.RasterGeometryLayout,rasterPositionTables)
                 : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
             var geometryComplete = Stopwatch.GetTimestamp();
@@ -329,9 +331,9 @@ public sealed partial class PbrRenderer :
             static double Milliseconds(long start, long end) => (end - start) * 1000d / Stopwatch.Frequency;
             InitializationStatistics = new(
                 Milliseconds(initializationStart, validationComplete),
-                Milliseconds(validationComplete, pipelinesComplete),
+                Milliseconds(validationComplete, pipelinesComplete) + Milliseconds(materialsComplete, materialPipelinesComplete),
                 Milliseconds(pipelinesComplete, materialsComplete),
-                Milliseconds(materialsComplete, geometryComplete),
+                Milliseconds(materialPipelinesComplete, geometryComplete),
                 Milliseconds(geometryComplete, environmentComplete),
                 Milliseconds(environmentComplete, initializationComplete),
                 Milliseconds(initializationStart, initializationComplete));

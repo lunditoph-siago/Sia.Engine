@@ -18,6 +18,11 @@ internal sealed unsafe class PbrPipelines : IDisposable
     private readonly bool _reflectionCaptures;
     private readonly bool _liveReflections;
     private readonly bool _cpuStreamInstances;
+    private readonly PbrOpaquePath _opaquePath;
+    private readonly Entity _tileShader, _tilePipelineLayout;
+    private readonly Entity _shadeShader, _shadingPipelineLayout;
+    private readonly Entity _transparentShader, _glassPipelineLayout;
+    private bool _materialPipelinesReady, _disposed;
 
     public bool SeparateDirectResolvePass { get; }
 
@@ -62,22 +67,22 @@ internal sealed unsafe class PbrPipelines : IDisposable
     public Entity ShadowDouble { get; }
 
     public Entity Cluster { get; }
-    public Entity TileReset { get; }
-    public Entity TileClassify { get; }
-    public Entity Background { get; }
-    public Entity Resolve { get; }
-    public Entity ResolveDirect { get; }
+    public Entity TileReset { get; private set; }
+    public Entity TileClassify { get; private set; }
+    public Entity Background { get; private set; }
+    public Entity Resolve { get; private set; }
+    public Entity ResolveDirect { get; private set; }
 
     public Entity Coverage { get; }
     public Entity CoverageDouble { get; }
-    public Entity Transparent { get; }
-    public Entity TransparentDouble { get; }
-    public Entity Transmission { get; }
-    public Entity TransmissionDouble { get; }
+    public Entity Transparent { get; private set; }
+    public Entity TransparentDouble { get; private set; }
+    public Entity Transmission { get; private set; }
+    public Entity TransmissionDouble { get; private set; }
 
     public Entity Output { get; }
 
-    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool reflectionHistory = false,bool rasterPositionTables=false,bool cpuStreamInstances=false,bool autoExposure=false)
+    public PbrPipelines(in GpuFrame frame, WGPUTextureFormat format, bool surfaceData, PbrOpaquePath opaquePath, bool sceneGi, bool gpuStream = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool reflectionHistory = false,bool rasterPositionTables=false,bool cpuStreamInstances=false,bool autoExposure=false,bool deferMaterialPipelines=false)
     {
         _sourceWorld = frame.ResourceWorld;
         _gpu = new(frame, 0);
@@ -88,6 +93,7 @@ internal sealed unsafe class PbrPipelines : IDisposable
         _reflectionCaptures = reflectionCaptures;
         _liveReflections = liveReflections;
         _cpuStreamInstances = cpuStreamInstances;
+        _opaquePath = opaquePath;
         try {
             var limits = _gpu.Limits;
             var vertexPlanes=residentInstances?PbrRasterVertex.Planes+1:StreamGeometryPage.VertexPlanes;
@@ -263,18 +269,13 @@ internal sealed unsafe class PbrPipelines : IDisposable
             }
             var clusterShader = Module("clusters.wgsl", writableClusters: true);
             Cluster = Compute(clusterShader, GpuBinding.PipelineLayout(_gpu, ClusterLayout), "cull");
-            var tiles = Module("tiles.wgsl", streamInstances: gpuStream, shadingWork: gpuStream,
+            _tileShader = Module("tiles.wgsl", streamInstances: gpuStream, shadingWork: gpuStream,
                 compatibilityUniformPadding: !core);
-            var tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, TileLayout);
-            TileReset = Compute(tiles, tilePipelineLayout, "reset_tiles");
-            TileClassify = Compute(tiles, tilePipelineLayout, "classify");
-            var shade = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
+            _tilePipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, TileLayout);
+            _shadeShader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
                 PbrShaderSource.Compile(_sourceWorld, "resolve.wgsl", surfaceData: surfaceData, sceneGi: sceneGi,
                     streamInstances: gpuStream || cpuStreamInstances, shadingWork: gpuStream, staticLightmap: staticLightmap, residentInstances: residentInstances, reflectionCaptures: reflectionCaptures, liveReflections: liveReflections,rasterPositionTables:rasterPositionTables,cpuStreamInstances:cpuStreamInstances), "pbr-resolve"));
-            var shading = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
-            Background = Compute(shade, shading, "background");
-            Resolve = Compute(shade, shading, "resolve");
-            ResolveDirect = Compute(shade, shading, "resolve_direct");
+            _shadingPipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, ResolveLayout);
             if (liveReflections) {
                 // Read Depth32Float as an unfiltered float view: Compatibility forbids textureLoad on a depth binding.
                 ReflectionTraceLayout = GpuBinding.Layout(_gpu, [
@@ -340,24 +341,66 @@ internal sealed unsafe class PbrPipelines : IDisposable
             }
             if (opaquePath == PbrOpaquePath.ForwardPlus)
                 ForwardBackground = Compute(Module("forward_background.wgsl"), GpuBinding.PipelineLayout(_gpu, BackgroundLayout), "forward_background");
-            var transparent = Module("transparent.wgsl", streamInstances: gpuStream);
-            var glassLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, GlassLayout);
+            _transparentShader = Module("transparent.wgsl", streamInstances: gpuStream);
+            _glassPipelineLayout = GpuBinding.PipelineLayout(_gpu, FrameLayout, GeometryLayout, MaterialLayout, GlassLayout);
             if (opaquePath == PbrOpaquePath.ForwardPlus) {
                 var coverageLayout = GpuBinding.PipelineLayout(_gpu, RasterFrameLayout, GeometryLayout, MaterialLayout);
-                Coverage = Render(transparent, coverageLayout, "transparent_vertex", "coverage_fragment", null, true, WGPUCullMode.Back);
-                CoverageDouble = Render(transparent, coverageLayout, "transparent_vertex", "coverage_fragment", null, true, WGPUCullMode.None);
+                Coverage = Render(_transparentShader, coverageLayout, "transparent_vertex", "coverage_fragment", null, true, WGPUCullMode.Back);
+                CoverageDouble = Render(_transparentShader, coverageLayout, "transparent_vertex", "coverage_fragment", null, true, WGPUCullMode.None);
             }
-            Transparent = Render(transparent, glassLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
-            TransparentDouble = Render(transparent, glassLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
-            Transmission = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
-            TransmissionDouble = Render(transparent, glassLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
+            // Direct fixtures keep the complete eagerly available pipeline set. The renderer
+            // completes its immutable material plan after batching and before any frame exists.
+            if (!deferMaterialPipelines) CompleteMaterialPipelines((true, true, 15u));
             var output = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(_sourceWorld, "output.wgsl"), "pbr-output"));
             Output = Render(output, GpuBinding.PipelineLayout(_gpu, OutputLayout), "output_vertex", "output_fragment", format, false, WGPUCullMode.None);
         }
         catch {
-            _gpu.Dispose();
+            Dispose();
             throw;
         }
+    }
+
+    // Bits are the existing (transmission, sidedness) render variants. Include every
+    // authored alpha material, including hidden/uninstanced rows; pose, visibility,
+    // debug uniforms and streamed texture replacement cannot change this key.
+    internal static (bool Tiled, bool Direct, uint Transparent) MaterialRequirements(
+        PbrOpaquePath opaquePath, int materialGroups, ReadOnlySpan<PbrMaterialAsset> materials)
+    {
+        if (materialGroups < 1) throw new ArgumentOutOfRangeException(nameof(materialGroups));
+        uint transparent = 0;
+        foreach (var material in materials)
+            if (material.AlphaBlend)
+                transparent |= 1u << ((material.Transmission > 0 ? 2 : 0) + (material.DoubleSided ? 1 : 0));
+        var visibility = opaquePath != PbrOpaquePath.ForwardPlus;
+        return (visibility && materialGroups > 1, visibility && materialGroups == 1, transparent);
+    }
+
+    internal void PrewarmMaterialPipelines(int materialGroups, ReadOnlySpan<PbrMaterialAsset> materials)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        CompleteMaterialPipelines(MaterialRequirements(_opaquePath, materialGroups, materials));
+    }
+
+    private void CompleteMaterialPipelines((bool Tiled, bool Direct, uint Transparent) required)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_materialPipelinesReady) throw new InvalidOperationException("Material pipelines are finalized once during construction.");
+        if (required.Tiled) {
+            TileReset = Compute(_tileShader, _tilePipelineLayout, "reset_tiles");
+            TileClassify = Compute(_tileShader, _tilePipelineLayout, "classify");
+            Resolve = Compute(_shadeShader, _shadingPipelineLayout, "resolve");
+        }
+        if (required.Tiled || required.Direct) Background = Compute(_shadeShader, _shadingPipelineLayout, "background");
+        if (required.Direct) ResolveDirect = Compute(_shadeShader, _shadingPipelineLayout, "resolve_direct");
+        if ((required.Transparent & 1u) != 0)
+            Transparent = Render(_transparentShader, _glassPipelineLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
+        if ((required.Transparent & 2u) != 0)
+            TransparentDouble = Render(_transparentShader, _glassPipelineLayout, "transparent_vertex", "transparent_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
+        if ((required.Transparent & 4u) != 0)
+            Transmission = Render(_transparentShader, _glassPipelineLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.Back, true);
+        if ((required.Transparent & 8u) != 0)
+            TransmissionDouble = Render(_transparentShader, _glassPipelineLayout, "transparent_vertex", "transmission_fragment", WGPUTextureFormat.RGBA16Float, false, WGPUCullMode.None, true);
+        _materialPipelinesReady = true;
     }
 
     private Entity Module(string file, bool writableClusters = false, bool streamInstances = false, bool shadingWork = false,
@@ -449,5 +492,11 @@ internal sealed unsafe class PbrPipelines : IDisposable
         }
     }
 
-    public void Dispose() => _gpu.Dispose();
+    public void Dispose()
+    {
+        _disposed = true;
+        // The existing owner retains its ledger when destruction partially fails,
+        // so a later Dispose must still be allowed to retry outstanding releases.
+        _gpu.Dispose();
+    }
 }
