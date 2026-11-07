@@ -2,6 +2,7 @@ using Sia;
 using Sia.Math;
 using Sia.WebGPU;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -10,15 +11,18 @@ internal sealed partial class PbrGpuScene
     private readonly StreamPageArena? _arena;
 
     internal PbrStreamResidency? Streaming { get; }
+    internal PbrGeometryInitializationStatistics InitializationStatistics { get; }
 
     public PbrGpuScene(in GpuFrame frame, PbrSceneStream source, Entity layout,
         ulong budget, int[] materialBatches, PbrStreamingSettings streaming)
     {
+        var started = Stopwatch.GetTimestamp();
         _gpu = new(frame, budget);
         try {
             var sharedInstances = streaming.GpuTraversal || source.RequiresInstancing;
             var shape = RootShape(source, sharedInstances);
-            var required = checked(shape.Vertices * StreamGeometryPage.VertexBytes + shape.Triangles * 12 + shape.Instances);
+            var shapeComplete = Stopwatch.GetTimestamp();
+            var required = checked(StreamStorageBytes(shape.Vertices, shape.Triangles) + shape.Instances);
             if (required > budget) throw new ArgumentException($"Stream roots/bootstrap/instances require {required} bytes, exceeding budget {budget}.");
             if (shape.Instances > _gpu.Limits.MaxStorageBufferBindingSize)
                 throw new NotSupportedException("Stream instance table exceeds storage binding limits.");
@@ -42,17 +46,24 @@ internal sealed partial class PbrGpuScene
                 Instances = _gpu.Upload<PbrInstanceGpu>(instances.Length == 0 ? [default] : instances);
             }
             var arenaBudget = budget - _gpu.Bytes;
+            var instancesComplete = Stopwatch.GetTimestamp();
             using var bootstrap = new PbrGpuScene(frame, source, layout, arenaBudget, materialBatches, Instances);
+            var bootstrapComplete = Stopwatch.GetTimestamp();
             var rootsV = shape.Vertices; var rootsT = shape.Triangles;
-            var rootBytes = checked((rootsV * StreamGeometryPage.VertexBytes) + (rootsT * 12));
+            var rootBytes = StreamStorageBytes(rootsV, rootsT);
             if (rootBytes > arenaBudget)
                 throw new ArgumentException($"Stream roots/bootstrap require {rootBytes} bytes, exceeding remaining geometry budget {arenaBudget}.");
             var detailBytes = System.Math.Min(streaming.DetailBytes, arenaBudget - rootBytes);
             var maxBinding = _gpu.Limits.MaxStorageBufferBindingSize;
-            var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes), maxBinding / StreamGeometryPage.VertexBytes);
+            var vertexCapacity = System.Math.Min(rootsV + (detailBytes * 4 / 5 / StreamGeometryPage.VertexBytes),
+                (maxBinding & ~15ul) / StreamGeometryPage.VertexBytes);
             var triangleCapacity = System.Math.Min(rootsT + (detailBytes / 5 / 12), maxBinding / 12);
             if (sharedInstances && !streaming.GpuTraversal && source.Instances.Length > 0)
                 triangleCapacity = System.Math.Min(triangleCapacity, (uint.MaxValue - 1ul) / (ulong)source.Instances.Length);
+            // Padding consumes at most twelve additional bytes. Leave it in
+            // the existing arena cap, rather than raising the allocation budget.
+            if (StreamStorageBytes(vertexCapacity, triangleCapacity) > arenaBudget && vertexCapacity > rootsV)
+                vertexCapacity--;
             if (vertexCapacity < rootsV || triangleCapacity < rootsT)
                 throw new NotSupportedException("Stream roots exceed storage binding or CPU visibility addressing limits.");
             _arena = new(frame, checked((uint)System.Math.Max(1ul, vertexCapacity)), checked((uint)System.Math.Max(1ul, triangleCapacity)), arenaBudget);
@@ -76,6 +87,7 @@ internal sealed partial class PbrGpuScene
             }
             Vertices = _arena.Vertices;
             Topology = _arena.Topology;
+            var arenaComplete = Stopwatch.GetTimestamp();
             if (bootstrap.VertexCount > 0 && bootstrap.TriangleCount > 0) {
                 if (!_arena.TryReserve(bootstrap.VertexCount, bootstrap.TriangleCount, out var allocation)
                     || allocation.Vertices.Offset != 0 || allocation.Triangles.Offset != 0)
@@ -91,8 +103,11 @@ internal sealed partial class PbrGpuScene
                 Wgpu.Submit(temporary.Queue, [commands.GetWgpu<WGPUCommandBuffer>()]);
             }
             Transparent = bootstrap.Transparent;
+            var transparentComplete = Stopwatch.GetTimestamp();
             Streaming = new(source, _arena, streaming, materialBatches);
+            var residencyComplete = Stopwatch.GetTimestamp();
             if (streaming.GpuTraversal) Streaming.CreateHierarchy(frame, Instances);
+            var hierarchyComplete = Stopwatch.GetTimestamp();
             Opaque = Streaming.RootDraws;
             Bounds = source.Bounds;
             if (Transparent.Length > 0)
@@ -100,6 +115,12 @@ internal sealed partial class PbrGpuScene
             var entries = new List<WGPUBindGroupEntry> { GpuBinding.Buffer(0, Vertices), GpuBinding.Buffer(1, Topology) };
             if (sharedInstances) entries.Add(GpuBinding.Buffer(2, Instances));
             Group = GpuBinding.Group(_gpu, layout, CollectionsMarshal.AsSpan(entries));
+            var complete = Stopwatch.GetTimestamp();
+            static double Ms(long begin, long end) => (end - begin) * 1000d / Stopwatch.Frequency;
+            InitializationStatistics = new(Ms(started, shapeComplete), Ms(shapeComplete, instancesComplete),
+                Ms(instancesComplete, bootstrapComplete), Ms(bootstrapComplete, arenaComplete),
+                Ms(arenaComplete, transparentComplete), Ms(transparentComplete, residencyComplete),
+                Ms(residencyComplete, hierarchyComplete), Ms(hierarchyComplete, complete), Ms(started, complete));
         }
         catch {
             Streaming?.DisposeAsync().AsTask().GetAwaiter().GetResult();

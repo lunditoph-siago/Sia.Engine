@@ -5,6 +5,7 @@ namespace Sia.Engine.Example;
 
 internal static partial class ExampleContent
 {
+    private const int MaximumExplicitRasterInstances = 4096;
     internal sealed record Entry
     {
         public required string Scene { get; init; }
@@ -12,6 +13,8 @@ internal static partial class ExampleContent
         public string? Lightmaps { get; init; }
         public string? Environment { get; init; }
         public string[] ReflectionCaptures { get; init; } = [];
+        /// <summary>Optional distinct authored instance IDs from this scene that explicitly select conventional rendering.</summary>
+        public Guid[] ExplicitRasterInstances { get; init; } = [];
     }
 
     internal sealed record Catalog
@@ -46,6 +49,10 @@ internal static partial class ExampleContent
         }
         var entry = catalog.Bunny ?? throw new InvalidDataException("Bunny requires a scene entry.");
         Path(entry.Scene, ".siascene");
+        if (entry.ExplicitRasterInstances is null || entry.ExplicitRasterInstances.Length > MaximumExplicitRasterInstances
+            || entry.ExplicitRasterInstances.Contains(Guid.Empty)
+            || entry.ExplicitRasterInstances.Distinct().Count() != entry.ExplicitRasterInstances.Length)
+            throw new InvalidDataException("Explicit Raster selections require distinct nonempty scene instance IDs within the selection bound.");
         if (entry.PackIndex is { } pack) {
             var folder = entry.Scene[..entry.Scene.LastIndexOf('/')];
             var name = pack[(pack.LastIndexOf('/') + 1)..];
@@ -68,7 +75,8 @@ internal static partial class ExampleContent
         => entry with { Scene = map(entry.Scene), PackIndex = entry.PackIndex is { } pack ? map(pack) : null,
             Lightmaps = entry.Lightmaps is { } lightmaps ? map(lightmaps) : null,
             Environment = entry.Environment is { } environment ? map(environment) : null,
-            ReflectionCaptures = entry.ReflectionCaptures.Select(map).ToArray() };
+            ReflectionCaptures = entry.ReflectionCaptures.Select(map).ToArray(),
+            ExplicitRasterInstances = entry.ExplicitRasterInstances.ToArray() };
 
     internal static async Task<Entry> DefaultAsync(string assetsDirectory, HttpClient http,
         CancellationToken cancellationToken = default)

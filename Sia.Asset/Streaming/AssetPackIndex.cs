@@ -13,7 +13,7 @@ public sealed class AssetPackIndex
 {
     public const int MaximumEntries = 65536;
     public const int MaximumEncodedBytes = 16 * 1024 * 1024;
-    private readonly Dictionary<string, AssetPackEntry> _byHash = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AssetPackEntry> _byHash;
     public IReadOnlyDictionary<string, AssetPackEntry> Entries { get; }
     public int EncodedBytes { get; }
 
@@ -22,10 +22,11 @@ public sealed class AssetPackIndex
         ArgumentNullException.ThrowIfNull(entries);
         var selected = entries.Take(MaximumEntries + 1).ToArray();
         if (selected.Length > MaximumEntries) throw new ArgumentException("Too many pack entries.", nameof(entries));
-        var byName = new Dictionary<string, AssetPackEntry>(StringComparer.Ordinal);
-        var portableNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _byHash = new(selected.Length, StringComparer.Ordinal);
+        var byName = new Dictionary<string, AssetPackEntry>(selected.Length, StringComparer.Ordinal);
+        var portableNames = new HashSet<string>(selected.Length, StringComparer.OrdinalIgnoreCase);
         var packs = new Dictionary<string, AssetChunk>(StringComparer.Ordinal);
-        var regions = new Dictionary<string, List<(int Start, int End, string Hash)>>(StringComparer.Ordinal);
+        var regions = new Dictionary<string, List<(int Start, int End)>>(StringComparer.Ordinal);
         long bytes = 48;
         foreach (var entry in selected) {
             ArgumentNullException.ThrowIfNull(entry);
@@ -47,13 +48,15 @@ public sealed class AssetPackIndex
                 if (previous.Chunk.Length != entry.Chunk.Length || previous.Slice.Pack.Id != pack.Id
                     || previous.Slice.Pack.Length != pack.Length || previous.Slice.Offset != entry.Slice.Offset)
                     throw new ArgumentException("Conflicting storage locations for one content hash.", nameof(entries));
-                normalized = new(entry.FileName, previous.Chunk, new(sharedPack, entry.Slice.Offset));
+                normalized = ReferenceEquals(entry.Chunk, previous.Chunk) && ReferenceEquals(pack, sharedPack)
+                    ? entry : new(entry.FileName, previous.Chunk, new(sharedPack, entry.Slice.Offset));
             }
             else {
-                normalized = new(entry.FileName, entry.Chunk, new(sharedPack, entry.Slice.Offset));
+                normalized = ReferenceEquals(pack, sharedPack)
+                    ? entry : new(entry.FileName, entry.Chunk, new(sharedPack, entry.Slice.Offset));
                 _byHash.Add(entry.Chunk.Id, normalized);
                 if (!regions.TryGetValue(pack.Id, out var ranges)) regions.Add(pack.Id, ranges = []);
-                ranges.Add((entry.Slice.Offset, checked(entry.Slice.Offset + entry.Chunk.Length), entry.Chunk.Id));
+                ranges.Add((entry.Slice.Offset, checked(entry.Slice.Offset + entry.Chunk.Length)));
             }
             // Canonicalization is scoped to this immutable index, never global string
             // interning. Thousands of leaves share the pack descriptor and its SHA.
@@ -122,6 +125,7 @@ public sealed class AssetPackIndex
             throw new InvalidDataException("Invalid pack index header, count or available bytes.");
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256); hash.AppendData(header);
         var entries = new List<AssetPackEntry>(count);
+        var packs = new Dictionary<(ulong, ulong, ulong, ulong), AssetChunk>();
         Span<byte> size = stackalloc byte[2]; Span<byte> name = stackalloc byte[255]; Span<byte> row = stackalloc byte[76];
         var remaining = encoded - 48;
         try {
@@ -138,7 +142,14 @@ public sealed class AssetPackIndex
                 var filename = Encoding.ASCII.GetString(name[..length]);
                 stream.ReadExactly(row); hash.AppendData(row);
                 var leaf = new AssetChunk(Convert.ToHexString(row[..32]), BinaryPrimitives.ReadInt32LittleEndian(row[32..]));
-                var pack = new AssetChunk(Convert.ToHexString(row[36..68]), BinaryPrimitives.ReadInt32LittleEndian(row[68..]));
+                var packKey = (BinaryPrimitives.ReadUInt64LittleEndian(row[36..]), BinaryPrimitives.ReadUInt64LittleEndian(row[44..]),
+                    BinaryPrimitives.ReadUInt64LittleEndian(row[52..]), BinaryPrimitives.ReadUInt64LittleEndian(row[60..]));
+                var packLength = BinaryPrimitives.ReadInt32LittleEndian(row[68..]);
+                if (!packs.TryGetValue(packKey, out var pack)) {
+                    pack = new AssetChunk(Convert.ToHexString(row[36..68]), packLength);
+                    packs.Add(packKey, pack);
+                }
+                else if (pack.Length != packLength) throw new InvalidDataException("Conflicting pack lengths for one content hash.");
                 entries.Add(new(filename, leaf, new(pack, BinaryPrimitives.ReadInt32LittleEndian(row[72..]))));
                 remaining -= 78 + length;
             }
@@ -161,8 +172,11 @@ public sealed class AssetPackIndex
         if (name is null || name.Length is < 1 or > 255 || name is "." or ".." || name.EndsWith('.')) return false;
         foreach (var c in name)
             if (!(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '_' or '-')) return false;
-        var stem = name.Split('.')[0].ToUpperInvariant();
-        return stem is not ("CON" or "PRN" or "AUX" or "NUL")
-            && !(stem.Length == 4 && stem[3] is >= '1' and <= '9' && (stem.StartsWith("COM") || stem.StartsWith("LPT")));
+        var dot = name.IndexOf('.');
+        var stem = dot < 0 ? name.AsSpan() : name.AsSpan(0, dot);
+        return !stem.Equals("CON", StringComparison.OrdinalIgnoreCase) && !stem.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+            && !stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) && !stem.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+            && !(stem.Length == 4 && stem[3] is >= '1' and <= '9'
+                && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)));
     }
 }

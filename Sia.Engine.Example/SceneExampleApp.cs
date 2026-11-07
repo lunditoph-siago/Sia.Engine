@@ -107,6 +107,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
+        _presentationSurfaceUsages = surfaceInfo.Usages;
 
         var required = WGPULimits.Default;
         ConfigureSceneLimits(ref required);
@@ -279,7 +280,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             var format = PickSurfaceFormat(in capabilities);
             var alphaMode = PickAlphaMode(in capabilities);
             var presentMode = PickPresentMode(in capabilities);
-            return new SurfaceInfo(format, alphaMode, presentMode);
+            return new SurfaceInfo(format, alphaMode, presentMode, capabilities.Usages);
         }
         finally {
             WgpuUnsafe.wgpuSurfaceCapabilitiesFreeMembers(capabilities);
@@ -357,6 +358,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             AlphaMode = _alphaMode,
             PresentMode = _presentMode,
         };
+#if !BROWSER
+        if (UsePresentationCopy) configuration.Usage |= WGPUTextureUsage.CopyDst;
+#endif
         Wgpu.ConfigureSurface(_surface, in configuration);
         _surfaceConfigured = true;
 
@@ -365,6 +369,17 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     }
 
     private void RenderFrame()
+    {
+#if !BROWSER
+        if (UsePresentationCopy) {
+            RenderPresentationCopyFrame();
+            return;
+        }
+#endif
+        RenderFrameDirect();
+    }
+
+    private void RenderFrameDirect()
     {
         var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         if (surfaceTexture.Status is not (
@@ -442,8 +457,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
                 ThrowFailures();
             }
             var graphDisposed = Attempt(DisposeRenderGraph);
+            if (!graphDisposed) ThrowFailures();
             var sceneDisposed = Attempt(DisposeScene);
-            if (!graphDisposed || !sceneDisposed) ThrowFailures();
+            if (!sceneDisposed) ThrowFailures();
 
             Attempt(() => Wgpu.Release(ref _queue));
             Attempt(() => {
@@ -452,14 +468,16 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
                     _surfaceConfigured = false;
                 }
             });
-            if (_queue.IsNull && !_surfaceConfigured) {
+            // Unconfigure can retain a backend swapchain. Release it before
+            // explicit device destruction while the backend deleter is alive.
+            if (!_surfaceConfigured) Attempt(() => Wgpu.Release(ref _surface));
+            if (_queue.IsNull && !_surfaceConfigured && _surface.IsNull) {
                 if (!_device.IsNull && !_deviceDestroyed)
                     Attempt(() => { Wgpu.DestroyDevice(_device); _deviceDestroyed = true; });
                 if (_device.IsNull || _deviceDestroyed)
                     Attempt(() => Wgpu.Release(ref _device));
             }
             if (_device.IsNull) Attempt(() => Wgpu.Release(ref _adapter));
-            if (!_surfaceConfigured) Attempt(() => Wgpu.Release(ref _surface));
             if (_queue.IsNull && _device.IsNull && _adapter.IsNull && _surface.IsNull)
                 Attempt(() => Wgpu.Release(ref _instance));
 
@@ -485,7 +503,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private readonly record struct SurfaceInfo(
         WGPUTextureFormat Format,
         WGPUCompositeAlphaMode AlphaMode,
-        WGPUPresentMode PresentMode);
+        WGPUPresentMode PresentMode,
+        WGPUTextureUsage Usages);
 
     private void ReadAdapterDescription()
     {
@@ -493,6 +512,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         if (WgpuUnsafe.wgpuAdapterGetInfo(Pointer(_adapter), &info) != WGPUStatus.Success)
             return;
         try {
+#if !BROWSER
+            _presentationBackend = info.BackendType;
+#endif
             static string Text(WGPUStringView text) => Marshal.PtrToStringUTF8((nint)text.Data, checked((int)text.Length)) ?? "";
             Console.WriteLine($"Adapter: {Text(info.Vendor)}; {Text(info.Device)}; {Text(info.Description)}; {info.BackendType}");
         }

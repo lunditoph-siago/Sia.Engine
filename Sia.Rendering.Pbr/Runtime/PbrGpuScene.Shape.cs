@@ -4,6 +4,10 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed partial class PbrGpuScene
 {
+    internal static ulong StreamStorageBytes(ulong vertices, ulong triangles)
+        => checked((((System.Math.Max(1ul, vertices) * StreamGeometryPage.VertexBytes) + 15) & ~15ul)
+            + System.Math.Max(16ul, System.Math.Max(1ul, triangles) * 12));
+
     // Same referenced shape used by graphics admission and CPU verification; no GPU effects.
     internal static (ulong Vertices, ulong Triangles, ulong Instances) RootShape(PbrSceneStream source, bool instanced)
     {

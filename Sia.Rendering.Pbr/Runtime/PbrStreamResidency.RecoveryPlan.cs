@@ -16,8 +16,10 @@ internal sealed partial class PbrStreamResidency
     {
         if (_stopped || _upload is not null || _relocation is not null || _relocationReservation is not null
             || !RecoveryKeyOwned(target) || _resident.ContainsKey(target) || !IsAdmitted(target)) return null;
-        var required = _pages[target.Page];
-        if (required.Vertices <= 0 || required.Triangles <= 0) return null;
+        // A descriptor is an admission bound, not an exact Raster packing
+        // shape. Only Reserve's acquired target can authorize withdrawal.
+        if (_recovery is not { } recovery || recovery.Target != target
+            || !recovery.Shapes.TryGetValue(target, out var required) || !ValidPageShape(target, required)) return null;
         var shape = PbrGpuScene.RootShape(_source, SharedInstances);
         if (shape.Vertices > _arena.VertexCapacity || shape.Triangles > _arena.TriangleCapacity) return null;
         var rootsV = new List<StreamRange>();
@@ -26,10 +28,8 @@ internal sealed partial class PbrStreamResidency
         ulong rootVertices = 0, rootTriangles = 0, detailVertices = 0, detailTriangles = 0;
         foreach (var pair in _resident) {
             if (!RecoveryKeyOwned(pair.Key)) return null;
-            var page = _pages[pair.Key.Page];
             var allocation = pair.Value.Allocation;
-            if (page.Vertices <= 0 || page.Triangles <= 0
-                || allocation.Vertices.Count != (uint)page.Vertices || allocation.Triangles.Count != (uint)page.Triangles
+            if (!ValidPageShape(pair.Key, pair.Value.Shape) || !pair.Value.Shape.Matches(allocation)
                 || !RecoveryRangeValid(allocation.Vertices, _arena.VertexCapacity)
                 || !RecoveryRangeValid(allocation.Triangles, _arena.TriangleCapacity)) return null;
             if (pair.Value.Root) {
@@ -60,12 +60,12 @@ internal sealed partial class PbrStreamResidency
         Array.Sort(byT, (left, right) => pages[left].Allocation.Triangles.Offset.CompareTo(pages[right].Allocation.Triangles.Offset));
         if (!RecoveryDisjoint(pages, byV, true, shape.Vertices)
             || !RecoveryDisjoint(pages, byT, false, shape.Triangles)) return null;
-        var windowsV = RecoveryWindows(pages, byV, true, shape.Vertices, _arena.VertexCapacity, (uint)required.Vertices);
-        var windowsT = RecoveryWindows(pages, byT, false, shape.Triangles, _arena.TriangleCapacity, (uint)required.Triangles);
+        var windowsV = RecoveryWindows(pages, byV, true, shape.Vertices, _arena.VertexCapacity, required.Vertices);
+        var windowsT = RecoveryWindows(pages, byT, false, shape.Triangles, _arena.TriangleCapacity, required.Triangles);
         RecoveryProof? best = null;
         foreach (var windowV in windowsV)
             foreach (var windowT in windowsT) {
-                var proof = RecoveryClosure(pages, byV, byT, windowV, windowT, (uint)required.Vertices, (uint)required.Triangles);
+                var proof = RecoveryClosure(pages, byV, byT, windowV, windowT, required.Vertices, required.Triangles);
                 if (proof is not null && (best is null || CompareRecoveryProof(proof, best) < 0)) best = proof;
             }
         if (best is not null) return best.Victims;
@@ -73,7 +73,7 @@ internal sealed partial class PbrStreamResidency
         // tail supplies a proof whenever the remaining desired set fits it.
         return RecoveryClosure(pages, byV, byT,
             new(shape.Vertices, _arena.VertexCapacity), new(shape.Triangles, _arena.TriangleCapacity),
-            (uint)required.Vertices, (uint)required.Triangles)?.Victims;
+            required.Vertices, required.Triangles)?.Victims;
     }
 
     private bool RecoveryKeyOwned(Key key)

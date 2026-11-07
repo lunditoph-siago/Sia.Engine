@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Sia;
 using Sia.Math;
 using Sia.WebGPU;
@@ -37,7 +39,16 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public Entity TraverseEven { get; }
     public Entity TraverseOdd { get; }
     public Entity PrepareExpansion { get; }
+    public Entity PrepareStableWork { get; }
+    public Entity PrefixStableWork { get; }
+    public Entity ClearStableScan { get; }
+    public Entity CountStableScan { get; }
+    public Entity ScanStableBlocks { get; }
+    public Entity PrefixStableBlocks { get; }
+    public Entity AssignStableScan { get; }
     public Entity Expand { get; }
+    public Entity CompareShadowCut { get; }
+    public Entity ShadowClear { get; }
 
     public uint RootBase { get; }
     public uint RootCount { get; }
@@ -46,22 +57,26 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
     public uint SingleCapacity { get; }
     public uint DoubleCapacity { get; }
     public uint NodeCapacity { get; }
+    public ulong ShadowNodeCount { get; }
     public int Levels { get; }
 
     public ulong Bytes => _gpu.Bytes;
     internal long FeedbackFrame { get; set; }
     internal long RecoveryEpoch { get; set; }
+    internal PbrHierarchyInitializationStatistics InitializationStatistics { get; }
 
     public PbrGpuHierarchy(in GpuFrame frame, ulong budget, ReadOnlySpan<Node> nodes, ReadOnlySpan<uint4> parts,
         ReadOnlySpan<uint4> mapping, uint rootBase, uint rootCount, uint singleCapacity, uint doubleCapacity,
-        uint nodeCapacity, Entity instances)
+        uint nodeCapacity, Entity instances, ulong shadowNodeCount)
     {
+        var started = Stopwatch.GetTimestamp();
         _gpu = new(frame, budget);
         Instances = instances;
         (RootBase, RootCount, PageCount, SingleCapacity, DoubleCapacity) =
             (rootBase, rootCount, (uint)mapping.Length, singleCapacity, doubleCapacity);
         SourceNodeCount = checked((uint)nodes.Length);
         NodeCapacity = nodeCapacity;
+        ShadowNodeCount = shadowNodeCount;
         var depths = new int[nodes.Length];
         for (var i = 0; i < nodes.Length; i++) {
             var parent = nodes[i].Owner.x;
@@ -70,10 +85,12 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
             depths[i] = parent == uint.MaxValue ? 1 : checked(depths[(int)parent] + 1);
             Levels = System.Math.Max(Levels, depths[i]);
         }
+        var depthComplete = Stopwatch.GetTimestamp();
         try {
-            Nodes = _gpu.Upload(nodes);
-            Parts = _gpu.Upload(parts);
-            Residency = _gpu.Upload(mapping);
+            Nodes = UploadObserved(nodes, out var nodesUpload);
+            Parts = UploadObserved(parts, out var partsUpload);
+            Residency = UploadObserved(mapping, out var mappingUpload);
+            var uploadComplete = Stopwatch.GetTimestamp();
             Layout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute,
                     (ulong)Marshal.SizeOf<Configuration>()),
@@ -83,9 +100,12 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
                 GpuBinding.Buffer(4, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(5, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(6, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
-                GpuBinding.Buffer(7, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
+                GpuBinding.Buffer(7, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute),
+                GpuBinding.Buffer(8, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute)
             ]);
+            var layoutComplete = Stopwatch.GetTimestamp();
             var shader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device, PbrShaderSource.Compile(frame.ResourceWorld, "stream_traversal.wgsl"), "pbr-stream-traversal"));
+            var shaderComplete = Stopwatch.GetTimestamp();
             var pipelineLayout = GpuBinding.PipelineLayout(_gpu, Layout);
             ResetFeedback = Compute(shader, pipelineLayout, "reset_feedback");
             ResetDraws = Compute(shader, pipelineLayout, "reset_draws");
@@ -95,6 +115,16 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
             TraverseEven = Compute(shader, pipelineLayout, "traverse_even");
             TraverseOdd = Compute(shader, pipelineLayout, "traverse_odd");
             PrepareExpansion = Compute(shader, pipelineLayout, "prepare_expansion");
+            PrepareStableWork = Compute(shader, pipelineLayout, "prepare_stable_work");
+            PrefixStableWork = Compute(shader, pipelineLayout, "prefix_stable_work");
+            ClearStableScan = Compute(shader, pipelineLayout, "clear_stable_scan");
+            CountStableScan = Compute(shader, pipelineLayout, "count_stable_scan");
+            ScanStableBlocks = Compute(shader, pipelineLayout, "scan_stable_blocks");
+            PrefixStableBlocks = Compute(shader, pipelineLayout, "prefix_stable_blocks");
+            AssignStableScan = Compute(shader, pipelineLayout, "assign_stable_scan");
+            CompareShadowCut = Compute(shader, pipelineLayout, "compare_shadow_cut");
+            ShadowClear = CreateShadowClear(shader);
+            var traversalComplete = Stopwatch.GetTimestamp();
             ExpansionLayout = GpuBinding.Layout(_gpu, [
                 GpuBinding.Buffer(0, WGPUBufferBindingType.Uniform, WGPUShaderStage.Compute,
                     (ulong)Marshal.SizeOf<Configuration>()),
@@ -104,14 +134,90 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
                 GpuBinding.Buffer(4, WGPUBufferBindingType.Storage, WGPUShaderStage.Compute),
                 GpuBinding.Buffer(5, WGPUBufferBindingType.ReadOnlyStorage, WGPUShaderStage.Compute)
             ]);
+            var expansionLayoutComplete = Stopwatch.GetTimestamp();
             var expansionShader = _gpu.Own(Wgpu.CreateWgslShaderModule(_gpu.Device,
                 PbrShaderSource.Compile(frame.ResourceWorld, "stream_expand.wgsl"), "pbr-stream-expand"));
+            var expansionShaderComplete = Stopwatch.GetTimestamp();
             Expand = Compute(expansionShader, GpuBinding.PipelineLayout(_gpu, ExpansionLayout), "expand");
+            var complete = Stopwatch.GetTimestamp();
+            static double Ms(long begin, long end) => (end - begin) * 1000d / Stopwatch.Frequency;
+            InitializationStatistics = new(Ms(started, depthComplete), Ms(depthComplete, uploadComplete),
+                Ms(uploadComplete, layoutComplete) + Ms(traversalComplete, expansionLayoutComplete),
+                Ms(layoutComplete, shaderComplete), Ms(shaderComplete, traversalComplete),
+                Ms(expansionLayoutComplete, expansionShaderComplete), Ms(expansionShaderComplete, complete),
+                nodes.Length, parts.Length, mapping.Length, Ms(started, complete)) {
+                    NodesUpload = nodesUpload, PartsUpload = partsUpload, MappingUpload = mappingUpload
+                };
         }
         catch {
             _gpu.Dispose();
             throw;
         }
+    }
+
+    internal static uint AppendShadowDomain(ref ulong nodes, int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        var first = nodes;
+        nodes = checked(nodes + (ulong)count);
+        // Oversized domains disable caching; their normal traversal still works.
+        return nodes <= uint.MaxValue ? (uint)first : 0;
+    }
+
+    internal static uint ShadowCacheWords(ulong nodes, ulong maximumBytes)
+    {
+        if (nodes == 0 || nodes > uint.MaxValue) return 0;
+        var words = (nodes + 31) / 32;
+        // Seven persistent layer cuts and one scratch cut shared serially.
+        return words * 8 * sizeof(uint) <= maximumBytes ? checked((uint)words) : 0;
+    }
+
+    internal static ulong SelectionBufferBytes(ulong workRecords, ulong feedbackBytes, ulong configurationBytes)
+    {
+        // Match GpuResources.Buffer, including tiny/empty storage buffers.
+        static ulong Buffer(ulong size) => checked((System.Math.Max(16ul, size) + 3) & ~3ul);
+        return checked(Buffer(checked(workRecords * 16)) + Buffer(80) + Buffer(16) + Buffer(feedbackBytes)
+            + (8 * Buffer(configurationBytes)) + (3 * Buffer(checked(feedbackBytes + 64))));
+    }
+
+    private Entity CreateShadowClear(Entity shader)
+    {
+        var vertex = "clear_shadow_vertex"u8; var fragment = "clear_shadow_depth"u8;
+        fixed (byte* v = vertex)
+        fixed (byte* f = fragment) {
+            var descriptor = WGPURenderPipelineDescriptor.Default;
+            descriptor.Layout = (WGPUPipelineLayout*)GpuBinding.PipelineLayout(_gpu).GetWgpu<WGPUPipelineLayout>().DangerousGetHandle();
+            descriptor.Vertex.Module = (WGPUShaderModule*)shader.GetWgpu<WGPUShaderModule>().DangerousGetHandle();
+            descriptor.Vertex.EntryPoint = new() { Data = v, Length = (nuint)vertex.Length };
+            descriptor.Primitive.Topology = WGPUPrimitiveTopology.TriangleList;
+            descriptor.Primitive.CullMode = WGPUCullMode.None;
+            var depth = WGPUDepthStencilState.Default;
+            depth.Format = WGPUTextureFormat.Depth32Float;
+            depth.DepthWriteEnabled = WGPUOptionalBool.True;
+            depth.DepthCompare = WGPUCompareFunction.Always;
+            descriptor.DepthStencil = &depth;
+            var output = WGPUFragmentState.Default;
+            output.Module = descriptor.Vertex.Module;
+            output.EntryPoint = new() { Data = f, Length = (nuint)fragment.Length };
+            descriptor.Fragment = &output;
+            return _gpu.Own(Wgpu.CreateRenderPipeline(_gpu.Device, descriptor));
+        }
+    }
+
+    private Entity UploadObserved<T>(ReadOnlySpan<T> data, out PbrBufferUploadInitializationStatistics statistics) where T : unmanaged
+    {
+        var allocated = GC.GetTotalAllocatedBytes(false);
+        var gen0 = GC.CollectionCount(0); var gen1 = GC.CollectionCount(1); var gen2 = GC.CollectionCount(2);
+        var bytes = checked((ulong)data.Length * (ulong)Unsafe.SizeOf<T>());
+        var started = Stopwatch.GetTimestamp();
+        var buffer = _gpu.Buffer(bytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopyDst);
+        var created = Stopwatch.GetTimestamp();
+        if (!data.IsEmpty) Wgpu.WriteBuffer(_gpu.Queue, buffer.GetWgpu<WGPUBuffer>(), 0, data);
+        var complete = Stopwatch.GetTimestamp();
+        statistics = new(bytes, (created - started) * 1000d / Stopwatch.Frequency,
+            (complete - created) * 1000d / Stopwatch.Frequency, GC.GetTotalAllocatedBytes(false) - allocated,
+            GC.CollectionCount(0) - gen0, GC.CollectionCount(1) - gen1, GC.CollectionCount(2) - gen2);
+        return buffer;
     }
 
     internal static ulong MaximumCutTriangles(PbrSceneStream.HierarchyInfo tree)

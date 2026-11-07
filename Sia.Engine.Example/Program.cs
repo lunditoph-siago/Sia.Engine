@@ -22,12 +22,17 @@ public static partial class Program
             }
             var scenePath = content?.Scene;
             var packs = await PbrSceneFiles.ReadPackIndexAsync(content?.PackIndex, streamHttp);
+            var rasterInstances = content?.ExplicitRasterInstances is { Length: > 0 } explicitRaster ? explicitRaster.ToHashSet() : null;
             var preset = Rendering.Pbr.PbrRendererSettings.ForQuality(options.Quality);
-            await using var mixed = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
-                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi, packIndex: packs) : null;
-            await using var raster = scenePath is not null && options.Quality == Rendering.RenderQuality.Low
+            var mixed = scenePath is not null && options.Quality != Rendering.RenderQuality.Low
+                ? await PbrSceneFiles.PrepareMixedAsync(scenePath, streamHttp, options.Quality, tracing: preset.DynamicSceneGi,
+                    rasterInstances: rasterInstances, packIndex: packs) : null;
+            var raster = scenePath is not null && options.Quality == Rendering.RenderQuality.Low
                 ? await PbrSceneFiles.PrepareRasterStreamingAsync(scenePath, streamHttp, packIndex: packs) : null;
+            await using var sceneSource = mixed?.Source ?? raster?.Source;
             PbrSceneFiles.Prepared? references = (PbrSceneFiles.Prepared?)mixed ?? raster;
+            mixed = null;
+            raster = null;
             var lighting = await LightingFiles.PrepareAsync(content?.Environment, streamHttp);
             var capturePaths = content?.ReflectionCaptures ?? [];
             var captures = new ReflectionCaptureFiles.Prepared[capturePaths.Length];

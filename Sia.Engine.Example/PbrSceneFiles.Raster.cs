@@ -13,6 +13,9 @@ internal static partial class PbrSceneFiles
         public ValueTask DisposeAsync() => Source.DisposeAsync();
     }
 
+    // Low keeps whole Raster products even when the manifest also declares pages.
+    // Global vertex dependencies can make an all-paged bootstrap exceed admission;
+    // Medium explicitly selects its bounded conventional subset in PrepareMixedAsync.
     internal static async Task<PreparedRasterStreaming> PrepareRasterStreamingAsync(string path, HttpClient client,
         int maximumFileBytes = 128 * 1024 * 1024, long maximumTotalBytes = 512L * 1024 * 1024,
         CancellationToken cancellationToken = default, AssetPackIndex? packIndex = null)
@@ -20,7 +23,7 @@ internal static partial class PbrSceneFiles
         var prepared = await PrepareRasterAsync(path, client, maximumFileBytes, maximumTotalBytes, cancellationToken, packIndex);
         var source = new PageSource(path, client, new Prepared<MeshVirtualRecord>(prepared.Id, prepared.Scene, prepared.Meshes,
             new Dictionary<AssetId, MeshVirtualRecord>(), prepared.Materials, prepared.Textures), packIndex: packIndex);
-        return new(prepared, source) { EncodedBytes = prepared.EncodedBytes };
+        return new(prepared, source) { EncodedBytes = prepared.EncodedBytes, Statistics = prepared.Statistics };
     }
 
     internal static (Entity Root, PbrRasterScene Scene, PbrSceneStream? Stream) AcquireRasterStreaming(World world, PreparedRasterStreaming prepared)
