@@ -518,8 +518,7 @@ internal sealed partial class PbrMaterials
 
     private async Task DrainAsync()
     {
-        foreach (var pending in _pending) {
-            if (pending.Cancellation.IsCancellationRequested) continue;
+        foreach (var pending in _pending.Where(pending => !pending.Cancellation.IsCancellationRequested)) {
             _cancelled++; _cancelledReservationBytes += pending.Bytes;
             pending.Cancellation.Cancel();
         }
