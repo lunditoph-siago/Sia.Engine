@@ -39,10 +39,11 @@ public sealed class StreamVectorStorageTests
         Assert.Equal(stream || work, source.Contains("vertices: array<vec4<u32>>", StringComparison.Ordinal));
         Assert.Equal(!stream && !work, source.Contains("vertices: array<u32>", StringComparison.Ordinal));
         Assert.DoesNotContain("#if", source); Assert.DoesNotContain("#{", source);
-        foreach (var entry in new[] { "raster.wgsl", "resolve.wgsl", "forward.wgsl", "transparent.wgsl" }) {
-            var variant = PbrShaderSource.Compile(world, entry, streamInstances: stream,
+        var variants = new[] { "raster.wgsl", "resolve.wgsl", "forward.wgsl", "transparent.wgsl" }
+            .Select(entry => PbrShaderSource.Compile(world, entry, streamInstances: stream,
                 shadingWork: entry == "resolve.wgsl" && work, residentInstances: resident,
-                cpuStreamInstances: cpu, rasterPositionTables: raster);
+                cpuStreamInstances: cpu, rasterPositionTables: raster));
+        foreach (var variant in variants) {
             Assert.DoesNotContain("#if", variant); Assert.DoesNotContain("#{", variant);
         }
         // Builtin composition is CPU coverage. Odd-capacity metadata and raw
