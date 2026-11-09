@@ -80,15 +80,16 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
             var lut = IblEnvironmentData.BrdfLut;
             for (var at = 0; at < lut.Length; at += 4)
                 BrdfBounds = math.max(BrdfBounds, new float2(MathF.Abs((float)lut[at]), MathF.Abs((float)lut[at + 1])));
-            Write(_lut, 0, 0, LutSize, lut);
+            Write(_lut, 0, LutSize, lut);
         }
         catch { _gpu.Dispose(); throw; }
     }
 
     public void Update(ProceduralSky sky)
     {
+        ArgumentNullException.ThrowIfNull(sky);
         if (sky == _source) return;
-        ArgumentNullException.ThrowIfNull(sky); sky.ValidateData();
+        sky.ValidateData();
         if (_baked is not null)
             throw new InvalidOperationException("Baked environment sky differs from scene lighting; select matching bake data or the procedural provider.");
         var data = IblEnvironmentData.Get(sky);
@@ -101,43 +102,41 @@ public sealed unsafe class IblEnvironmentGpu : IDisposable
 
     private void Upload(IblEnvironmentAsset asset)
     {
-        UploadEnvironment(asset);
-        var lut = asset.BrdfLut.Span;
-        for (var at = 0; at < lut.Length; at += 4)
-            BrdfBounds = math.max(BrdfBounds, new float2(MathF.Abs((float)lut[at]), MathF.Abs((float)lut[at + 1])));
-        Write(_lut, 0, 0, LutSize, asset.BrdfLut.Span);
-    }
-
-    private void UploadEnvironment(IblEnvironmentAsset asset)
-    {
         var peak = 0f;
         var cube = asset.Cube.Span;
         for (var at = 0; at < cube.Length; at += 4)
             peak = MathF.Max(peak, MathF.Max(MathF.Abs((float)cube[at]), MathF.Max(MathF.Abs((float)cube[at + 1]), MathF.Abs((float)cube[at + 2]))));
         MaximumRadiance = (double)peak * asset.CubeRadianceScale;
         MaximumIrradiance = IrradianceSh.Bound(asset.Coefficients.Span);
+        UploadEnvironment(asset);
+        var lut = asset.BrdfLut.Span;
+        for (var at = 0; at < lut.Length; at += 4)
+            BrdfBounds = math.max(BrdfBounds, new float2(MathF.Abs((float)lut[at]), MathF.Abs((float)lut[at + 1])));
+        Write(_lut, 0, LutSize, lut);
+    }
+
+    private void UploadEnvironment(IblEnvironmentAsset asset)
+    {
         Wgpu.WriteBuffer<float4>(_gpu.Queue, Sh.GetWgpu<WGPUBuffer>(), 0, asset.Coefficients.Span);
         var offset = 0;
         for (var mip = 0; mip < Mips; mip++) {
             var size = Size >> mip;
-            var length = size * size * 4;
-            for (var face = 0; face < 6; face++) {
-                Write(_cube, mip, face, size, asset.Cube.Span.Slice(offset, length));
-                offset += length;
-            }
+            var length = size * size * 4 * 6;
+            // Each mip already stores its six faces contiguously in layer order.
+            Write(_cube, mip, size, asset.Cube.Span.Slice(offset, length), layers: 6);
+            offset += length;
         }
     }
 
-    private void Write(Entity texture, int mip, int layer, int size, ReadOnlySpan<Half> values)
+    private void Write(Entity texture, int mip, int size, ReadOnlySpan<Half> values, uint layers = 1)
     {
         var target = new WGPUTexelCopyTextureInfo {
             Texture = (WGPUTexture*)texture.GetWgpu<WGPUTexture>().DangerousGetHandle(),
             MipLevel = (uint)mip,
-            Origin = new() { Z = (uint)layer },
             Aspect = WGPUTextureAspect.All
         };
         var layout = new WGPUTexelCopyBufferLayout { BytesPerRow = (uint)size * 8, RowsPerImage = (uint)size };
-        var extent = new WGPUExtent3D { Width = (uint)size, Height = (uint)size, DepthOrArrayLayers = 1 };
+        var extent = new WGPUExtent3D { Width = (uint)size, Height = (uint)size, DepthOrArrayLayers = layers };
         fixed (Half* data = values)
             WgpuUnsafe.wgpuQueueWriteTexture((WGPUQueue*)_gpu.Queue.DangerousGetHandle(), &target,
             data, (nuint)values.Length * 2, &layout, &extent);
