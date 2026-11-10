@@ -33,7 +33,7 @@ public static partial class Program
             PbrSceneFiles.Prepared? references = (PbrSceneFiles.Prepared?)mixed ?? raster;
             mixed = null;
             raster = null;
-            var lighting = await LightingFiles.PrepareAsync(content?.Environment, streamHttp);
+            var lighting = await LightingFiles.PrepareAsync(content?.Environment, streamHttp, displayTransform: content?.DisplayTransform);
             var capturePaths = content?.ReflectionCaptures ?? [];
             var captures = new ReflectionCaptureFiles.Prepared[capturePaths.Length];
             for (var at = 0; at < captures.Length; at++) {

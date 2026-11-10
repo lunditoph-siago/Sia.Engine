@@ -53,6 +53,7 @@ internal sealed partial class SceneExampleApp
             UpdateScene(deltaTime);
             RenderFrame();
             Wgpu.ProcessEvents(_instance);
+            ThrowGpuError();
         }
         return !Glfw.ShouldClose(_window);
     }
@@ -190,12 +191,14 @@ internal sealed partial class SceneExampleApp
         required.MaxComputeInvocationsPerWorkgroup = workgroupSize;
         var descriptor = CreateDeviceDescriptor();
         descriptor.RequiredLimits = &required;
-        var blockFeature = WGPUFeatureName.TextureCompressionBC;
-        if (RequiresBlockTextures()) {
-            descriptor.RequiredFeatureCount = 1;
-            descriptor.RequiredFeatures = &blockFeature;
+        var requiredFeatures = GetRequiredDeviceFeatures();
+        fixed (WGPUFeatureName* features = requiredFeatures) {
+            descriptor.RequiredFeatureCount = (nuint)requiredFeatures.Length;
+            descriptor.RequiredFeatures = features;
+            // The wrapper submits the descriptor synchronously before returning
+            // its Task; no pinned pointer escapes into an async state machine.
+            return Wgpu.RequestDeviceAsync(_adapter, descriptor);
         }
-        return Wgpu.RequestDeviceAsync(_adapter, descriptor);
     }
 }
 #endif

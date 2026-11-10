@@ -23,6 +23,7 @@ internal sealed partial class PbrStreamResidency
             internal Group? Parent;
             internal long Frame;
             internal float Priority;
+            internal bool MainView;
             internal bool Recovery;
         }
 
@@ -74,7 +75,7 @@ internal sealed partial class PbrStreamResidency
 
         internal BudgetCounts Plan(Dictionary<ChildRequest, float> requests, ReadOnlySpan<BudgetPage> roots,
             ulong rootVertices, ulong rootTriangles, uint vertexCapacity, uint triangleCapacity, long frame,
-            HashSet<ChildRequest>? recoveryGroups = null)
+            HashSet<ChildRequest>? recoveryGroups = null, IReadOnlySet<ChildRequest>? mainRequests = null)
         {
             if (rootVertices > vertexCapacity || rootTriangles > triangleCapacity)
                 throw new InvalidOperationException("Budget roots and transparent bootstrap exceed the geometry arena.");
@@ -98,11 +99,30 @@ internal sealed partial class PbrStreamResidency
                 var group = Find(child with { Node = parent }, true)!;
                 if (group.Frame != frame) {
                     group.Frame = frame; group.Priority = 0;
+                    group.MainView = false;
                     group.Recovery = recoveryGroups?.Contains(group.Key) ?? false;
                     group.Children.Clear(); _frameGroups.Add(group);
                 }
                 group.Children.Add(child);
-                group.Priority = System.Math.Max(group.Priority, pair.Value);
+                var main = mainRequests?.Contains(child) ?? false;
+                if (main && !group.MainView) { group.MainView = true; group.Priority = pair.Value; }
+                else if (main == group.MainView) group.Priority = System.Math.Max(group.Priority, pair.Value);
+            }
+            // A visible descendant can only replace its fallback after its
+            // complete observed ancestor groups are admitted too. Promote that
+            // dependency closure before ranking unrelated shadow-only groups.
+            foreach (var group in _frameGroups) {
+                if (!group.MainView) continue;
+                var ancestor = group;
+                while (ancestor.ParentNode >= 0) {
+                    var observed = _denseSignature ? _requested.Contains(ancestor.Slot) : requests.ContainsKey(ancestor.Key);
+                    if (!observed) break;
+                    var dependency = ancestor.Parent ??= Find(ancestor.Key with { Node = ancestor.ParentNode });
+                    if (dependency is null || dependency.Frame != frame) break;
+                    if (!dependency.MainView) { dependency.MainView = true; dependency.Priority = group.Priority; }
+                    else dependency.Priority = System.Math.Max(dependency.Priority, group.Priority);
+                    ancestor = dependency;
+                }
             }
             foreach (var group in _frameGroups) CachePages(group);
             if (!CanReuseOrder(frame)) {
@@ -161,6 +181,7 @@ internal sealed partial class PbrStreamResidency
         private static int Compare(Group left, Group right)
         {
             var recovery = right.Recovery.CompareTo(left.Recovery); if (recovery != 0) return recovery;
+            var main = right.MainView.CompareTo(left.MainView); if (main != 0) return main;
             var priority = right.Priority.CompareTo(left.Priority); if (priority != 0) return priority;
             var instance = left.Key.Instance.CompareTo(right.Key.Instance); if (instance != 0) return instance;
             var asset = left.Key.Asset.CompareTo(right.Key.Asset); return asset != 0 ? asset : left.Key.Node.CompareTo(right.Key.Node);

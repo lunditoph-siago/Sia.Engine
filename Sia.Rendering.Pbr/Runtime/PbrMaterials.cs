@@ -26,9 +26,11 @@ internal sealed partial class PbrMaterials : IDisposable
         public int Levels, TailMip, ResidentMip, DesiredMip, MinimumMip, Index;
         public long RetryFrame;
         public int[] ResidentMips = [], WantedMips = [], DesiredMips = [], PlanMips = [], PriorityBands = [], Idle = [];
+        public int[] MainWantedMips = [], MainPlanMips = [];
         public int[] MaterialRows = [], Batches = [];
         public ulong[] TailCosts = [];
         public float[] Priorities = [];
+        public float[] ShadowPriorities = [];
         public TextureArrayUpload? Residency;
     }
 
@@ -38,6 +40,7 @@ internal sealed partial class PbrMaterials : IDisposable
     public Entity[] Groups { get; }
     public int[] MaterialBatches { get; }
     public bool[] Transmission { get; }
+    internal bool[] ShadowCoverage { get; }
     public bool HasTransmission { get; }
     public List<Entity> Textures { get; } = [];
     public List<Entity> Uniforms { get; } = [];
@@ -72,6 +75,7 @@ internal sealed partial class PbrMaterials : IDisposable
                     throw new ArgumentException("Material texture encoding or color space does not match its role.", nameof(source));
             HasTransmission = assets.Any(m => m.Transmission > 0);
             Transmission = [.. assets.Select(m => m.Transmission > 0)];
+            ShadowCoverage = [.. assets.Select(PbrShadowCoverage.IsCandidate)];
             var whiteSrgb = PbrTextureData.Create(1, 1, true, [new byte[] { 255, 255, 255, 255 }]);
             var white = PbrTextureData.Create(1, 1, false, [new byte[] { 255, 255, 255, 255 }]);
             var normal = PbrTextureData.Create(1, 1, false, [new byte[] { 128, 128, 255, 255 }]);
@@ -79,6 +83,7 @@ internal sealed partial class PbrMaterials : IDisposable
                 m.MetallicRoughness ?? white, m.Occlusion ?? white, m.Emissive ?? whiteSrgb }).ToArray();
             var uniqueTextures = maps.SelectMany(m => m).Distinct<PbrTextureData>(ReferenceEqualityComparer.Instance).ToArray();
             ValidateBootstrap(uniqueTextures);
+            var independentCoverage = PbrTextureStreamingPolicy.IndependentCoverageSources(assets, stream?.TextureSources);
             var references = new Dictionary<PbrTextureData, (ArrayTexture Texture, uint Layer)>(ReferenceEqualityComparer.Instance);
             foreach (var shape in uniqueTextures.GroupBy(Shape)) {
                 var (Width, Height, Levels, Format, Sampler, _, _) = shape.Key;
@@ -88,7 +93,8 @@ internal sealed partial class PbrMaterials : IDisposable
                 // Per-layer explicit LOD clamps preserve filtering when min/mag agree.
                 // Distinct filters retain hardware implicit-LOD selection in independent arrays.
                 if (stream is not null && Sampler.MinFilter != Sampler.MagFilter) layerLimit = 1;
-                foreach (var textures in shape.Chunk(layerLimit)) {
+                foreach (var originalChunk in shape.Chunk(layerLimit))
+                foreach (var textures in PbrTextureStreamingPolicy.PartitionCoverageChunk(originalChunk, independentCoverage)) {
                     var array = stream is not null && stream.TextureSources.ContainsKey(textures[0])
                         ? UploadStreamTail(textures) : UploadArray(textures);
                     array.Index = _arrays.Count;
@@ -98,6 +104,12 @@ internal sealed partial class PbrMaterials : IDisposable
                 }
             }
             _materialUses = [.. maps.Select(m => m.Select(t => references[t]).ToArray())];
+            for (var material = 0; material < assets.Length; material++) {
+                if (!ShadowCoverage[material]) continue;
+                _shadowCoverageUses.Add(_materialUses[material][0]);
+                if (assets[material].Transmission > 0 && assets[material].MetallicRoughness is not null)
+                    _shadowCoverageUses.Add(_materialUses[material][2]);
+            }
             var batchMaps = new List<ArrayTexture[]>();
             MaterialBatches = new int[assets.Length];
             var parameters = new PbrMaterialGpu[assets.Length];

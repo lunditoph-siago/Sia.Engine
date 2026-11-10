@@ -5,24 +5,29 @@ namespace Sia.Engine.Rendering.Pbr;
 internal static partial class PbrShaderSource
 {
     internal static string Compile(World world, string entry, bool writableClusters = false, bool surfaceData = false,
-        bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false,bool rasterPositionTables=false,bool cpuStreamInstances=false)
+        bool sceneGi = false, bool streamInstances = false, bool shadingWork = false, bool compatibilityUniformPadding = false, bool staticLightmap = false, bool residentInstances = false, bool reflectionCaptures = false, bool liveReflections = false, bool historyCommitHits = false,bool rasterPositionTables=false,bool cpuStreamInstances=false, bool fullPrecisionHdr=false, DisplayTransformData? displayTransform=null)
     {
         ArgumentNullException.ThrowIfNull(world);
+        var displaySource = displayTransform is null ? null
+            : DisplayTransformShaderSource.Compile(displayTransform, "pbr/Providers/display");
         return CompileWithLookup(module => {
+            if (module == "pbr/Providers/display") return displaySource;
             var source = module.StartsWith("rendering/", StringComparison.Ordinal)
                 ? RenderingShaderSource.AcquireModule(world, module) : AcquireModule(world, module);
             return source is { } entity ? entity.Get<WgslSourceResource>().Source : null;
-        }, entry, writableClusters, surfaceData, sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits,rasterPositionTables,cpuStreamInstances);
+        }, entry, writableClusters, surfaceData, sceneGi, streamInstances, shadingWork, compatibilityUniformPadding, staticLightmap, residentInstances, reflectionCaptures, liveReflections, historyCommitHits,rasterPositionTables,cpuStreamInstances,fullPrecisionHdr,displayTransform is not null);
     }
 
     private static string CompileWithLookup(Func<string, string?> read, string entry, bool writableClusters, bool surfaceData,
-        bool sceneGi, bool streamInstances, bool shadingWork, bool compatibilityUniformPadding, bool staticLightmap, bool residentInstances, bool reflectionCaptures, bool liveReflections, bool historyCommitHits,bool rasterPositionTables,bool cpuStreamInstances)
+        bool sceneGi, bool streamInstances, bool shadingWork, bool compatibilityUniformPadding, bool staticLightmap, bool residentInstances, bool reflectionCaptures, bool liveReflections, bool historyCommitHits,bool rasterPositionTables,bool cpuStreamInstances,bool fullPrecisionHdr,bool displayTransform)
     {
         if(residentInstances && (streamInstances || shadingWork)) throw new ArgumentException("Resident instances and stream work are distinct geometry inputs.");
         if(rasterPositionTables && !residentInstances) throw new ArgumentException("Position tables require conventional Raster instances.");
         if(cpuStreamInstances && (!streamInstances || shadingWork || residentInstances))
             throw new ArgumentException("CPU stream instances require shared storage without GPU work addressing.");
         var definitions = new Dictionary<string, string> {
+            ["FULL_PRECISION_HDR"] = fullPrecisionHdr ? "true" : "false",
+            ["DISPLAY_TRANSFORM"] = displayTransform ? "true" : "false",
             ["RESIDENT_INSTANCES"] = residentInstances ? "true" : "false",
             ["RASTER_POSITION_TABLES"] = rasterPositionTables ? "true" : "false",
             ["WRITABLE_CLUSTERS"] = writableClusters ? "true" : "false",

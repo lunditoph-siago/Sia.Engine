@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../Sia.Engine.Example/SceneExampleApp.GpuErrors.cs" Link="Example/SceneExampleApp.GpuErrors.cs" />
     <Compile Include="../Sia.Engine.Example/PbrSceneFiles*.cs" Link="Example/%(Filename)%(Extension)" />
     <Compile Include="../Sia.Engine.Example/RenderAssetUse.cs" Link="Example/RenderAssetUse.cs" />
     <Compile Include="../Sia.Engine.Example/AssetInput.cs" Link="Example/AssetInput.cs" />

@@ -12,6 +12,7 @@ internal static partial class ExampleContent
         public string? PackIndex { get; init; }
         public string? Lightmaps { get; init; }
         public string? Environment { get; init; }
+        public string? DisplayTransform { get; init; }
         public string[] ReflectionCaptures { get; init; } = [];
         /// <summary>Optional distinct authored instance IDs from this scene that explicitly select conventional rendering.</summary>
         public Guid[] ExplicitRasterInstances { get; init; } = [];
@@ -64,7 +65,7 @@ internal static partial class ExampleContent
         if (entry.ReflectionCaptures is null || entry.ReflectionCaptures.Length > 16
             || entry.ReflectionCaptures.Distinct(StringComparer.Ordinal).Count() != entry.ReflectionCaptures.Length)
             throw new InvalidDataException("Default captures require at most sixteen distinct references.");
-        foreach (var lighting in entry.ReflectionCaptures.Concat(new[] { entry.Lightmaps, entry.Environment }.OfType<string>())) {
+        foreach (var lighting in entry.ReflectionCaptures.Concat(new[] { entry.Lightmaps, entry.Environment, entry.DisplayTransform }.OfType<string>())) {
             Path(lighting, ".siaasset");
             if (lighting[..lighting.LastIndexOf('/')] != entry.Scene[..entry.Scene.LastIndexOf('/')])
                 throw new InvalidDataException("Default scene and lighting must belong to the same checked content snapshot.");
@@ -75,6 +76,7 @@ internal static partial class ExampleContent
         => entry with { Scene = map(entry.Scene), PackIndex = entry.PackIndex is { } pack ? map(pack) : null,
             Lightmaps = entry.Lightmaps is { } lightmaps ? map(lightmaps) : null,
             Environment = entry.Environment is { } environment ? map(environment) : null,
+            DisplayTransform = entry.DisplayTransform is { } display ? map(display) : null,
             ReflectionCaptures = entry.ReflectionCaptures.Select(map).ToArray(),
             ExplicitRasterInstances = entry.ExplicitRasterInstances.ToArray() };
 

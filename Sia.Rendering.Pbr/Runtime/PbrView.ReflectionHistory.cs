@@ -60,6 +60,7 @@ internal sealed unsafe partial class PbrView
             || _historyTransportRevision != _pendingHistoryTransportRevision || _historySky != _pendingHistorySky
             || _historyLighting.Counts.x != _data.Counts.x || _historyLighting.Counts.y != _data.Counts.y
             || _historyLighting.Size.w != _data.Size.w
+            || _historyLighting.Splits.w != _data.Splits.w
             || !MemoryMarshal.CreateReadOnlySpan(ref _historyLighting.Direction0, 8)
                 .SequenceEqual(MemoryMarshal.CreateReadOnlySpan(ref _data.Direction0, 8))
             || !_historyLights.AsSpan(0, (int)_data.Counts.x * 4).SequenceEqual(_sceneData.AsSpan(0, (int)_data.Counts.x * 4));

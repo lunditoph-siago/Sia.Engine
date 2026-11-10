@@ -9,6 +9,7 @@ internal sealed partial class PbrStreamResidency
 
     private Dictionary<Key, float>? _admitted, _budgetNext;
     private Dictionary<ChildRequest, float> _budgetRequests = [], _budgetPreviousRequests = [];
+    private HashSet<ChildRequest> _budgetMainRequests = [], _budgetPreviousMainRequests = [];
     private BudgetWorkspace _budgetWorkspace = null!;
     private Dictionary<ChildRequest, float>? _viewRequests;
     private BudgetPage[] _budgetRootPages = [];
@@ -54,11 +55,13 @@ internal sealed partial class PbrStreamResidency
         => !_budgetEnabled || (_admitted?.ContainsKey(key) ?? false)
             || (_resident.TryGetValue(key, out var page) && page.Root);
 
-    private void RequestChild(ChildRequest child, float priority, bool recoveryFresh = true)
+    private void RequestChild(ChildRequest child, float priority, bool recoveryFresh = true, bool mainView = false)
     {
         if (recoveryFresh && _recovery is { Started: true }) _recoveryIncoming.Add(child);
+        var previousMain = _budgetMainRequests.Contains(child);
         ref var previous = ref CollectionsMarshal.GetValueRefOrAddDefault(_budgetRequests, child, out var found);
-        if (!found || priority > previous) previous = priority;
+        if (!found || (mainView && !previousMain) || (mainView == previousMain && priority > previous)) previous = priority;
+        if (mainView) _budgetMainRequests.Add(child);
         if (_viewRequests is { } requests) {
             ref var viewPriority = ref CollectionsMarshal.GetValueRefOrAddDefault(requests, child, out found);
             if (!found || priority > viewPriority) viewPriority = priority;
@@ -68,6 +71,7 @@ internal sealed partial class PbrStreamResidency
     private void BeginBudgetFrame()
     {
         _budgetRequests.Clear();
+        _budgetMainRequests.Clear();
         if (_budgetPending) {
             var previous = _admitted;
             _admitted = _budgetNext!;
@@ -99,6 +103,7 @@ internal sealed partial class PbrStreamResidency
     private void EndBudgetFrame()
     {
         MergeRecoveryRequests();
+        _budgetMainRequests.IntersectWith(_budgetRequests.Keys);
         if (!_budgetEnabled || _budgetPending) return;
         if (SameBudgetRequests()) { _budgetCacheHits++; return; }
         var started = Stopwatch.GetTimestamp();
@@ -113,7 +118,7 @@ internal sealed partial class PbrStreamResidency
             }
             var counts = _budgetWorkspace.Plan(_budgetRequests, _budgetRootPages,
                 _budgetRootVertices, _budgetRootTriangles, _arena.VertexCapacity, _arena.TriangleCapacity,
-                _clock, _recovery?.Groups);
+                _clock, _recovery?.Groups, _budgetMainRequests);
             var next = _budgetNext ??= [];
             next.Clear();
             foreach (var page in _budgetWorkspace.Result) next.Add(new(page.Instance, page.Page), page.Priority);
@@ -121,6 +126,7 @@ internal sealed partial class PbrStreamResidency
             _budgetVertexDenied = counts.VertexDenied; _budgetTriangleDenied = counts.TriangleDenied;
             _budgetPageVisits += counts.PageVisits;
             (_budgetPreviousRequests, _budgetRequests) = (_budgetRequests, _budgetPreviousRequests);
+            (_budgetPreviousMainRequests, _budgetMainRequests) = (_budgetMainRequests, _budgetPreviousMainRequests);
             _budgetVertexCapacity = _arena.VertexCapacity;
             _budgetTriangleCapacity = _arena.TriangleCapacity;
             _budgetHasSignature = true;
@@ -143,7 +149,8 @@ internal sealed partial class PbrStreamResidency
     {
         if (!_budgetHasSignature || _budgetVertexCapacity != _arena.VertexCapacity
             || _budgetTriangleCapacity != _arena.TriangleCapacity
-            || _budgetRequests.Count != _budgetPreviousRequests.Count) return false;
+            || _budgetRequests.Count != _budgetPreviousRequests.Count
+            || !_budgetMainRequests.SetEquals(_budgetPreviousMainRequests)) return false;
         return _budgetWorkspace.SameRequests(_budgetRequests, _budgetPreviousRequests);
     }
 }

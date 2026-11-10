@@ -192,7 +192,8 @@ internal sealed partial class PbrStreamResidency
                 Node = _source.Hierarchies[child.Asset].Nodes[child.Node].Parent })).ToArray())
             _budgetRequests.Remove(child);
         foreach (var pair in recovery.Requests)
-            if (!_budgetRequests.TryGetValue(pair.Key, out var previous) || pair.Value > previous)
+            if (!_budgetMainRequests.Contains(pair.Key)
+                && (!_budgetRequests.TryGetValue(pair.Key, out var previous) || pair.Value > previous))
                 _budgetRequests[pair.Key] = pair.Value;
     }
 

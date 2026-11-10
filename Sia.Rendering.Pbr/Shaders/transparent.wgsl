@@ -1,6 +1,7 @@
 #define_import_path pbr/transparent
 
 #import pbr/lighting
+#import pbr/Common/hdr
 
 struct GlassVertex {
     @builtin(position) @invariant position: vec4<f32>,
@@ -108,7 +109,7 @@ fn transmission_fragment(input: GlassVertex, @builtin(front_facing) front: bool)
         let reflection = scene_lighting(reflected, input.position.xy);
         color = mix(color, reflection + (1.0 - f) * s.base * background_color, transmission);
     }
-    return vec4<f32>(min(color * frame.depth.z, vec3<f32>(65504)), s.opacity);
+    return vec4<f32>(pbr_store_hdr(color, frame.depth.z), s.opacity);
 }
 
 @fragment
@@ -124,7 +125,7 @@ fn transparent_fragment(input: GlassVertex, @builtin(front_facing) front: bool) 
     s.bake_uv = input.bake_uv;
     s.bake_uv_dx = dpdx(input.bake_uv); s.bake_uv_dy = dpdy(input.bake_uv);
     s.bake_present = input.bake.x != 0u; s.source_instance = input.bake.y;
-    return vec4<f32>(min(shade(s, input.position.xy) * frame.depth.z, vec3<f32>(65504)), s.opacity);
+    return vec4<f32>(pbr_store_hdr(shade(s, input.position.xy), frame.depth.z), s.opacity);
 }
 
 @fragment

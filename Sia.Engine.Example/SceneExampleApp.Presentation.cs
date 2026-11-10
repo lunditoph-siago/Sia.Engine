@@ -48,9 +48,11 @@ internal sealed unsafe partial class SceneExampleApp
             throw;
         }
 
+        ThrowGpuError();
         var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         var acquisitionStatus = surfaceTexture.Status;
         try {
+            ThrowGpuError();
             if (acquisitionStatus is not (WGPUSurfaceGetCurrentTextureStatus.SuccessOptimal
                 or WGPUSurfaceGetCurrentTextureStatus.SuccessSuboptimal)) {
                 _presentationAcquireFailures++;
@@ -69,7 +71,9 @@ internal sealed unsafe partial class SceneExampleApp
             }
             ValidatePresentationDestination(surfaceTexture.Texture);
             CopyPresentationOutput(surfaceTexture.Texture);
+            ThrowGpuError();
             Wgpu.PresentSurfaceOrThrow(_surface);
+            ThrowGpuError();
             _presentationPresents++;
         }
         finally { Wgpu.Release(ref surfaceTexture); }
@@ -77,8 +81,10 @@ internal sealed unsafe partial class SceneExampleApp
 
     private bool CompleteFailedPresentation()
     {
+        ThrowGpuError();
         if (_presentationFailureCompletion is not { } completion) return true;
         Wgpu.ProcessEvents(_instance);
+        ThrowGpuError();
         if (!completion.IsCompleted) {
             _presentationFailureGateWaits++;
             if (Stopwatch.GetElapsedTime(_presentationFailureStarted).TotalSeconds > 30)
@@ -88,6 +94,7 @@ internal sealed unsafe partial class SceneExampleApp
         }
         if (!completion.GetAwaiter().GetResult())
             throw new WgpuException("Submitted presentation failure did not complete successfully; resources remain retained.");
+        ThrowGpuError();
         _presentationFailureCompletion = null;
         return true;
     }
@@ -102,16 +109,19 @@ internal sealed unsafe partial class SceneExampleApp
             // Resize only: avoid a second live private output and keep its byte
             // accounting honest. Successful steady frames never wait here.
             _presentationResizeDrains++;
+            ThrowGpuError();
             var completion = GpuQueueCompletion.AfterSubmittedWork(_queue);
             var started = Stopwatch.GetTimestamp();
             while (!completion.IsCompleted) {
                 Wgpu.ProcessEvents(_instance);
+                ThrowGpuError();
                 if (Stopwatch.GetElapsedTime(started).TotalSeconds > 30)
                     throw new TimeoutException("Presentation resize did not drain within30seconds.");
                 Thread.Sleep(1);
             }
             if (!completion.GetAwaiter().GetResult())
                 throw new WgpuException("Presentation resize queue completion failed; old output remains retained.");
+            ThrowGpuError();
             DisposePresentationOutput();
         }
         var renderer = _sceneRenderer!;

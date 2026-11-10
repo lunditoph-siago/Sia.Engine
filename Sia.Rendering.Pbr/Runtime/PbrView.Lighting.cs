@@ -23,10 +23,27 @@ internal sealed unsafe partial class PbrView
         _localRadianceBound += LocalRadianceBound(position, light.Range, radiance);
         if (math.all(radiance == 0)) return;
         var at = NextLight();
+        var shadowLayer = -1;
+        var shadowBias = float2.zero;
+        var shadowDepthCoefficient = 0f;
+        if (_casters.Contains(e)) {
+            if (_pointShadowCount >= _pointShadowCapacity)
+                throw new InvalidOperationException("Point shadow capacity is insufficient; configure MaxShadowedPointLights before creating the renderer.");
+            var config = _frame.Frame.MainWorld.AcquireAddon<ShadowAtlasConfig>();
+            var shadowRange = light.Range == 0 ? config.ShadowDistance : light.Range;
+            if (!float.IsFinite(shadowRange) || shadowRange <= PbrPointShadow.NearPlane)
+                throw new ArgumentException("Point shadows require a finite range or ShadowDistance greater than .05.");
+            PbrPointShadow.ValidateBias(config.PointShadowConstantBias, config.PointShadowSlopeBias);
+            shadowBias = new(config.PointShadowConstantBias, config.PointShadowSlopeBias);
+            shadowDepthCoefficient = PbrPointShadow.DepthCoefficient(shadowRange);
+            shadowLayer = PbrPointShadow.BaseLayers + _pointShadowCount++ * PbrPointShadow.Faces;
+            for (var face = 0; face < PbrPointShadow.Faces; face++)
+                SetShadow(shadowLayer + face, PbrPointShadow.ViewProjection(position, face, shadowRange));
+        }
         _sceneData[at] = new(position, light.Range);
-        _sceneData[at + 1] = default;
+        _sceneData[at + 1] = new(shadowDepthCoefficient, 0, 0, 0);
         _sceneData[at + 2] = new(radiance, 0);
-        _sceneData[at + 3] = new(0, 0, -1, 0);
+        _sceneData[at + 3] = new(shadowBias, shadowLayer, shadowLayer < 0 ? 0 : 1);
     }
 
     private void CollectSpot(Entity e)

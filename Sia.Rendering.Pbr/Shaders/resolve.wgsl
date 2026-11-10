@@ -1,6 +1,7 @@
 #define_import_path pbr/resolve
 
 #import pbr/lighting
+#import pbr/Common/hdr
 #import pbr/Common/reconstruction
 #import pbr/Common/triangle_debug
 #if LIVE_REFLECTIONS
@@ -17,7 +18,11 @@
 @group(3) @binding(3) var hdr: texture_storage_2d_array<rgba8unorm, write>;
 @group(3) @binding(7) var reflection_specular: texture_storage_2d_array<rgba8unorm, write>;
 #else
+#if FULL_PRECISION_HDR
+@group(3) @binding(3) var hdr: texture_storage_2d<rgba32float, write>;
+#else
 @group(3) @binding(3) var hdr: texture_storage_2d<rgba16float, write>;
+#endif
 #endif
 #if SURFACE_DATA
 @group(3) @binding(4) var normal_roughness: texture_storage_2d<rgba16float, write>;
@@ -129,7 +134,7 @@ fn resolve_pixel(pixel: vec2<u32>) {
 #if LIVE_REFLECTIONS
     resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(color, 1));
 #else
-    resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(min(color * frame.depth.z, vec3<f32>(65504)), 1));
+    resolve_store_opaque(vec2<i32>(pixel), vec4<f32>(pbr_store_hdr(color, frame.depth.z), 1));
 #endif
 }
 

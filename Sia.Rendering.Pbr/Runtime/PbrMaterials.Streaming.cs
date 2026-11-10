@@ -101,6 +101,8 @@ internal sealed partial class PbrMaterials
     private long _peakDecoded, _cancelled, _cancelledReservationBytes;
 
     public ulong Revision { get; private set; }
+    internal ulong ShadowCoverageRevision { get; private set; }
+    private readonly HashSet<(ArrayTexture Texture, uint Layer)> _shadowCoverageUses = [];
 
     public PbrTextureStreamingStatistics Statistics {
         get {
@@ -173,8 +175,10 @@ internal sealed partial class PbrMaterials
                 WantedMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
                 DesiredMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
                 PlanMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
+                MainWantedMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
+                MainPlanMips = Enumerable.Repeat(info.TailMip, sources.Length).ToArray(),
                 PriorityBands = new int[sources.Length],
-                Idle = new int[sources.Length], Priorities = new float[sources.Length]
+                Idle = new int[sources.Length], Priorities = new float[sources.Length], ShadowPriorities = new float[sources.Length]
             };
             result.TailCosts = new ulong[info.TailMip + 1];
             for (var mip = 0; mip <= info.TailMip; mip++)
@@ -216,14 +220,18 @@ internal sealed partial class PbrMaterials
             }
             else next.Dispose();
             var evicted = false;
+            var changedCoverage = false;
             for (var layer = 0; layer < pending.Mips.Length; layer++) {
                 evicted |= pending.Mips[layer] > array.ResidentMips[layer];
+                changedCoverage |= pending.Mips[layer] != array.ResidentMips[layer]
+                    && _shadowCoverageUses.Contains((array, (uint)layer));
             }
             if (evicted) _evictions++;
             array.ResidentMip = pending.Mip;
             pending.Mips.CopyTo(array.ResidentMips, 0);
             _installs++;
             Revision++;
+            if (changedCoverage) ShadowCoverageRevision++;
             if (replacement) RebuildGroups(array);
             UpdateMipClamps(array);
             pending.Cancellation.Dispose();
@@ -232,6 +240,7 @@ internal sealed partial class PbrMaterials
         FlushBindings();
         foreach (var array in _arrays) {
             Array.Fill(array.WantedMips, array.TailMip); Array.Clear(array.Priorities);
+            Array.Fill(array.MainWantedMips, array.TailMip); Array.Clear(array.ShadowPriorities);
         }
         _peak = System.Math.Max(_peak, Bytes);
     }
@@ -240,11 +249,30 @@ internal sealed partial class PbrMaterials
     {
         if (_stream is null || pixels <= 0 || float.IsNaN(pixels)) return;
         foreach (var (array, layer) in _materialUses[material]) {
-            if (array.Residency is null) continue;
-            var footprint = float.IsFinite(pixels) ? pixels : System.Math.Max(array.Width, array.Height);
-            var ratio = System.Math.Max(array.Width, array.Height) / System.Math.Max(1f, footprint);
-            var mip = float.IsFinite(ratio) ? (int)MathF.Floor(MathF.Log2(ratio) - _streaming.MipBias) : 0;
-            array.WantedMips[layer] = System.Math.Min(array.WantedMips[layer], System.Math.Clamp(mip, 0, array.TailMip));
+            DemandMap(array, layer, pixels);
+        }
+    }
+
+    internal void DemandShadowCoverage(int material, float pixels)
+    {
+        if (_stream is null || pixels <= 0 || float.IsNaN(pixels)) return;
+        var uses = _materialUses[material];
+        DemandMap(uses[0].Texture, uses[0].Layer, pixels, shadow: true);
+        if (_parameters[material].Transport.y > 0 && (_parameters[material].Indices.z & 2u) != 0)
+            DemandMap(uses[2].Texture, uses[2].Layer, pixels, shadow: true);
+    }
+
+    private void DemandMap(ArrayTexture array, uint layer, float pixels, bool shadow = false)
+    {
+        if (array.Residency is null) return;
+        var footprint = float.IsFinite(pixels) ? pixels : System.Math.Max(array.Width, array.Height);
+        var ratio = System.Math.Max(array.Width, array.Height) / System.Math.Max(1f, footprint);
+        var mip = float.IsFinite(ratio) ? (int)MathF.Floor(MathF.Log2(ratio) - _streaming.MipBias) : 0;
+        var wanted = System.Math.Clamp(mip, 0, array.TailMip);
+        array.WantedMips[layer] = System.Math.Min(array.WantedMips[layer], wanted);
+        if (shadow) array.ShadowPriorities[layer] = System.Math.Max(array.ShadowPriorities[layer], footprint);
+        else {
+            array.MainWantedMips[layer] = System.Math.Min(array.MainWantedMips[layer], wanted);
             array.Priorities[layer] = System.Math.Max(array.Priorities[layer], footprint);
         }
     }
@@ -258,9 +286,12 @@ internal sealed partial class PbrMaterials
                 // PlanMips caches the resulting input without extending demand.
                 var wanted = PbrTextureStreamingPolicy.DemandMip(array.WantedMips[layer], array.ResidentMips[layer],
                     array.MinimumMip, _streaming.IdleFrames, ref array.Idle[layer]);
-                var band = PbrTextureStreamingPolicy.PriorityBand(array.Priorities[layer], array.PriorityBands[layer]);
-                _planDirty |= wanted != array.PlanMips[layer] || band != array.PriorityBands[layer];
+                var pixels = array.Priorities[layer] > 0 ? array.Priorities[layer] : array.ShadowPriorities[layer];
+                var band = PbrTextureStreamingPolicy.PriorityBand(pixels, array.PriorityBands[layer]);
+                _planDirty |= wanted != array.PlanMips[layer] || band != array.PriorityBands[layer]
+                    || array.MainWantedMips[layer] != array.MainPlanMips[layer];
                 array.PlanMips[layer] = wanted; array.PriorityBands[layer] = band;
+                array.MainPlanMips[layer] = array.MainWantedMips[layer];
             }
         }
         if (_planDirty) BudgetDemand();
@@ -335,7 +366,7 @@ internal sealed partial class PbrMaterials
                 active.Mip = UploadMip(active);
                 if (active.Layer >= 0)
                     active.Mips[active.Layer] = PbrTextureStreamingPolicy.TrimUpgradeMip(active.Array.ResidentMips[active.Layer],
-                        active.Array.DesiredMips[active.Layer], active.Mips[active.Layer]);
+                        RefinementTarget(active.Array, active.Layer), active.Mips[active.Layer]);
                 var levels = PbrTextureStreamingPolicy.TrimUpload(active.Read.Result, active.ReadMip, active.Mip,
                     active.Array.ResidentMips, active.Mips);
                 var width = System.Math.Max(1u, active.Array.Width >> active.Mip);
@@ -364,6 +395,9 @@ internal sealed partial class PbrMaterials
     {
         var coarser = (aLayer < 0).CompareTo(bLayer < 0);
         if (coarser != 0) return coarser;
+        var main = (aLayer >= 0 && a.MainPlanMips[aLayer] < a.ResidentMips[aLayer])
+            .CompareTo(bLayer >= 0 && b.MainPlanMips[bLayer] < b.ResidentMips[bLayer]);
+        if (main != 0) return main;
         var visibility = (aLayer >= 0 && a.Priorities[aLayer] > 0).CompareTo(bLayer >= 0 && b.Priorities[bLayer] > 0);
         if (visibility != 0) return visibility;
         var aGap = aLayer < 0 ? 0 : a.ResidentMips[aLayer] - a.DesiredMips[aLayer];
@@ -380,7 +414,7 @@ internal sealed partial class PbrMaterials
         var available = PbrTextureStreamingPolicy.AvailableBytes(_budget, _gpu.Bytes);
         var arrays = _arrays.Where(array => array.Residency is not null).ToArray();
         var inputs = arrays.Select(array => new PbrTextureStreamingPolicy.BudgetInput(
-            array.TailCosts, array.PlanMips, array.DesiredMips, array.PriorityBands)).ToArray();
+            array.TailCosts, array.PlanMips, array.DesiredMips, array.PriorityBands, array.MainPlanMips)).ToArray();
         var targets = PbrTextureStreamingPolicy.BudgetTargets(inputs, available);
         for (var index = 0; index < arrays.Length; index++) {
             targets[index].CopyTo(arrays[index].DesiredMips, 0);
@@ -398,7 +432,7 @@ internal sealed partial class PbrMaterials
             // Publish small refinements promptly when demand changes during IO;
             // one independently readable mip may still exceed the frame quota.
             var range = PbrTextureStreamingPolicy.UpgradeRange(array.Width, array.Height, array.Levels,
-                array.ResidentMips[demand.Layer], array.DesiredMips[demand.Layer], array.ResidentMip,
+                array.ResidentMips[demand.Layer], RefinementTarget(array, demand.Layer), array.ResidentMip,
                 array.Sources.Length, decodedAvailable, allocationAvailable, array.Layout,
                 System.Math.Max(demand.Bytes, _streaming.UploadBytesPerFrame));
             mips[demand.Layer] = range.Mip;
@@ -423,7 +457,10 @@ internal sealed partial class PbrMaterials
 
     private static int UploadMip(Request request) => request.Upload is not null || request.Layer < 0 ? request.Mip
         : System.Math.Min(request.Array.ResidentMip, PbrTextureStreamingPolicy.TrimUpgradeMip(
-            request.Array.ResidentMips[request.Layer], request.Array.DesiredMips[request.Layer], request.Mips[request.Layer]));
+            request.Array.ResidentMips[request.Layer], RefinementTarget(request.Array, request.Layer), request.Mips[request.Layer]));
+
+    private static int RefinementTarget(ArrayTexture array, int layer)
+        => PbrTextureStreamingPolicy.RefinementTarget(array.DesiredMips[layer], array.MainPlanMips[layer], array.ResidentMips[layer]);
 
     private static ulong AllocationBytes(Request request) => AllocationBytes(request, request.Mip);
 
@@ -442,8 +479,10 @@ internal sealed partial class PbrMaterials
             var score = System.Math.ScaleB(1, array.PriorityBands[layer]) / cost;
             var visible = array.Priorities[layer] > 0;
             var selectedVisible = selected >= 0 && array.Priorities[selected] > 0;
-            if (selected < 0 || (visible && !selectedVisible)
-                || (visible == selectedVisible && (gap > bestGap || (gap == bestGap && score > bestScore)))) {
+            var main = array.MainPlanMips[layer] < array.ResidentMips[layer];
+            var selectedMain = selected >= 0 && array.MainPlanMips[selected] < array.ResidentMips[selected];
+            if (selected < 0 || (main && !selectedMain) || (main == selectedMain && ((visible && !selectedVisible)
+                || (visible == selectedVisible && (gap > bestGap || (gap == bestGap && score > bestScore)))))) {
                 selected = layer; bestGap = gap; bestScore = score;
             }
         }

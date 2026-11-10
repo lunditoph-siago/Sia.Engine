@@ -1,22 +1,23 @@
 #define_import_path rendering/Lighting/shadow_map
 
 // Resource and projection are supplied by the caller; no pipeline bindings.
-fn rendering_shadow_visibility(
-    atlas: texture_depth_2d_array,
-    depth_sampler: sampler_comparison,
-    layer: u32,
-    matrix: mat4x4<f32>,
-    position: vec3<f32>,
-    geometry_normal: vec3<f32>,
-    bias: f32
-) -> f32 {
+struct RenderingShadowReceiver {
+    ndc: vec3<f32>,
+    uv: vec2<f32>,
+    slope: vec2<f32>,
+    valid: bool,
+}
+
+fn rendering_shadow_receiver(matrix: mat4x4<f32>, position: vec3<f32>, geometry_normal: vec3<f32>) -> RenderingShadowReceiver {
+    var receiver: RenderingShadowReceiver;
     let projected = matrix * vec4<f32>(position, 1.0);
-    if (!(projected.w > 0.0) || projected.w > 1e30) { return 1.0; }
+    if (!(projected.w > 0.0) || projected.w > 1e30) { return receiver; }
     let ndc = projected.xyz / projected.w;
     let uv = ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
-    if (!all(uv >= vec2<f32>(0.0)) || !all(uv <= vec2<f32>(1.0)) || !(ndc.z >= 0.0) || !(ndc.z <= 1.0)) { return 1.0; }
-    let size = vec2<i32>(textureDimensions(atlas));
-    let pixel = vec2<i32>(uv * vec2<f32>(size));
+    if (!all(uv >= vec2<f32>(0.0)) || !all(uv <= vec2<f32>(1.0)) || !(ndc.z >= 0.0) || !(ndc.z <= 1.0)) { return receiver; }
+    receiver.ndc = ndc;
+    receiver.uv = uv;
+    receiver.valid = true;
     // Reference each PCF tap against the geometric receiver plane. Use an
     // analytic projection instead of derivatives, which are unavailable in compute.
     // Degenerate or ill-conditioned projections retain the fixed bias.
@@ -47,20 +48,101 @@ fn rendering_shadow_visibility(
             }
         }
     }
-    var visible = 0.0; var valid = 0u;
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let at = clamp(pixel + vec2<i32>(x, y), vec2<i32>(0), size - 1);
+    receiver.slope = slope;
+    return receiver;
+}
+
+fn rendering_shadow_weights(fraction: f32) -> vec4<f32> {
+    // A three-wide box of bilinear comparisons has four unique texels per
+    // axis. Keep the subtexel fraction instead of snapping the entire kernel.
+    return vec4<f32>(1.0 - fraction, 1.0, 1.0, fraction);
+}
+
+fn rendering_shadow_reference(receiver: RenderingShadowReceiver, tap_uv: vec2<f32>) -> f32 {
+    return receiver.ndc.z + dot(receiver.slope, tap_uv - receiver.uv);
+}
+
+fn rendering_shadow_fallback(atlas: texture_depth_2d_array, depth_sampler: sampler_comparison,
+    layer: u32, receiver: RenderingShadowReceiver, size: vec2<i32>, bias: f32) -> f32 {
+    let center = clamp(vec2<i32>(receiver.uv * vec2<f32>(size)), vec2<i32>(0), size - 1);
+    return textureSampleCompareLevel(atlas, depth_sampler, (vec2<f32>(center) + 0.5) / vec2<f32>(size), i32(layer), receiver.ndc.z - bias);
+}
+
+// Scalar reference preserves the original callable signature and comparison
+// sampler semantics. Every texel keeps its own receiver-plane reference.
+fn rendering_shadow_visibility(atlas: texture_depth_2d_array, depth_sampler: sampler_comparison,
+    layer: u32, matrix: mat4x4<f32>, position: vec3<f32>, geometry_normal: vec3<f32>, bias: f32) -> f32 {
+    let receiver = rendering_shadow_receiver(matrix, position, geometry_normal);
+    if (!receiver.valid) { return 1.0; }
+    let size = vec2<i32>(textureDimensions(atlas));
+    let texel = receiver.uv * vec2<f32>(size) - 0.5;
+    let base = vec2<i32>(floor(texel)); let fraction = fract(texel);
+    let wx = rendering_shadow_weights(fraction.x); let wy = rendering_shadow_weights(fraction.y);
+    var visible = 0.0; var valid_weight = 0.0;
+    for (var y = 0u; y < 4u; y++) {
+        for (var x = 0u; x < 4u; x++) {
+            let weight = wx[x] * wy[y];
+            if (!(weight > 0.0)) { continue; }
+            let at = clamp(base + vec2<i32>(i32(x) - 1, i32(y) - 1), vec2<i32>(0), size - 1);
             let tap_uv = (vec2<f32>(at) + 0.5) / vec2<f32>(size);
-            let receiver_depth = ndc.z + dot(slope, tap_uv - uv);
+            let receiver_depth = rendering_shadow_reference(receiver, tap_uv);
             // Reject extrapolations beyond the shadow camera's depth range,
             // including non-finite values; they cannot represent this receiver.
             if (!(receiver_depth >= 0.0) || !(receiver_depth <= 1.0)) { continue; }
-            visible += textureSampleCompareLevel(atlas, depth_sampler, tap_uv, i32(layer), receiver_depth - bias);
-            valid += 1u;
+            visible += weight * textureSampleCompareLevel(atlas, depth_sampler, tap_uv, i32(layer), receiver_depth - bias);
+            valid_weight += weight;
         }
     }
-    if (valid != 0u) { return visible / f32(valid); }
-    let center = clamp(pixel, vec2<i32>(0), size - 1);
-    return textureSampleCompareLevel(atlas, depth_sampler, (vec2<f32>(center) + 0.5) / vec2<f32>(size), i32(layer), ndc.z - bias);
+    if (valid_weight > 0.0) { return visible / valid_weight; }
+    return rendering_shadow_fallback(atlas, depth_sampler, layer, receiver, size, bias);
+}
+
+// raw_sampler must use a NonFiltering layout, nearest filtering, and clamp both
+// axes for the depth texture. Gather reads level0. WGSL xyzw order is
+// (x0,y1),(x1,y1),(x1,y0),(x0,y0).
+fn rendering_shadow_gather_depths(atlas: texture_depth_2d_array, raw_sampler: sampler, layer: u32,
+    base: vec2<i32>, size: vec2<i32>) -> array<vec4<f32>, 4> {
+    let dimensions = vec2<f32>(size);
+    let origin = vec2<f32>(base);
+    return array<vec4<f32>, 4>(
+        textureGather(atlas, raw_sampler, origin / dimensions, i32(layer)),
+        textureGather(atlas, raw_sampler, (origin + vec2<f32>(2, 0)) / dimensions, i32(layer)),
+        textureGather(atlas, raw_sampler, (origin + vec2<f32>(0, 2)) / dimensions, i32(layer)),
+        textureGather(atlas, raw_sampler, (origin + vec2<f32>(2, 2)) / dimensions, i32(layer)));
+}
+
+fn rendering_shadow_gather_value(depths: array<vec4<f32>, 4>, x: u32, y: u32) -> f32 {
+    let block = (y / 2u) * 2u + x / 2u;
+    let component = select(3u - (x & 1u), x & 1u, (y & 1u) != 0u);
+    return depths[block][component];
+}
+
+// Production LessEqual path: four raw gathers replace sixteen scalar fetches.
+// Comparisons still use each texel's plane depth; filtering the depth/reference
+// first would reintroduce errors on grazing receivers.
+fn rendering_shadow_visibility_gather(atlas: texture_depth_2d_array, depth_sampler: sampler_comparison,
+    raw_sampler: sampler, layer: u32, matrix: mat4x4<f32>, position: vec3<f32>, geometry_normal: vec3<f32>, bias: f32) -> f32 {
+    let receiver = rendering_shadow_receiver(matrix, position, geometry_normal);
+    if (!receiver.valid) { return 1.0; }
+    let size = vec2<i32>(textureDimensions(atlas));
+    let texel = receiver.uv * vec2<f32>(size) - 0.5;
+    let base = vec2<i32>(floor(texel)); let fraction = fract(texel);
+    let wx = rendering_shadow_weights(fraction.x); let wy = rendering_shadow_weights(fraction.y);
+    let depths = rendering_shadow_gather_depths(atlas, raw_sampler, layer, base, size);
+    var visible = 0.0; var valid_weight = 0.0;
+    for (var y = 0u; y < 4u; y++) {
+        for (var x = 0u; x < 4u; x++) {
+            let weight = wx[x] * wy[y];
+            if (!(weight > 0.0)) { continue; }
+            let at = clamp(base + vec2<i32>(i32(x) - 1, i32(y) - 1), vec2<i32>(0), size - 1);
+            let tap_uv = (vec2<f32>(at) + 0.5) / vec2<f32>(size);
+            let receiver_depth = rendering_shadow_reference(receiver, tap_uv);
+            if (!(receiver_depth >= 0.0) || !(receiver_depth <= 1.0)) { continue; }
+            let stored = rendering_shadow_gather_value(depths, x, y);
+            visible += weight * select(0.0, 1.0, receiver_depth - bias <= stored);
+            valid_weight += weight;
+        }
+    }
+    if (valid_weight > 0.0) { return visible / valid_weight; }
+    return rendering_shadow_fallback(atlas, depth_sampler, layer, receiver, size, bias);
 }

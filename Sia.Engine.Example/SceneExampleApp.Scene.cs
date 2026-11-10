@@ -193,6 +193,7 @@ internal sealed unsafe partial class SceneExampleApp
         _sceneLighting = null;
         _preparedLighting = null;
         _bakedEnvironment = null;
+        _displayTransform = null;
         _preparedLightmaps = null;
         _lightmapInput = null;
         _materialStream = null;

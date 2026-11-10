@@ -49,7 +49,7 @@ internal sealed unsafe partial class PbrView
 
             var id = UseForward ? default : Target(WGPUTextureFormat.R32Uint, 4, WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding);
             var depth = Target(WGPUTextureFormat.Depth32Float, 4, WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding);
-            var hdr = Target(WGPUTextureFormat.RGBA16Float, 8, WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.CopySrc);
+            var hdr = Target(_owner.HdrFormat, _owner.HdrBytesPerTexel, WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.CopySrc);
             var opaqueHdr = HasReflections ? Packed(WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding) : hdr;
             var reflectionSpecular = HasReflections ? Packed(
                 WGPUTextureUsage.StorageBinding | WGPUTextureUsage.TextureBinding | WGPUTextureUsage.CopySrc, 2) : default;
@@ -66,7 +66,7 @@ internal sealed unsafe partial class PbrView
             var previousHit = HasHistory ? Packed(historyUsage) : default;
             Entity snapshot;
             if (_owner.Materials.HasTransmission)
-                snapshot = Target(WGPUTextureFormat.RGBA16Float, 8, WGPUTextureUsage.CopyDst | WGPUTextureUsage.TextureBinding);
+                snapshot = Target(_owner.HdrFormat, _owner.HdrBytesPerTexel, WGPUTextureUsage.CopyDst | WGPUTextureUsage.TextureBinding);
             else {
                 var desc = WGPUTextureDescriptor.Default;
                 desc.Dimension = WGPUTextureDimension._2D;
@@ -75,9 +75,9 @@ internal sealed unsafe partial class PbrView
                     Height = 1,
                     DepthOrArrayLayers = 1
                 };
-                desc.Format = WGPUTextureFormat.RGBA16Float;
+                desc.Format = _owner.HdrFormat;
                 desc.Usage = WGPUTextureUsage.TextureBinding;
-                snapshot = next.Texture(desc, 8);
+                snapshot = next.Texture(desc, _owner.HdrBytesPerTexel);
             }
             var stride = checked(((width + 7) / 8 * ((height + 7) / 8)) + 4);
             var tiles = UseForward ? default : next.Buffer(checked((ulong)stride * (ulong)_owner.Materials.Groups.Length * 4), WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect);
@@ -128,11 +128,7 @@ internal sealed unsafe partial class PbrView
                 GpuBinding.Texture(0, snapshotView.GetWgpu<WGPUTextureView>()),
                 GpuBinding.Texture(1, depthView.GetWgpu<WGPUTextureView>())
             ]);
-            var output = GpuBinding.Group(next, _owner.Pipelines.OutputLayout, [
-                GpuBinding.Buffer(0, _outputUniform),
-                GpuBinding.Texture(1, hdrView.GetWgpu<WGPUTextureView>()),
-                GpuBinding.Sampler(2, _sampler)
-            ]);
+            var output = DisplayGroup(next, hdrView);
             var exposure = _owner.Settings.AutoExposure is null ? default : GpuBinding.Group(next, _owner.Pipelines.ExposureLayout, [
                 GpuBinding.Buffer(0, _outputUniform),
                 GpuBinding.Texture(1, hdrView.GetWgpu<WGPUTextureView>()),

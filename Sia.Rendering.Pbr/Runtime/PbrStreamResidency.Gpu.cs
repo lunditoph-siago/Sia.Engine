@@ -124,13 +124,11 @@ internal sealed partial class PbrStreamResidency
             if ((uint)n >= (uint)_gpuNodes.Length) throw new InvalidDataException("GPU feedback child index is invalid.");
             var word = words[_gpuKeys.Length + n];
             if (word == 0) continue;
-            var priority = BitConverter.UInt32BitsToSingle(word);
-            if (!float.IsFinite(priority) || priority <= 0)
-                throw new InvalidDataException("GPU feedback priority is invalid.");
+            var (priority, mainView) = PbrGeometryFeedback.Decode(word);
             var child = _gpuNodes[n];
             if (_source.Hierarchies[child.Asset].Nodes[child.Node].Parent < 0)
                 throw new InvalidDataException("GPU feedback cannot request a hierarchy root as a child.");
-            RequestChild(child, priority, ownerFrame < 0 || _clock - ownerFrame <= 8);
+            RequestChild(child, priority, ownerFrame < 0 || _clock - ownerFrame <= 8, mainView);
         }
     }
 

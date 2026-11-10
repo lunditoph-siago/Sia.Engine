@@ -12,7 +12,7 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal sealed unsafe partial class PbrView
 {
-    private readonly ulong[] _shadowGeometryRevision = new ulong[k_ShadowLayers];
+    private readonly ulong[] _shadowGeometryRevision;
 
     private void SetShadow(int layer, float4x4 matrix)
     {
@@ -23,8 +23,10 @@ internal sealed unsafe partial class PbrView
         _sceneData[at + 3] = matrix.c3;
         _shadowActive[layer] = true;
         var exactCache = _selection is { ShadowCacheEnabled: true };
-        var revision = exactCache ? _owner.Scene.Streaming!.PoseRevision : _owner.Scene.GeometryRevision;
-        _shadowDirty[layer] = NeedsShadowUpdate(_shadowValid[layer], _shadowMatrices[layer], matrix, _shadowGeometryRevision[layer], revision);
+        var revision = exactCache ? _owner.Scene.InstanceRevision : _owner.Scene.GeometryRevision;
+        _shadowDirty[layer] = NeedsShadowUpdate(_shadowValid[layer], _shadowMatrices[layer], matrix, _shadowGeometryRevision[layer], revision)
+            || AlphaShadowRevisionChanged(layer);
+        PrepareAlphaShadowLayer(layer, matrix, _shadowDirty[layer]);
         _shadowGeometryRevision[layer] = revision;
         _shadowMatrices[layer] = matrix;
         if (_selection is not null) {
@@ -53,10 +55,10 @@ internal sealed unsafe partial class PbrView
 
     private void Shadows(WgpuReactiveRenderGraphPassContext context)
     {
-        for (uint layer = 0; layer < k_ShadowLayers; layer++) {
+        for (uint layer = 0; layer < _shadowLayers; layer++) {
             if (!_shadowActive[layer]) continue;
             var exactCache = _selection is { ShadowCacheEnabled: true };
-            var revision = exactCache ? _owner.Scene.Streaming!.PoseRevision : _owner.Scene.GeometryRevision;
+            var revision = exactCache ? _owner.Scene.InstanceRevision : _owner.Scene.GeometryRevision;
             if (_shadowGeometryRevision[layer] != revision) {
                 _shadowDirty[layer] = true;
                 _shadowGeometryRevision[layer] = revision;
@@ -70,6 +72,7 @@ internal sealed unsafe partial class PbrView
             _selection?.SelectNodes(context.CommandEncoder, (int)layer);
             if (!_shadowDirty[layer] && !exactCache) continue;
             _selection?.ExpandTriangles(context.CommandEncoder, (int)layer);
+            GateAlphaShadowCommands(context.CommandEncoder, layer);
             var attachment = WGPURenderPassDepthStencilAttachment.Default;
             attachment.View = (WGPUTextureView*)_shadowViews[layer].GetWgpu<WGPUTextureView>().DangerousGetHandle();
             attachment.DepthLoadOp = exactCache ? WGPULoadOp.Load : WGPULoadOp.Clear;
@@ -81,6 +84,7 @@ internal sealed unsafe partial class PbrView
             try {
                 if (exactCache) _selection!.ClearShadow(pass);
                 if (_shadowActive[layer]) DrawGeometry(pass, true, layer);
+                DrawAlphaShadows(pass, layer);
                 _shadowValid[layer] = true;
             }
             finally { Wgpu.EndRenderPass(pass); Wgpu.Release(ref pass); }

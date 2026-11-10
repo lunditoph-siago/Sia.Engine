@@ -21,7 +21,8 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
         float4 Screen,
         uint4 Output,
         float4 EyeNear,
-        float4 ForwardPixels);
+        float4 ForwardPixels,
+        uint4 Shadow = default);
 
     private readonly GpuResources _gpu;
 
@@ -164,20 +165,25 @@ internal sealed unsafe class PbrGpuHierarchy : IDisposable
         return nodes <= uint.MaxValue ? (uint)first : 0;
     }
 
-    internal static uint ShadowCacheWords(ulong nodes, ulong maximumBytes)
+    internal static uint ShadowCacheWords(ulong nodes, ulong maximumBytes, int shadowLayers = PbrPointShadow.BaseLayers)
     {
+        if (shadowLayers is < PbrPointShadow.BaseLayers or > 31)
+            throw new ArgumentOutOfRangeException(nameof(shadowLayers));
         if (nodes == 0 || nodes > uint.MaxValue) return 0;
         var words = (nodes + 31) / 32;
-        // Seven persistent layer cuts and one scratch cut shared serially.
-        return words * 8 * sizeof(uint) <= maximumBytes ? checked((uint)words) : 0;
+        // One persistent cut per layer plus a serially shared scratch cut.
+        return words * (ulong)(shadowLayers + 1) * sizeof(uint) <= maximumBytes ? checked((uint)words) : 0;
     }
 
-    internal static ulong SelectionBufferBytes(ulong workRecords, ulong feedbackBytes, ulong configurationBytes)
+    internal static ulong SelectionBufferBytes(ulong workRecords, ulong feedbackBytes, ulong configurationBytes,
+        int shadowLayers = PbrPointShadow.BaseLayers)
     {
+        if (shadowLayers is < PbrPointShadow.BaseLayers or > 31)
+            throw new ArgumentOutOfRangeException(nameof(shadowLayers));
         // Match GpuResources.Buffer, including tiny/empty storage buffers.
         static ulong Buffer(ulong size) => checked((System.Math.Max(16ul, size) + 3) & ~3ul);
         return checked(Buffer(checked(workRecords * 16)) + Buffer(80) + Buffer(16) + Buffer(feedbackBytes)
-            + (8 * Buffer(configurationBytes)) + (3 * Buffer(checked(feedbackBytes + 64))));
+            + ((ulong)(shadowLayers + 1) * Buffer(configurationBytes)) + (3 * Buffer(checked(feedbackBytes + 64))));
     }
 
     private Entity CreateShadowClear(Entity shader)

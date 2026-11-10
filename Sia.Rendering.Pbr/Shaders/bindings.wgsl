@@ -25,6 +25,7 @@ struct Material {
 @group(0) @binding(6) var environment_sampler: sampler;
 @group(0) @binding(7) var brdf_sampler: sampler;
 @group(0) @binding(11) var depth_sampler: sampler_comparison;
+@group(0) @binding(17) var shadow_gather_sampler: sampler;
 @group(0) @binding(8) var<uniform> sh: array<vec4<f32>, 9>;
 #if REFLECTION_CAPTURES
 @group(0) @binding(15) var capture_environment: texture_2d_array<f32>;

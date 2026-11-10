@@ -2,7 +2,43 @@ namespace Sia.Engine.Rendering.Pbr;
 
 internal static class PbrTextureStreamingPolicy
 {
-    internal readonly record struct BudgetInput(ulong[] TailBytes, int[] Wanted, int[] Admitted, int[] Priorities);
+    internal readonly record struct BudgetInput(ulong[] TailBytes, int[] Wanted, int[] Admitted, int[] Priorities,
+        int[]? MainWanted = null);
+
+    // Coverage detail controls silhouettes as well as color. Keep its paired
+    // normal independently refinable too, while retaining one shared source for
+    // any opaque users. Whole/non-refinable sources need no storage partition.
+    internal static HashSet<PbrTextureData> IndependentCoverageSources(ReadOnlySpan<PbrMaterialAsset> materials,
+        IReadOnlyDictionary<PbrTextureData, PbrSceneStream.TextureInfo>? sources)
+    {
+        var result = new HashSet<PbrTextureData>(ReferenceEqualityComparer.Instance);
+        if (sources is null) return result;
+        void Add(PbrTextureData? texture)
+        {
+            if (texture is not null && sources.TryGetValue(texture, out var info) && info.TailMip > 0) result.Add(texture);
+        }
+        foreach (var material in materials) {
+            if (!material.AlphaBlend) continue;
+            Add(material.BaseColor); Add(material.Normal);
+        }
+        return result;
+    }
+
+    // Partition each original chunk in place conceptually: removing coverage
+    // sources must not pull unrelated opaque neighbors across chunk boundaries.
+    internal static IEnumerable<PbrTextureData[]> PartitionCoverageChunk(PbrTextureData[] chunk,
+        IReadOnlySet<PbrTextureData> independent)
+    {
+        ArgumentNullException.ThrowIfNull(chunk); ArgumentNullException.ThrowIfNull(independent);
+        if (!chunk.Any(independent.Contains)) { if (chunk.Length != 0) yield return chunk; yield break; }
+        var ordinary = chunk.Where(texture => !independent.Contains(texture)).ToArray();
+        if (ordinary.Length != 0) yield return ordinary;
+        foreach (var texture in chunk)
+            if (independent.Contains(texture)) yield return [texture];
+    }
+
+    internal static int RefinementTarget(int desired, int mainWanted, int resident)
+        => mainWanted < resident ? System.Math.Max(desired, mainWanted) : desired;
 
     internal static int PriorityBand(float pixels, int previous)
     {
@@ -26,15 +62,17 @@ internal static class PbrTextureStreamingPolicy
         var arrays = input.ToArray();
         var targets = new int[arrays.Length][];
         var minima = new int[arrays.Length];
-        var drops = new PriorityQueue<int, (double Score, int Order)>();
+        var drops = new PriorityQueue<int, (int MainClass, double Score, int Order)>();
         var headroom = new PriorityQueue<(int Array, int Mip), (ulong InverseBytes, int Order)>();
         ulong total = 0;
         void Add(int index) {
             var array = arrays[index]; var mip = minima[index];
             if (mip == array.TailBytes.Length - 1) return;
             double importance = 0;
+            var mainClass = array.MainWanted is null ? 1 : 0;
             for (var layer = 0; layer < targets[index].Length; layer++) {
                 if (targets[index][layer] != mip) continue;
+                if (array.MainWanted is not null && array.MainWanted[layer] <= mip) mainClass = 1;
                 var band = array.Priorities[layer];
                 var weight = band == 0 ? 0 : System.Math.ScaleB(1, band - 1);
                 // Retain equally important admitted detail, but let the next
@@ -43,13 +81,14 @@ internal static class PbrTextureStreamingPolicy
                 importance = System.Math.Max(importance, weight);
             }
             var saved = array.TailBytes[mip] - array.TailBytes[mip + 1];
-            drops.Enqueue(index, (-(double)saved / (1 + importance), index));
+            drops.Enqueue(index, (mainClass, -(double)saved / (1 + importance), index));
             headroom.Enqueue((index, mip), (ulong.MaxValue - array.TailBytes[mip + 1], index));
         }
         for (var index = 0; index < arrays.Length; index++) {
             var array = arrays[index];
             if (array.TailBytes.Length == 0 || array.Wanted.Length == 0
-                || array.Wanted.Length != array.Admitted.Length || array.Wanted.Length != array.Priorities.Length)
+                || array.Wanted.Length != array.Admitted.Length || array.Wanted.Length != array.Priorities.Length
+                || (array.MainWanted is not null && array.MainWanted.Length != array.Wanted.Length))
                 throw new ArgumentException("Texture budget layer states differ.", nameof(input));
             for (var mip = 0; mip < array.TailBytes.Length; mip++)
                 if (array.TailBytes[mip] == 0 || (mip > 0 && array.TailBytes[mip] > array.TailBytes[mip - 1]))
@@ -57,7 +96,8 @@ internal static class PbrTextureStreamingPolicy
             targets[index] = array.Wanted.ToArray();
             for (var layer = 0; layer < targets[index].Length; layer++)
                 if ((uint)targets[index][layer] >= (uint)array.TailBytes.Length
-                    || (uint)array.Admitted[layer] >= (uint)array.TailBytes.Length || (uint)array.Priorities[layer] > 63)
+                    || (uint)array.Admitted[layer] >= (uint)array.TailBytes.Length || (uint)array.Priorities[layer] > 63
+                    || (array.MainWanted is not null && (uint)array.MainWanted[layer] >= (uint)array.TailBytes.Length))
                     throw new ArgumentOutOfRangeException(nameof(input));
             minima[index] = targets[index].Min();
             total = checked(total + array.TailBytes[minima[index]]);

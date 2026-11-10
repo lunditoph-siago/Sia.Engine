@@ -25,7 +25,8 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
                 layer = 2u;
             }
             layer = min(layer, frame.shadow.x - 1u);
-            visibility = shadow_visibility(layer, position, surface.geometry_normal);
+            visibility = directional_shadow_visibility(layer, position, surface.geometry_normal,
+                frame.directional[i].direction.xyz, vec2<f32>(frame.directional[i].direction.w, frame.splits.w));
         }
         color += visibility * direct_lighting(normal, view, -frame.directional[i].direction.xyz, frame.directional[i].radiance.rgb, base, metal, rough);
     }
@@ -62,7 +63,12 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
             continue;
         }
         if (spot.z >= 0.0) {
-            attenuation *= shadow_visibility(u32(spot.z), position, surface.geometry_normal);
+            var layer = u32(spot.z);
+            if (spot.w > 0.5) {
+                layer += point_shadow_face(position - p.xyz);
+                attenuation *= point_shadow_visibility(layer, position, surface.geometry_normal, p.xyz, d.x, spot.xy);
+            }
+            else { attenuation *= shadow_visibility(layer, position, surface.geometry_normal); }
         }
         color += attenuation * direct_lighting(normal, view, direction, radiance.rgb, base, metal, rough);
     }

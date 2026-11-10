@@ -32,8 +32,8 @@ fn reset_draws(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocatio
         if (selection.screen.w >= 2.0) { atomicStore(&args[19], 1u); }
     }
     if (selection.screen.w > 0.0) {
-        let words = arrayLength(&shadow_cuts) / 8u;
-        if (index < words) { atomicStore(&shadow_cuts[7u * words + index], 0u); }
+        let words = selection.shadow.y;
+        if (index < words) { atomicStore(&shadow_cuts[selection.shadow.x * words + index], 0u); }
     }
 }
 
@@ -64,7 +64,10 @@ fn children_ready(n: Node, instance: Instance, priority: f32) -> bool {
         let child_id = n.links.x + c;
         let child = nodes[child_id];
         if (!node_visible(child, instance)) { continue; }
-        atomicMax(&feedback[selection.table.z + child_id], bitcast<u32>(importance));
+        // Main-camera demand outranks shadow-only demand; the low 31 bits keep
+        // the exact positive pixel-error ordering within either band.
+        let band = select(0u, 0x80000000u, selection.shadow.z != 0u);
+        atomicMax(&feedback[selection.table.z + child_id], bitcast<u32>(importance) | band);
         for (var p = 0u; p < child.links.w; p++) {
             let part = parts[child.links.z + p];
             let page = residency[part.x];
@@ -101,18 +104,18 @@ fn emit(node: u32, n: Node, instance: u32, side: u32, shadow_base: u32) {
     if (selection.screen.w > 0.0) {
         // Each actual instance owns a disjoint source-tree domain. No hash or
         // traversal ordering participates in depth-cache identity.
-        let words = arrayLength(&shadow_cuts) / 8u;
+        let words = selection.shadow.y;
         if (ordinal / 32u >= words) { atomicAdd(&args[10], 1u); return; }
-        atomicOr(&shadow_cuts[7u * words + ordinal / 32u], 1u << (ordinal % 32u));
+        atomicOr(&shadow_cuts[selection.shadow.x * words + ordinal / 32u], 1u << (ordinal % 32u));
     }
 }
 
 @compute @workgroup_size(64)
 fn compare_shadow_cut(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let index = (group.y * 65535u + group.x) * 64u + lane;
-    let words = arrayLength(&shadow_cuts) / 8u;
+    let words = selection.shadow.y;
     if (index >= words) { return; }
-    let current = atomicLoad(&shadow_cuts[7u * words + index]);
+    let current = atomicLoad(&shadow_cuts[selection.shadow.x * words + index]);
     let previous_at = selection.output.z * words + index;
     if (current != atomicLoad(&shadow_cuts[previous_at])) { atomicOr(&args[19], 1u); }
     atomicStore(&shadow_cuts[previous_at], current);
@@ -204,11 +207,11 @@ fn prefix_stable_work(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_in
 }
 
 fn stable_scan_domain() -> u32 {
-    return (arrayLength(&shadow_cuts) / 8u) * 32u;
+    return selection.shadow.y * 32u;
 }
 
 // The main-view CPU eligibility check bounds D + ceil(D/64) by both dead
-// frontiers. Nothing in persistent shadow-cut planes0..6 is modified here.
+// frontiers. Nothing in the persistent shadow-cut planes is modified here.
 @compute @workgroup_size(64)
 fn clear_stable_scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let domain = stable_scan_domain();
@@ -219,8 +222,8 @@ fn clear_stable_scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_inv
     if (index < records) {
         work[frontier_base(false) + index] = vec4<u32>(0u);
     }
-    let words = arrayLength(&shadow_cuts) / 8u;
-    if (index < words) { atomicStore(&shadow_cuts[7u * words + index], 0u); }
+    let words = selection.shadow.y;
+    if (index < words) { atomicStore(&shadow_cuts[selection.shadow.x * words + index], 0u); }
 }
 
 @compute @workgroup_size(64)
@@ -230,9 +233,9 @@ fn count_stable_scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_inv
     if (selected >= min(atomicLoad(&args[12]), frontier_capacity())) { return; }
     let entry = work[selection.output.w + selected];
     if (entry.w >= stable_scan_domain()) { atomicAdd(&args[10], 1u); return; }
-    let words = arrayLength(&shadow_cuts) / 8u;
+    let words = selection.shadow.y;
     let bit = 1u << (entry.w % 32u);
-    let previous = atomicOr(&shadow_cuts[7u * words + entry.w / 32u], bit);
+    let previous = atomicOr(&shadow_cuts[selection.shadow.x * words + entry.w / 32u], bit);
     if ((previous & bit) != 0u) { atomicAdd(&args[10], 1u); return; }
     let n = nodes[entry.x];
     var records = 0u;

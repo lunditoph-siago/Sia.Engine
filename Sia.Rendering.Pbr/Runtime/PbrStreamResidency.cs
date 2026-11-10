@@ -329,7 +329,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     }
 
     public void Select(float4x4 vp, uint width, uint height, float error, FrustumCuller culler,
-        List<PbrGpuScene.Draw> output)
+        List<PbrGpuScene.Draw> output, bool mainView = false)
     {
         _recoveryCpuInput = true;
         EnableBudgetAdmission();
@@ -338,7 +338,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         if (_cuts.TryGetValue(view, out var cached) && cached.Complete && cached.Revision == Revision) {
             foreach (var key in cached.Used) Touch(key);
             foreach (var pair in cached.Wanted) Demand(pair.Key, pair.Value);
-            foreach (var pair in cached.Requests) RequestChild(pair.Key, pair.Value);
+            foreach (var pair in cached.Requests) RequestChild(pair.Key, pair.Value, mainView: mainView);
             output.AddRange(cached.Draws);
             _cuts[view] = cached with { Frame = _clock };
             return;
@@ -366,7 +366,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 if (groupCuts is not null && groupCuts.TryGetValue(group, out var cut) && cut.Revision == group.Revision) {
                     foreach (var key in cut.Used) Touch(key);
                     foreach (var pair in cut.Wanted) Demand(pair.Key, pair.Value);
-                    foreach (var pair in cut.Requests) RequestChild(pair.Key, pair.Value);
+                    foreach (var pair in cut.Requests) RequestChild(pair.Key, pair.Value, mainView: mainView);
                     output.AddRange(cut.Draws);
                     continue;
                 }
@@ -402,7 +402,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 _viewWanted = allWanted;
                 _viewRequests = allRequests;
                 foreach (var pair in wanted) Demand(pair.Key, pair.Value);
-                foreach (var pair in requests) RequestChild(pair.Key, pair.Value);
+                foreach (var pair in requests) RequestChild(pair.Key, pair.Value, mainView: mainView);
             }
         }
         if (!_cuts.ContainsKey(view) && _cuts.Count >= 8) {
@@ -444,7 +444,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 for (var c = node.FirstChild; c < node.FirstChild + node.ChildCount; c++) {
                     if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
                     visibleChildren++;
-                    RequestChild(new(SharedInstances ? -1 : instanceIndex, instance.AssetIndex, c), priority);
+                    RequestChild(new(SharedInstances ? -1 : instanceIndex, instance.AssetIndex, c), priority, mainView: mainView);
                     foreach (var part in tree.GetPages(tree.Nodes[c])) {
                         var key = PageKey(instanceIndex, part.Page);
                         if (!IsAdmitted(key)) { complete = false; continue; }

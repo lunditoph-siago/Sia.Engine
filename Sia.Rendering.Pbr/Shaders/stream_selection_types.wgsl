@@ -6,5 +6,6 @@ struct StreamSelection {
     screen: vec4<f32>, // width, height, error, shadow cut cache: 0 off, 1 compare, 2 force
     output: vec4<u32>, // single capacity, double capacity, shadow layer, selected-node base
     eye_near: vec4<f32>,
-    forward_pixels: vec4<f32>
+    forward_pixels: vec4<f32>,
+    shadow: vec4<u32>, // persistent layer count/scratch plane, words per cut, main-view feedback band, reserved
 }
