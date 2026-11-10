@@ -2,6 +2,7 @@ using Sia.Math;
 using Sia.Engine.Mesh;
 using Sia.Asset;
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 
 namespace Sia.Engine.Rendering.Pbr;
 
@@ -10,8 +11,8 @@ public sealed record PbrStreamingSettings
     public bool GpuTraversal { get; init; } = true;
     public ulong HierarchyBytes { get; init; } = 64ul * 1024 * 1024;
     public ulong DetailBytes { get; init; } = 64ul * 1024 * 1024;
-    public uint UploadBytesPerFrame { get; init; } = 256 * 1024;
-    public int MaximumRequests { get; init; } = 2;
+    public uint UploadBytesPerFrame { get; init; } = 512 * 1024;
+    public int MaximumRequests { get; init; } = 8;
     public long DecodedBytes { get; init; } = 4 * MeshVirtualPageData.MaximumEncodedBytes;
     public int MaximumSelectionNodesPerView { get; init; }
 }
@@ -43,14 +44,15 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 {
     private readonly record struct Key(int Instance, int Page);
 
-    private sealed class Resident(StreamPageAllocation allocation, bool root, long lastUsed)
+    private sealed class Resident(StreamPageAllocation allocation, PageShape shape, bool root, long lastUsed)
     {
         public readonly StreamPageAllocation Allocation = allocation;
+        public readonly PageShape Shape = shape;
         public readonly bool Root = root;
         public long LastUsed = lastUsed;
     }
 
-    private sealed record Pending(Key Key, StreamPageArena.Upload Upload);
+    private sealed record Pending(Key Key, PageShape Shape, StreamPageArena.Upload Upload);
     private sealed record LeafRoot(Key Key, Aabb Bounds, PbrGpuScene.Draw[] Draws);
     private readonly record struct View(float4x4 Projection, uint Width, uint Height, float Error);
     private sealed record Cut(
@@ -81,7 +83,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     private readonly int[] _canonicalPages;
     private readonly StreamPageArena _arena;
     private readonly PbrStreamingSettings _settings;
-    private readonly BoundedPageScheduler<MeshVirtualPageRecord> _requests;
+    private readonly BoundedPageScheduler<PbrSceneStream.PreparedGeometryPage> _requests;
     private readonly Dictionary<string, StreamGeometryPage> _prepared = new(StringComparer.Ordinal);
     private readonly Dictionary<Key, Resident> _resident = [];
     private readonly Dictionary<Key, float> _wanted = [];
@@ -130,9 +132,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     internal bool IsStopped => _stopTask is { IsCompletedSuccessfully: true };
     internal int SelectionNodeLimit { get; }
     internal bool SharedInstances { get; }
+    internal PbrResidencyInitializationStatistics InitializationStatistics { get; }
 
     public PbrStreamResidency(PbrSceneStream source, StreamPageArena arena, PbrStreamingSettings settings, int[] materialBatches)
     {
+        var started = Stopwatch.GetTimestamp();
         if (settings.UploadBytesPerFrame < 16 || settings.UploadBytesPerFrame % 16 != 0)
             throw new ArgumentOutOfRangeException(nameof(settings), "Streaming upload budget must be positive and 16-byte aligned.");
         if (settings.MaximumSelectionNodesPerView != 0 && settings.MaximumSelectionNodesPerView < 1024)
@@ -145,7 +149,8 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         SelectionNodeLimit = settings.MaximumSelectionNodesPerView == 0
             ? checked((int)System.Math.Max(1024, selectionNodes)) : settings.MaximumSelectionNodesPerView;
         _instances = source.Instances.ToArray();
-        _pages = source.Pages;
+        var compactRaster = source.CanPrepareRasterGeometry(settings.DecodedBytes);
+        _pages = source.GetPreparationPages(compactRaster);
         _pageIndices = _pages.Select((p, i) => (p.Id, Index: i)).ToDictionary(p => p.Id, p => p.Index, StringComparer.Ordinal);
         _canonicalPages = Enumerable.Range(0, _pages.Length).ToArray();
         if (SharedInstances) {
@@ -161,8 +166,9 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             }
         }
         InitializeBudgetLayout();
-        _requests = new(source.ReadPageAsync, static r => checked((int)r.Data.PayloadBytes),
-            2 * MeshVirtualPageData.MaximumEncodedBytes, settings.MaximumRequests, settings.DecodedBytes);
+        _requests = new((id, token) => source.ReadPreparedPageAsync(id, token, compactRaster), static r => r.DecodedBytes,
+            compactRaster ? checked((int)source.MaximumWorkerPagePreparationBytes) : source.MaximumPagePreparationBytes,
+            settings.MaximumRequests, settings.DecodedBytes);
         _norms = new float[source.Instances.Length];
         for (var i = 0; i < _norms.Length; i++) _norms[i] = PbrGpuScene.TransformNorm(source.Instances.Span[i].Transform);
         _bounds = new Aabb[source.Instances.Length][];
@@ -170,6 +176,11 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         var order = Enumerable.Range(0, source.Instances.Length)
             .OrderBy(i => source.Materials.Span[source.Instances.Span[i].MaterialIndex].DoubleSided)
             .ThenBy(i => materialBatches[source.Instances.Span[i].MaterialIndex]);
+        var layoutComplete = Stopwatch.GetTimestamp();
+        long packingTicks = 0, uploadTicks = 0, rootVertices = 0, rootTriangles = 0; var rootPages = 0;
+        var rootAllocated = GC.GetTotalAllocatedBytes(false);
+        var rootGen0 = GC.CollectionCount(0); var rootGen1 = GC.CollectionCount(1); var rootGen2 = GC.CollectionCount(2);
+        long maximumUploadTicks = 0;
         foreach (var i in order) {
             var instance = source.Instances.Span[i];
             var tree = source.Hierarchies![instance.AssetIndex];
@@ -191,19 +202,36 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                         var page = source.ResidentRoots[id];
                         if (!arena.TryReserve((uint)page.VertexCount, (uint)page.TriangleCount, out var allocation))
                             throw new InvalidOperationException("Resident roots cannot fit in the geometry arena.");
+                        var packingStarted = Stopwatch.GetTimestamp();
                         var upload = arena.Prepare(page, allocation,
                             SharedInstances ? float4x4.identity : instance.Transform,
                             SharedInstances ? 0u : (uint)i,
                             SharedInstances ? 1 : instance.MaterialIndex + 1);
+                        packingTicks += Stopwatch.GetTimestamp() - packingStarted;
+                        var uploadStarted = Stopwatch.GetTimestamp();
                         while (!upload.Complete) arena.Advance(upload, uint.MaxValue);
-                        _resident.Add(key, new(allocation, true, 0));
+                        var pageUploadTicks = Stopwatch.GetTimestamp() - uploadStarted;
+                        uploadTicks += pageUploadTicks;
+                        maximumUploadTicks = System.Math.Max(maximumUploadTicks, pageUploadTicks);
+                        rootPages++; rootVertices += page.VertexCount; rootTriangles += page.TriangleCount;
+                        _resident.Add(key, new(allocation, AcquiredPageShape(key, page), true, 0));
                         _rootBytes += page.UploadBytes;
                     }
                     var draw = Draw(i, node, part, _resident[key].Allocation);
                     _roots.Add(draw);
                 }
         }
+        var rootsComplete = Stopwatch.GetTimestamp();
         if (!settings.GpuTraversal) EnsureCpuSelection();
+        var complete = Stopwatch.GetTimestamp();
+        static double Ms(long ticks) => ticks * 1000d / Stopwatch.Frequency;
+        InitializationStatistics = new(Ms(layoutComplete - started), Ms(packingTicks), Ms(uploadTicks),
+            Ms(rootsComplete - layoutComplete - packingTicks - uploadTicks), Ms(complete - rootsComplete),
+            rootPages, rootVertices, rootTriangles, _rootBytes, Ms(complete - started)) {
+                MaximumRootUploadMilliseconds = Ms(maximumUploadTicks), RootAllocatedBytes = GC.GetTotalAllocatedBytes(false) - rootAllocated,
+                RootGen0Collections = GC.CollectionCount(0) - rootGen0, RootGen1Collections = GC.CollectionCount(1) - rootGen1,
+                RootGen2Collections = GC.CollectionCount(2) - rootGen2
+            };
     }
 
     private void EnsureCpuSelection()
@@ -301,7 +329,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
     }
 
     public void Select(float4x4 vp, uint width, uint height, float error, FrustumCuller culler,
-        List<PbrGpuScene.Draw> output)
+        List<PbrGpuScene.Draw> output, bool mainView = false)
     {
         _recoveryCpuInput = true;
         EnableBudgetAdmission();
@@ -310,7 +338,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         if (_cuts.TryGetValue(view, out var cached) && cached.Complete && cached.Revision == Revision) {
             foreach (var key in cached.Used) Touch(key);
             foreach (var pair in cached.Wanted) Demand(pair.Key, pair.Value);
-            foreach (var pair in cached.Requests) RequestChild(pair.Key, pair.Value);
+            foreach (var pair in cached.Requests) RequestChild(pair.Key, pair.Value, mainView: mainView);
             output.AddRange(cached.Draws);
             _cuts[view] = cached with { Frame = _clock };
             return;
@@ -338,7 +366,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 if (groupCuts is not null && groupCuts.TryGetValue(group, out var cut) && cut.Revision == group.Revision) {
                     foreach (var key in cut.Used) Touch(key);
                     foreach (var pair in cut.Wanted) Demand(pair.Key, pair.Value);
-                    foreach (var pair in cut.Requests) RequestChild(pair.Key, pair.Value);
+                    foreach (var pair in cut.Requests) RequestChild(pair.Key, pair.Value, mainView: mainView);
                     output.AddRange(cut.Draws);
                     continue;
                 }
@@ -374,7 +402,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 _viewWanted = allWanted;
                 _viewRequests = allRequests;
                 foreach (var pair in wanted) Demand(pair.Key, pair.Value);
-                foreach (var pair in requests) RequestChild(pair.Key, pair.Value);
+                foreach (var pair in requests) RequestChild(pair.Key, pair.Value, mainView: mainView);
             }
         }
         if (!_cuts.ContainsKey(view) && _cuts.Count >= 8) {
@@ -416,7 +444,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                 for (var c = node.FirstChild; c < node.FirstChild + node.ChildCount; c++) {
                     if (!culler.Intersects(_bounds[instanceIndex][c])) continue;
                     visibleChildren++;
-                    RequestChild(new(SharedInstances ? -1 : instanceIndex, instance.AssetIndex, c), priority);
+                    RequestChild(new(SharedInstances ? -1 : instanceIndex, instance.AssetIndex, c), priority, mainView: mainView);
                     foreach (var part in tree.GetPages(tree.Nodes[c])) {
                         var key = PageKey(instanceIndex, part.Page);
                         if (!IsAdmitted(key)) { complete = false; continue; }
@@ -527,7 +555,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     if (_resident.ContainsKey(candidate.Key) || !_requests.TryGetReady(id, out var record))
                         continue;
                     if (!_prepared.TryGetValue(id, out var page)) {
-                        try { page = _source.UsePage(id, record!); _prepared.Add(id, page); }
+                        try { page = _source.UsePreparedPage(id, record!); _prepared.Add(id, page); }
                         catch { if (_recovery is { Started: true }) AbortRecovery(true); throw; }
                     }
                     if (!Reserve(candidate.Key, page, out var allocation)) {
@@ -543,7 +571,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
                     }
                     try {
                         _requests.BeginInstall(id);
-                        _upload = new(candidate.Key, _arena.Prepare(page!, allocation, transform,
+                        _upload = new(candidate.Key, AcquiredPageShape(candidate.Key, page), _arena.Prepare(page!, allocation, transform,
                             SharedInstances ? 0u : (uint)candidate.Key.Instance, material));
                     }
                     catch {
@@ -559,7 +587,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
             try { _uploaded += _arena.Advance(active.Upload, _settings.UploadBytesPerFrame - _uploaded); }
             catch { if (_recovery is { Started: true }) AbortRecovery(true); throw; }
             if (!active.Upload.Complete) break;
-            _resident.Add(active.Key, new(active.Upload.Allocation, false, _clock));
+            _resident.Add(active.Key, new(active.Upload.Allocation, active.Shape, false, _clock));
             _installs++;
             Changed(active.Key);
             _upload = null;
@@ -589,12 +617,32 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
 
     private bool Reserve(Key key, StreamGeometryPage page, out StreamPageAllocation allocation)
     {
+        PageShape shape;
+        try { shape = AcquiredPageShape(key, page); }
+        catch {
+            if (_recovery is { Started: true }) AbortRecovery(false);
+            if (_relocationReservation is { } invalid && invalid.Key == key) {
+                _arena.Free(invalid.Allocation);
+                _relocationReservation = null;
+            }
+            throw;
+        }
         if (_recovery is { Started: true, RestoredEpoch: 0 } recovery) {
+            if (!recovery.Shapes.TryGetValue(key, out var promised) || shape != promised
+                || (recovery.Reservations.TryGetValue(key, out var heldRecovery) && !shape.Matches(heldRecovery))) {
+                AbortRecovery(false);
+                throw new InvalidDataException("Recovery page changed its exact acquired shape.");
+            }
             if (recovery.Reservations.Remove(key, out allocation)) return true;
             allocation = default;
             return false;
         }
         if (_relocationReservation is { } held && held.Key == key) {
+            if (shape != held.Shape || !shape.Matches(held.Allocation)) {
+                _arena.Free(held.Allocation);
+                _relocationReservation = null;
+                throw new InvalidDataException("Relocation target changed its exact acquired shape.");
+            }
             _relocationReservation = null;
             allocation = held.Allocation;
             return true;
@@ -624,7 +672,7 @@ internal sealed partial class PbrStreamResidency : IAsyncDisposable
         _evictionCandidates.Clear();
         if (!reserved) {
             TryBeginRelocation(key, page);
-            if (_relocation is null) TryBeginRecovery(key);
+            if (_relocation is null) TryBeginRecovery(key, shape);
         }
         return reserved;
     }

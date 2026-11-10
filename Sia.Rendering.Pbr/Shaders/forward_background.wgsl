@@ -5,7 +5,11 @@
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var environment: texture_cube<f32>;
 @group(0) @binding(2) var environment_sampler: sampler;
+#if FULL_PRECISION_HDR
+@group(0) @binding(3) var hdr: texture_storage_2d<rgba32float, write>;
+#else
 @group(0) @binding(3) var hdr: texture_storage_2d<rgba16float, write>;
+#endif
 @group(0) @binding(4) var depth: texture_depth_2d;
 @group(0) @binding(5) var depth_sampler: sampler_comparison;
 

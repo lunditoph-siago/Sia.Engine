@@ -9,21 +9,24 @@ namespace Sia.Engine.Rendering.Pbr;
 internal sealed unsafe partial class PbrView
 {
     private PbrGpuSelection? _selection;
-    private RenderGraphBufferKey _streamWorkKey, _streamArgsKey, _streamDispatchKey, _streamFeedbackKey;
+    private RenderGraphBufferKey _streamWorkKey, _streamArgsKey, _streamDispatchKey, _streamFeedbackKey, _streamShadowCutsKey;
 
     internal PbrGpuSelection? Selection => _selection;
 
     private void InitializeGpuSelection()
     {
         if (_owner.Scene.Streaming?.Hierarchy is not { } hierarchy) return;
-        _selection = new(_gpuFrame, hierarchy, _owner.Pipelines.StreamWorkLayout, _owner.Settings.ViewBytes - _gpu.Bytes);
+        _selection = new(_gpuFrame, hierarchy, _owner.Pipelines.StreamWorkLayout, _owner.Settings.ViewBytes - _gpu.Bytes,
+            checked((int)_shadowLayers));
         _streamWorkKey = new(_prefix + "stream-work");
         _streamArgsKey = new(_prefix + "stream-args");
         _streamDispatchKey = new(_prefix + "stream-dispatch");
         _streamFeedbackKey = new(_prefix + "stream-feedback");
+        _streamShadowCutsKey = new(_prefix + "stream-shadow-cuts");
         _sceneBuffers.Add((_streamWorkKey, _selection.Work, RenderGraphBufferUsage.Storage));
         _sceneBuffers.Add((_streamArgsKey, _selection.Arguments, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopySource));
         _sceneBuffers.Add((_streamFeedbackKey, _selection.Feedback, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.CopySource));
+        _sceneBuffers.Add((_streamShadowCutsKey, _selection.ShadowCuts, RenderGraphBufferUsage.Storage));
         _sceneBuffers.Add((new(_prefix + "stream-nodes"), hierarchy.Nodes, RenderGraphBufferUsage.Storage));
         _sceneBuffers.Add((new(_prefix + "stream-parts"), hierarchy.Parts, RenderGraphBufferUsage.Storage));
         _sceneBuffers.Add((new(_prefix + "stream-residency"), hierarchy.Residency, RenderGraphBufferUsage.Storage));
@@ -50,6 +53,7 @@ internal sealed unsafe partial class PbrView
         => ReadStreamInputs(pass).ReadWrite(_streamWorkKey, RenderGraphBufferUsage.Storage)
             .ReadWrite(_streamArgsKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect)
             .ReadWrite(_streamDispatchKey, RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination)
+            .ReadWrite(_streamShadowCutsKey, RenderGraphBufferUsage.Storage)
             .ReadWrite(_streamFeedbackKey, RenderGraphBufferUsage.Storage);
 
     private RenderGraphPassDeclarationBuilder ReadStreamWork(RenderGraphPassDeclarationBuilder pass)
@@ -70,14 +74,14 @@ internal sealed unsafe partial class PbrView
         if (_selection is not null)
             graph.UsePass(new(_prefix + "stream-select"), "pbr-stream-hierarchy", dependency,
                 static (in d, p) => d.View.WriteStreamWork(d.View.ReadTiming(p)),
-                context => _selection.SelectNodes(context.CommandEncoder, 7), RenderGraphPassKind.Compute);
+                context => _selection.SelectNodes(context.CommandEncoder, _selection.MainViewIndex), RenderGraphPassKind.Compute);
         TimingMarker(ref graph, dependency, 3);
         if (_selection is not null)
             graph.UsePass(new(_prefix + "stream-expand"), "pbr-stream-expand", dependency,
                 static (in d, p) => d.View.ReadStreamInputs(d.View.ReadTiming(p))
                     .ReadWrite(d.View._streamWorkKey, RenderGraphBufferUsage.Storage)
                     .Read(d.View._streamArgsKey, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Indirect),
-                context => _selection.ExpandTriangles(context.CommandEncoder, 7), RenderGraphPassKind.Compute);
+                context => _selection.ExpandTriangles(context.CommandEncoder, _selection.MainViewIndex), RenderGraphPassKind.Compute);
         TimingMarker(ref graph, dependency, 4);
     }
 
@@ -99,7 +103,7 @@ internal sealed unsafe partial class PbrView
         var selection = _selection!;
         Wgpu.SetBindGroup(pass, 0, _rasterGroup.GetWgpu<WGPUBindGroup>());
         Wgpu.SetBindGroup(pass, 1, _owner.Scene.Group.GetWgpu<WGPUBindGroup>());
-        Wgpu.SetBindGroup(pass, 2, selection.RasterGroup(shadow ? (int)layer : 7).GetWgpu<WGPUBindGroup>());
+        Wgpu.SetBindGroup(pass, 2, selection.RasterGroup(shadow ? (int)layer : selection.MainViewIndex).GetWgpu<WGPUBindGroup>());
         Wgpu.SetRenderPipeline(pass, (shadow ? _owner.Pipelines.StreamShadow : _owner.Pipelines.StreamRaster).GetWgpu<WGPURenderPipeline>());
         Wgpu.DrawIndirect(pass, selection.Arguments.GetWgpu<WGPUBuffer>(), 0);
         Wgpu.SetRenderPipeline(pass, (shadow ? _owner.Pipelines.StreamShadowDouble : _owner.Pipelines.StreamRasterDouble).GetWgpu<WGPURenderPipeline>());

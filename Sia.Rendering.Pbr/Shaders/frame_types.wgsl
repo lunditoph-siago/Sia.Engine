@@ -1,7 +1,7 @@
 #define_import_path pbr/frame_types
 
 struct Directional {
-    direction: vec4<f32>,
+    direction: vec4<f32>, // xyz light-ray direction; w directional constant receiver bias in world units
     radiance: vec4<f32>
 }
 
@@ -17,6 +17,6 @@ struct Frame {
     depth: vec4<f32>, // logarithmic cluster scale/bias, physical-to-HDR factor, stored-cube-to-physical factor
     counts: vec4<u32>,
     shadow: vec4<u32>,
-    splits: vec4<f32>,
+    splits: vec4<f32>, // xyz cascade distances; w directional slope receiver bias in world units
     directional: array<Directional, 4>,
 }

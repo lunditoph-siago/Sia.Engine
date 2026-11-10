@@ -147,6 +147,7 @@ internal sealed partial class SceneExampleApp
     }
 
     private PbrSceneStream? _materialStream;
+    private bool _pagedRasterStreaming;
     private PbrRasterScene? _rasterScene;
     private PbrBvhScene? _traceScene;
     private int _materialInstanceCount;
@@ -169,6 +170,7 @@ internal sealed partial class SceneExampleApp
             case PbrSceneFiles.PreparedMixed mixed: {
                 var acquired = PbrSceneFiles.AcquireMixed(_renderWorld!.Entities, mixed);
                 _assetRoot = acquired.Root; _materialStream = acquired.Stream; _traceScene = acquired.Trace;
+                _pagedRasterStreaming = mixed.RasterPages.Count != 0;
                 _materialInstanceCount = acquired.Stream.SourceInstanceCount;
                 break;
             }
@@ -211,11 +213,17 @@ internal sealed partial class SceneExampleApp
             ExposureCompensation = _options.ExposureCompensation,
             AutoExposure = _options.AutoExposure ? new PbrAutoExposureSettings() : null,
             BakedEnvironment = _bakedEnvironment,
+            DisplayTransform = _displayTransform,
             ReflectionCaptures = _captureInputs ?? [],
             Lightmaps = _lightmapInput,
             TraceScene = _traceScene,
             TargetPixelError = _options.Quality == RenderQuality.Low ? preset.TargetPixelError : BunnyPixelError,
             ShadowTexelError = _options.Quality == RenderQuality.Low ? preset.ShadowTexelError : BunnyPixelError,
+            Streaming = _pagedRasterStreaming ? preset.Streaming with {
+                GpuTraversal = _options.Quality != RenderQuality.Low && preset.Streaming.GpuTraversal,
+                DecodedBytes = 32L * 1024 * 1024,
+                MaximumSelectionNodesPerView = _options.Quality == RenderQuality.Low ? 0 : preset.Streaming.MaximumSelectionNodesPerView
+            } : preset.Streaming,
         };
         _sceneRenderer = _rasterScene is { } raster ? new PbrRenderer(in frame, raster, _surfaceFormat, settings) { DebugMode = _bunnyDebugMode }
             : new PbrRenderer(in frame, _materialStream!, _surfaceFormat, settings) { DebugMode = _bunnyDebugMode };
@@ -243,6 +251,7 @@ internal sealed partial class SceneExampleApp
 
     private LightingFiles.Prepared? _preparedLighting;
     private IblEnvironmentAsset? _bakedEnvironment;
+    private DisplayTransformData? _displayTransform;
     private LightmapFiles.Prepared? _preparedLightmaps;
     private PbrLightmapInput? _lightmapInput;
     private ReflectionCaptureFiles.Prepared[]? _preparedCaptures;
@@ -270,10 +279,12 @@ internal sealed partial class SceneExampleApp
     private void AcquireLightingAssets()
     {
         if (_preparedLighting is not { } prepared) return;
-        if (prepared.Environment is null) { _preparedLighting = null; return; }
+        if (prepared.Environment is null && prepared.DisplayTransform is null) { _preparedLighting = null; return; }
         if (!_assetRoot.IsValid) _assetRoot = RenderAssetUse.Create(_renderWorld!.Entities);
         var acquired = LightingFiles.Acquire(_renderWorld!.Entities, prepared, _assetRoot);
         _bakedEnvironment = acquired.IsValid ? acquired.Get<IblEnvironmentResource>().Data : null;
+        var display = LightingFiles.AcquireDisplayTransform(_renderWorld.Entities, prepared, _assetRoot);
+        _displayTransform = display.IsValid ? display.Get<DisplayTransformResource>().Data : null;
         _preparedLighting = null;
     }
 }

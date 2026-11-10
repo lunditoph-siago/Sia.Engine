@@ -17,7 +17,7 @@ internal static class PbrInstanceBatching
             var draw = draws[read];
             if (draw.InstanceCount != 1) throw new InvalidOperationException("Batching requires original per-instance draws.");
             var first = checked((uint)instances.Count);
-            var id = shadowLayer is { } layer ? checked(draw.Instance * 8) | layer : draw.Instance;
+            var id = shadowLayer is { } layer ? PbrPointShadow.PackInstance(draw.Instance, layer) : draw.Instance;
             instances.Add(new(id, draw.TriangleOffset));
             if (write != 0 && compare(draws[write - 1], draw) == 0) {
                 var previous = draws[write - 1];

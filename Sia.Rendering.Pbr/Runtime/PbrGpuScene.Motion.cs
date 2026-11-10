@@ -8,6 +8,7 @@ internal sealed partial class PbrGpuScene
     private PbrInstanceMotion? _instanceMotion;
     private PbrInstanceMotion? _pendingInstanceMotion;
     private ulong _instanceRevision;
+    internal ulong InstanceRevision => _instanceRevision;
     internal ulong GeometryRevision => _instanceRevision + (Streaming?.Revision ?? 0);
     internal uint[] ReflectionReceiverMap(ReadOnlySpan<PbrReflectionInstancePose> poses)
         => (_instanceMotion ?? throw new NotSupportedException("Reflection history requires authored local instance rows.")).ReflectionReceiverMap(poses);

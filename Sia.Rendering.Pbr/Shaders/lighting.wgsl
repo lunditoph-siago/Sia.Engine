@@ -12,6 +12,8 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
     let view_z = (frame.view * vec4<f32>(position, 1.0)).z;
     var color = vec3<f32>(0.0);
     for (var i = 0u; i < frame.counts.y; i++) {
+        // Keep authored light/shadow indices stable while avoiding a zero contribution.
+        if (all(frame.directional[i].radiance.rgb == vec3<f32>(0.0))) { continue; }
         if (dot(normal, -frame.directional[i].direction.xyz) <= 0.0) { continue; }
         var visibility = 1.0;
         if (i == frame.counts.z && frame.shadow.x != 0u) {
@@ -23,10 +25,13 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
                 layer = 2u;
             }
             layer = min(layer, frame.shadow.x - 1u);
-            visibility = shadow_visibility(layer, position, surface.geometry_normal);
+            visibility = directional_shadow_visibility(layer, position, surface.geometry_normal,
+                frame.directional[i].direction.xyz, vec2<f32>(frame.directional[i].direction.w, frame.splits.w));
         }
         color += visibility * direct_lighting(normal, view, -frame.directional[i].direction.xyz, frame.directional[i].radiance.rgb, base, metal, rough);
     }
+    // A directional-only frame has no local-light list to index or traverse.
+    if (frame.counts.x != 0u) {
     let slice = min(u32(max(0.0, log(max(-view_z, 0.00001)) * frame.depth.x - frame.depth.y)), frame.grid.z - 1u);
     let tile = min(vec2<u32>(pixel / vec2<f32>(frame.size.xy) * vec2<f32>(frame.grid.xy)), frame.grid.xy - 1u);
     let cell = tile.x + tile.y * frame.grid.x + slice * frame.grid.x * frame.grid.y;
@@ -38,9 +43,10 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
         if (!overflow) {
             index = clusters[start + 1u + i];
         }
+        let radiance = scene_data[index * 4u + 2u];
+        if (all(radiance.rgb == vec3<f32>(0.0))) { continue; }
         let p = scene_data[index * 4u];
         let d = scene_data[index * 4u + 1u];
-        let radiance = scene_data[index * 4u + 2u];
         let spot = scene_data[index * 4u + 3u];
         let delta = p.xyz - position;
         let distance = length(delta);
@@ -57,9 +63,15 @@ fn scene_lighting(surface: Surface, pixel: vec2<f32>) -> vec3<f32> {
             continue;
         }
         if (spot.z >= 0.0) {
-            attenuation *= shadow_visibility(u32(spot.z), position, surface.geometry_normal);
+            var layer = u32(spot.z);
+            if (spot.w > 0.5) {
+                layer += point_shadow_face(position - p.xyz);
+                attenuation *= point_shadow_visibility(layer, position, surface.geometry_normal, p.xyz, d.x, spot.xy);
+            }
+            else { attenuation *= shadow_visibility(layer, position, surface.geometry_normal); }
         }
         color += attenuation * direct_lighting(normal, view, direction, radiance.rgb, base, metal, rough);
+    }
     }
     return color + get_indirect_lighting(surface, view) * surface.ao + surface.emission;
 }

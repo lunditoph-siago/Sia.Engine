@@ -31,6 +31,8 @@ internal sealed unsafe partial class PbrView
             Import(ref graph, Key, Value, Usage);
         foreach (var (Key, Value) in _sceneTextures)
             Import(ref graph, Key, Value);
+        foreach (var table in _displayTables)
+            Import(ref graph, table.Key, table.Texture);
         if (_selection is not null)
             Import(ref graph, _streamDispatchKey, _selection.DispatchArguments,
                 RenderGraphBufferUsage.Indirect | RenderGraphBufferUsage.CopyDestination);
@@ -82,7 +84,7 @@ internal sealed unsafe partial class PbrView
             d.View.ReadFrame(p).Write(d.View._clustersKey, RenderGraphBufferUsage.Storage), Cull, RenderGraphPassKind.Compute);
         TimingMarker(ref graph, dependency, 1);
         graph.UsePass(new(_prefix + "shadow"), "pbr-shadow", dependency, static (in d, p) =>
-            (d.View._selection is null ? d.View.ReadFrame(p) : d.View.WriteStreamWork(d.View.ReadFrame(p)))
+            d.View.WriteAlphaShadowCommands(d.View._selection is null ? d.View.ReadFrame(p) : d.View.WriteStreamWork(d.View.ReadFrame(p)))
                 .ReadWrite(d.View._shadowKey, RenderGraphTextureUsage.RenderAttachment), Shadows);
         TimingMarker(ref graph, dependency, 2);
         if (UseForward) {
@@ -133,7 +135,7 @@ internal sealed unsafe partial class PbrView
         TimingMarker(ref graph, dependency, 10);
         BuildExposure(ref graph, dependency);
         graph.UsePass(new(_prefix + "output"), "pbr-output", dependency, static (in d, p) =>
-            d.View.ReadTiming(p).Read(d.View._outputUniformKey, RenderGraphBufferUsage.Uniform).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
+            d.View.ReadDisplayTransform(d.View.ReadTiming(p)).Read(d.View._outputUniformKey, RenderGraphBufferUsage.Uniform).Read(d.View._hdrKey, RenderGraphTextureUsage.TextureBinding).Write(d.Color, RenderGraphTextureUsage.RenderAttachment), Output);
         TimingMarker(ref graph, dependency, 11);
     }
 

@@ -31,12 +31,15 @@ public sealed record ProceduralSky
     }
 
     public float3 Evaluate(float3 direction)
+        => Evaluate(direction, math.normalize(SunDirection));
+
+    internal float3 Evaluate(float3 direction, float3 normalizedSunDirection)
     {
         var up = System.Math.Clamp(direction.y, -1.0f, 1.0f);
         var sky = math.lerp(Horizon, Zenith, System.Math.Clamp(up, 0.0f, 1.0f));
         var blend = System.Math.Clamp((up + 0.15f) / 0.2f, 0.0f, 1.0f);
         var radiance = math.lerp(Ground, sky, blend * blend * (3.0f - (2.0f * blend)));
-        var sun = MathF.Max(math.dot(direction, math.normalize(SunDirection)), 0.0f);
+        var sun = MathF.Max(math.dot(direction, normalizedSunDirection), 0.0f);
         return (radiance + (SunRadiance * MathF.Pow(sun, SunExponent))) * Intensity;
     }
 

@@ -29,6 +29,12 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void UpdateRenderGraph(WgpuHandle<WGPUTexture> surfaceTexture)
     {
+        var context = PrepareRenderGraphFrame();
+        UpdateRenderGraph(in context, surfaceTexture);
+    }
+
+    private RenderFeatureContext<RenderFrameContext> PrepareRenderGraphFrame()
+    {
         var frame = new GpuFrame(
             _sceneWorld!,
             _renderWorld!.Entities,
@@ -48,8 +54,13 @@ internal sealed unsafe partial class SceneExampleApp
             view,
             frameContext);
         _renderPipeline!.RunFrame(renderWorld, [featureContext]);
+        return featureContext;
+    }
+
+    private void UpdateRenderGraph(in RenderFeatureContext<RenderFrameContext> featureContext, WgpuHandle<WGPUTexture> surfaceTexture)
+    {
         var props = new RenderGraphProps(
-            _renderGraph!, _renderPipeline, featureContext,
+            _renderGraph!, _renderPipeline!, featureContext,
             _framebufferWidth, _framebufferHeight, _surfaceFormat, surfaceTexture,
             _sceneRenderer, _sceneRenderer?.ResourceRevision ?? 0);
 
@@ -63,11 +74,19 @@ internal sealed unsafe partial class SceneExampleApp
         _renderGraph!.PrepareBindings();
     }
 
-    private void ExecuteRenderGraph()
+    private void ExecuteRenderGraph(bool presentationCopy = false)
     {
         _renderGraphWorld!.ExecuteWgpuRenderGraph();
+#if !BROWSER
+        // Execute has returned after queue submission. A later error must not
+        // make this accepted work appear unsubmitted in the prototype ledger.
+        if (presentationCopy) _presentationGraphSubmissions++;
+#endif
         ThrowGpuError();
         _sceneRenderer?.NotifySubmittedFrame(_renderWorld!.FrameIndex);
+#if !BROWSER
+        if (presentationCopy) _presentationHistoryNotifications++;
+#endif
     }
 
     private static ReactiveNode RenderGraph(in RenderGraphProps props, ref Hooks hooks)
@@ -97,6 +116,10 @@ internal sealed unsafe partial class SceneExampleApp
 
     private void DisposeRenderGraph()
     {
+#if !BROWSER
+        if (_presentationResources is not null && !_shutdownComplete)
+            throw new InvalidOperationException("Complete scene streaming and queue shutdown before releasing the presentation output.");
+#endif
         if (_renderGraphMount is { } mount && mount.IsMounted) {
             mount.Unmount();
         }
@@ -104,6 +127,11 @@ internal sealed unsafe partial class SceneExampleApp
         _renderGraphMount = null;
         _renderGraph = null;
         _renderGraphWorld = null;
+#if !BROWSER
+        // The render-world resource entities outlive the graph, and both normal
+        // shutdown and a scene reload dispose the graph before those entities.
+        DisposePresentationOutput();
+#endif
     }
 
     private readonly record struct RenderGraphProps(

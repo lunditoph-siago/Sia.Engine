@@ -25,7 +25,7 @@ internal sealed partial class PbrView
         _drawInstances.Clear();
         PbrInstanceBatching.Compact(_opaque, _drawInstances, _sortInstanceBatches);
         PbrInstanceBatching.Compact(_transparent, _drawInstances, _sortInstanceBatches, preserveOrder: true);
-        for (uint layer = 0; layer < k_ShadowLayers; layer++)
+        for (uint layer = 0; layer < _shadowLayers; layer++)
             if (_shadowActive[layer] && _shadowDirty[layer])
                 PbrInstanceBatching.Compact(_shadowDraws[layer], _drawInstances, _sortInstanceBatches, shadowLayer: layer);
         if (_drawInstances.Count != 0)

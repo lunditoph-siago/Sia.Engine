@@ -17,3 +17,8 @@ fn rendering_aces_fitted(color: vec3<f32>) -> vec3<f32> {
 fn rendering_linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - .055, color * 12.92, color <= vec3<f32>(.0031308));
 }
+
+fn rendering_srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+    return select(pow(max((color + .055) / 1.055, vec3<f32>(0)), vec3<f32>(2.4)),
+        color / 12.92, color <= vec3<f32>(.04045));
+}

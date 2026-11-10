@@ -5,6 +5,7 @@ internal sealed partial class PbrStreamResidency
     private sealed class Recovery(Key target)
     {
         public readonly Key Target = target;
+        public readonly Dictionary<Key, PageShape> Shapes = [];
         public readonly Dictionary<Key, StreamPageAllocation> Reservations = [];
         public readonly HashSet<Key> Restoring = [];
         public readonly Dictionary<ChildRequest, float> Requests = [];
@@ -23,7 +24,7 @@ internal sealed partial class PbrStreamResidency
     internal void ObserveGpuFeedback(PbrGpuSelection source, long frame, long epoch)
         => _recoveryFeedback[source] = (frame, epoch);
 
-    private void TryBeginRecovery(Key target)
+    private void TryBeginRecovery(Key target, PageShape shape)
     {
         if (_recovery is not null || _upload is not null || _relocation is not null
             || _relocationReservation is not null || DateTime.UtcNow < _recoveryRetry) return;
@@ -31,7 +32,9 @@ internal sealed partial class PbrStreamResidency
             feedback.Frame >= 0 && _clock - feedback.Frame <= 8)) return;
         // End still owns this frame's prepared addresses. Withdraw only at the
         // next Begin, after those draws have been submitted or discarded.
+        if (!ValidPageShape(target, shape)) throw new InvalidDataException("Recovery target has no valid acquired shape.");
         _recovery = new(target);
+        _recovery.Shapes.Add(target, shape);
     }
 
     private void BeginRecoveryFrame()
@@ -52,8 +55,17 @@ internal sealed partial class PbrStreamResidency
         _budgetHasSignature = false;
         recovery.Failures = _requests.Statistics.Failed;
         recovery.Restoring.Add(recovery.Target);
-        foreach (var key in victims)
-            if (IsAdmitted(key)) recovery.Restoring.Add(key);
+        foreach (var key in victims) {
+            var resident = _resident[key];
+            if (!ValidPageShape(key, resident.Shape) || !resident.Shape.Matches(resident.Allocation))
+                throw new InvalidOperationException("Geometry recovery lost its resident shape proof before withdrawal.");
+            if (IsAdmitted(key)) {
+                recovery.Restoring.Add(key);
+                // Capture before freeing: descriptor bounds cannot reconstruct
+                // an exact Raster allocation after its compact data is retired.
+                recovery.Shapes.Add(key, resident.Shape);
+            }
+        }
         foreach (var key in victims) {
             _arena.Free(_resident[key].Allocation);
             _resident.Remove(key);
@@ -73,8 +85,8 @@ internal sealed partial class PbrStreamResidency
 
         void ReserveRecovery(Key key)
         {
-            var page = _pages[key.Page];
-            if (!_arena.TryReserve((uint)page.Vertices, (uint)page.Triangles, out var allocation))
+            var shape = recovery.Shapes[key];
+            if (!_arena.TryReserve(shape.Vertices, shape.Triangles, out var allocation))
                 throw new InvalidOperationException("Geometry recovery lost its complete restoration proof.");
             recovery.Reservations.Add(key, allocation);
         }
@@ -180,7 +192,8 @@ internal sealed partial class PbrStreamResidency
                 Node = _source.Hierarchies[child.Asset].Nodes[child.Node].Parent })).ToArray())
             _budgetRequests.Remove(child);
         foreach (var pair in recovery.Requests)
-            if (!_budgetRequests.TryGetValue(pair.Key, out var previous) || pair.Value > previous)
+            if (!_budgetMainRequests.Contains(pair.Key)
+                && (!_budgetRequests.TryGetValue(pair.Key, out var previous) || pair.Value > previous))
                 _budgetRequests[pair.Key] = pair.Value;
     }
 

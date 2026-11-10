@@ -1,10 +1,15 @@
 #define_import_path pbr/reflection_compose
 #import pbr/Common/reflection_storage
+#import pbr/Common/hdr
 
 @group(0) @binding(0) var opaque: texture_2d_array<f32>;
 @group(0) @binding(1) var specular_data: texture_2d_array<f32>;
 @group(0) @binding(2) var signal: texture_2d_array<f32>;
+#if FULL_PRECISION_HDR
+@group(0) @binding(3) var hdr: texture_storage_2d<rgba32float, write>;
+#else
 @group(0) @binding(3) var hdr: texture_storage_2d<rgba16float, write>;
+#endif
 @group(0) @binding(4) var<uniform> output_parameters: vec4<f32>;
 
 @compute @workgroup_size(8, 8)
@@ -17,5 +22,5 @@ fn compose_reflections(@builtin(global_invocation_id) id: vec3<u32>) {
         // Replace the exact current material's environment contribution; clip once, after signed composition.
         color += current.rgb * weight - baseline;
     }
-    textureStore(hdr, pixel, vec4<f32>(clamp(color * output_parameters.z, vec3<f32>(0), vec3<f32>(65504)), 1));
+    textureStore(hdr, pixel, vec4<f32>(max(pbr_store_hdr(color, output_parameters.z), vec3<f32>(0)), 1));
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Sia;
 using Sia.Engine.Camera;
 using Sia.Math;
@@ -36,6 +37,8 @@ public sealed record PbrRendererSettings
     public float ExposureCompensation { get; init; }
     /// <summary>Optional full-frame geometric-mean metering. Null retains manual exposure.</summary>
     public PbrAutoExposureSettings? AutoExposure { get; init; }
+    /// <summary>Optional authored scene-linear Rec.709 to display-encoded sRGB program. Null retains the built-in ACES output.</summary>
+    public DisplayTransformData? DisplayTransform { get; init; }
 
     public float TargetPixelError { get; init; }
     public float ShadowTexelError { get; init; }
@@ -108,6 +111,13 @@ public readonly record struct PbrFrameStatistics(
 public readonly record struct PbrReflectionTargets(RenderGraphTextureKey Radiance, RenderGraphTextureKey HitMetadata,
     RenderGraphTextureKey CurrentSpecular, RenderGraphTextureKey OpaqueColor);
 
+/// <summary>Physical PBR shading with independently budgeted scene and view resources.</summary>
+/// <remarks>
+/// Enable Float32Blendable when supported to retain full-range linear HDR through
+/// transparency and exposure. Otherwise the unscaled Half attachment admits a
+/// conservative radiance bound up to 32752 and rejects wider ranges explicitly.
+/// HDR attachments and transmission snapshots count against ViewBytes.
+/// </remarks>
 public sealed partial class PbrRenderer :
     IPrepareRenderFeature<RenderFrameContext>,
     IRenderGraphContributor<RenderFrameContext>,
@@ -184,9 +194,14 @@ public sealed partial class PbrRenderer :
     internal DiffuseProbeGpu? Probes { get; }
     internal PbrLightmapGpu? Lightmaps { get; }
     internal PbrRendererSettings Settings { get; }
+    internal PbrInitializationStatistics InitializationStatistics { get; private set; }
+    internal double ViewInitializationMilliseconds { get; private set; }
     internal PbrBvhTrace ReflectionTrace => _trace ?? throw new InvalidOperationException("Reflection poses require active trace input.");
     internal WGPUTextureFormat OutputFormat { get; }
     internal float HdrRadianceScale { get; }
+    internal bool FullPrecisionHdr { get; }
+    internal WGPUTextureFormat HdrFormat => FullPrecisionHdr ? WGPUTextureFormat.RGBA32Float : WGPUTextureFormat.RGBA16Float;
+    internal uint HdrBytesPerTexel => FullPrecisionHdr ? 16u : 8u;
 
     public PbrRenderer(in GpuFrame frame, PbrRasterScene scene, WGPUTextureFormat outputFormat,
         PbrRendererSettings? settings = null)
@@ -200,9 +215,13 @@ public sealed partial class PbrRenderer :
     private PbrRenderer(in GpuFrame frame, PbrSceneStream? stream, PbrRasterScene? raster,
         WGPUTextureFormat outputFormat, PbrRendererSettings? settings)
     {
+        var initializationStart = Stopwatch.GetTimestamp();
         if (stream is null && raster is null) throw new ArgumentNullException(nameof(stream));
         Settings = settings ?? new();
         Settings.AutoExposure?.Validate();
+        if (Settings.DisplayTransform is { } display
+            && (display.InputColorSpace != "Linear Rec.709" || display.OutputColorSpace != "sRGB"))
+            throw new NotSupportedException("PBR display transforms require Linear Rec.709 input and display-encoded sRGB output.");
         ExposureCompensation = Settings.ExposureCompensation;
         if (Settings.Reflections is { } reflectionSettings) {
             reflectionSettings.Validate();
@@ -211,6 +230,7 @@ public sealed partial class PbrRenderer :
             Settings = Settings with { ExportSurfaceData = true };
         }
         OutputFormat = outputFormat;
+        FullPrecisionHdr = Wgpu.HasFeature(frame.Device.GetWgpu<WGPUDevice>(), WGPUFeatureName.Float32Blendable);
         if (!float.IsFinite(Settings.TargetPixelError) || Settings.TargetPixelError < 0
             || !float.IsFinite(Settings.ShadowTexelError) || Settings.ShadowTexelError < 0)
             throw new ArgumentOutOfRangeException(nameof(settings));
@@ -236,8 +256,6 @@ public sealed partial class PbrRenderer :
         var captures = PbrReflectionCaptureGpu.Validate(Settings.ReflectionCaptures.Span,
             (stream?.Identity ?? raster!.TransportIdentity).Span,
             Settings.BakedEnvironment, Settings.ReflectionCaptureBytes);
-        HdrRadianceScale = Settings.BakedEnvironment?.CubeRadianceScale ?? 1;
-        foreach (var capture in captures) HdrRadianceScale = MathF.Max(HdrRadianceScale, capture.Environment.CubeRadianceScale);
         if (captures.Length != 0) {
             _staticInstanceIds = [];
             foreach (var capture in captures) foreach (var id in capture.Capture.StaticInstances) _staticInstanceIds.Add(id);
@@ -255,7 +273,7 @@ public sealed partial class PbrRenderer :
             foreach (var receiver in input.Set.Receivers) _staticInstanceIds.Add(receiver.Receiver.InstanceId);
             if (Settings.DynamicSceneGi) _ = input.Set.SelectReference(Settings.TraceScene!, Settings.SceneGiBytes);
         }
-        HdrRadianceScale = StaticRadianceScale(HdrRadianceScale, (stream?.Materials ?? raster!.Materials).Span);
+        HdrRadianceScale = StaticRadianceScale((stream?.Materials ?? raster!.Materials).Span);
         try {
             _queue = frame.Queue.GetWgpu<WGPUQueue>();
             var sceneGi = Settings.DynamicSceneGi || Settings.BakedProbes is not null;
@@ -263,19 +281,22 @@ public sealed partial class PbrRenderer :
             if (raster is null && stream is not null && Settings.Streaming.GpuTraversal && Settings.OpaquePath != PbrOpaquePath.Visibility)
                 throw new NotSupportedException("GPU stream traversal requires the Visibility path; select CPU traversal for Forward+ comparisons.");
             var rasterPositionTables=raster is not null && Wgpu.GetLimits(frame.Device.GetWgpu<WGPUDevice>()).MaxStorageBuffersPerShaderStage>=8;
+            var validationComplete = Stopwatch.GetTimestamp();
             Pipelines = new(frame, outputFormat, Settings.ExportSurfaceData, Settings.OpaquePath, sceneGi,
                 raster is null && stream is not null && Settings.Streaming.GpuTraversal, Settings.Lightmaps is not null, raster is not null, captures.Length != 0,
                 Settings.Reflections is not null, Settings.Reflections?.History is not null,rasterPositionTables,cpuStreamInstances,
-                Settings.AutoExposure is not null);
+                Settings.AutoExposure is not null, deferMaterialPipelines: true, displayTransform: Settings.DisplayTransform);
+            var pipelinesComplete = Stopwatch.GetTimestamp();
             Materials = new(frame, (stream?.Materials ?? raster!.Materials).Span, Pipelines.MaterialLayout, Settings.MaterialBytes, stream, Settings.TextureStreaming);
+            var materialsComplete = Stopwatch.GetTimestamp();
+            Pipelines.PrewarmMaterialPipelines(Materials.Groups.Length, (stream?.Materials ?? raster!.Materials).Span);
+            var materialPipelinesComplete = Stopwatch.GetTimestamp();
             Scene = raster is not null ? new(frame, raster, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches,Pipelines.RasterGeometryLayout,rasterPositionTables)
                 : new(frame, stream!, Pipelines.GeometryLayout, Settings.GeometryBytes, Materials.MaterialBatches, Settings.Streaming);
+            var geometryComplete = Stopwatch.GetTimestamp();
             Environment = new(frame, Settings.BakedEnvironment);
+            var environmentComplete = Stopwatch.GetTimestamp();
             if (captures.Length != 0) Captures = new(frame, captures, Settings.ReflectionCaptureBytes);
-            if (Settings.Lightmaps is { } lighting) {
-                var admission = Settings.LightmapStreaming;
-                Lightmaps = new(frame, lighting, lightmapRows!, admission);
-            }
             if (sceneGi) {
                 var dimensions = Settings.BakedProbes?.Dimensions ?? Settings.ProbeDimensions;
                 var probeBytes = DiffuseProbeGpu.FieldBytes(dimensions, Settings.DynamicSceneGi);
@@ -314,6 +335,22 @@ public sealed partial class PbrRenderer :
                     Settings.BakedEnvironment is null ? null : Environment,
                     Settings.DynamicSceneGi && Settings.Lightmaps?.Set.BakeSettings.Environment is not null ? Environment : null);
             }
+            // Commit the lightmap owner last: stopping it registers asynchronous
+            // queue completion, which a later constructor failure cannot await.
+            if (Settings.Lightmaps is { } lighting) {
+                var admission = Settings.LightmapStreaming;
+                Lightmaps = new(frame, lighting, lightmapRows!, admission);
+            }
+            var initializationComplete = Stopwatch.GetTimestamp();
+            static double Milliseconds(long start, long end) => (end - start) * 1000d / Stopwatch.Frequency;
+            InitializationStatistics = new(
+                Milliseconds(initializationStart, validationComplete),
+                Milliseconds(validationComplete, pipelinesComplete) + Milliseconds(materialsComplete, materialPipelinesComplete),
+                Milliseconds(pipelinesComplete, materialsComplete),
+                Milliseconds(materialPipelinesComplete, geometryComplete),
+                Milliseconds(geometryComplete, environmentComplete),
+                Milliseconds(environmentComplete, initializationComplete),
+                Milliseconds(initializationStart, initializationComplete));
         }
         catch {
             Lightmaps?.StopAsync().GetAwaiter().GetResult();
@@ -492,7 +529,9 @@ public sealed partial class PbrRenderer :
             throw new NotSupportedException("Dynamic probes currently require one view per renderer.");
         if (view.PersistentResources.TryGet<PbrView>(out var occupied) && !occupied!.IsDisposed)
             throw new InvalidOperationException("A render view may have only one PBR renderer owner.");
+        var initializationStart = Stopwatch.GetTimestamp();
         var created = new PbrView(this, view, frame);
+        ViewInitializationMilliseconds += Stopwatch.GetElapsedTime(initializationStart).TotalMilliseconds;
         _views.Add(created);
         view.PersistentResources.Set(created);
         return created;

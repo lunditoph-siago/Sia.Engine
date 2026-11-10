@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.ExceptionServices;
@@ -32,7 +33,6 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private bool _shutdownComplete;
     private bool _deviceDestroyed;
     private readonly ScenePipeline _pipeline;
-    private static string? _gpuError;
 
     private readonly SceneOptions _options;
 
@@ -81,6 +81,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             UpdateScene(deltaTime);
             RenderFrame();
             Wgpu.ProcessEvents(_instance);
+            ThrowGpuError();
         }
     }
 
@@ -107,17 +108,18 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         _surfaceFormat = surfaceInfo.Format;
         _alphaMode = surfaceInfo.AlphaMode;
         _presentMode = surfaceInfo.PresentMode;
+        _presentationSurfaceUsages = surfaceInfo.Usages;
 
         var required = WGPULimits.Default;
         ConfigureSceneLimits(ref required);
         var deviceDescriptor = CreateDeviceDescriptor();
         deviceDescriptor.RequiredLimits = &required;
-        var blockFeature = WGPUFeatureName.TextureCompressionBC;
-        if (RequiresBlockTextures()) {
-            deviceDescriptor.RequiredFeatureCount = 1;
-            deviceDescriptor.RequiredFeatures = &blockFeature;
+        var requiredFeatures = GetRequiredDeviceFeatures();
+        fixed (WGPUFeatureName* features = requiredFeatures) {
+            deviceDescriptor.RequiredFeatureCount = (nuint)requiredFeatures.Length;
+            deviceDescriptor.RequiredFeatures = features;
+            _device = Wgpu.RequestDevice(_adapter, deviceDescriptor);
         }
-        _device = Wgpu.RequestDevice(_adapter, deviceDescriptor);
         _queue = Wgpu.GetQueue(_device);
 
         InitializeRenderGraph();
@@ -139,7 +141,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             CompatibleSurface = Pointer(_surface),
         };
 
-    private static WGPUDeviceDescriptor CreateDeviceDescriptor()
+    private WGPUDeviceDescriptor CreateDeviceDescriptor()
     {
         var descriptor = WGPUDeviceDescriptor.Default;
 #if BROWSER
@@ -148,6 +150,16 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             (delegate* unmanaged[Cdecl]<WGPUDevice**, WGPUErrorType, WGPUStringView*, void*, void*, void>)&OnBrowserGpuError;
 #else
         descriptor.UncapturedErrorCallbackInfo.Callback = &OnGpuError;
+#endif
+        descriptor.UncapturedErrorCallbackInfo.Userdata1 = (void*)_gpuSession.Generation;
+        descriptor.DeviceLostCallbackInfo.Userdata1 = (void*)_gpuSession.Generation;
+        descriptor.DeviceLostCallbackInfo.Mode = WGPUCallbackMode.AllowSpontaneous;
+#if BROWSER
+        descriptor.DeviceLostCallbackInfo.Callback =
+            (delegate* unmanaged[Cdecl]<WGPUDevice**, WGPUDeviceLostReason, WGPUStringView, void*, void*, void>)
+            (delegate* unmanaged[Cdecl]<WGPUDevice**, WGPUDeviceLostReason, WGPUStringView*, void*, void*, void>)&OnBrowserDeviceLost;
+#else
+        descriptor.DeviceLostCallbackInfo.Callback = &OnDeviceLost;
 #endif
         return descriptor;
     }
@@ -163,6 +175,15 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             && WgpuUnsafe.wgpuAdapterHasFeature(Pointer(_adapter), WGPUFeatureName.CoreFeaturesAndLimits) == 0)
             throw new NotSupportedException("This content package requires WebGPU core for block-compressed mip streaming. Select an rgba8 package for this adapter.");
         return true;
+    }
+
+    private WGPUFeatureName[] GetRequiredDeviceFeatures()
+    {
+        var features = new List<WGPUFeatureName>(2);
+        if (RequiresBlockTextures()) features.Add(WGPUFeatureName.TextureCompressionBC);
+        if (Wgpu.HasFeature(_adapter, WGPUFeatureName.Float32Blendable))
+            features.Add(WGPUFeatureName.Float32Blendable);
+        return [.. features];
     }
 
     private void ConfigureSceneLimits(ref WGPULimits required)
@@ -193,26 +214,63 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnBrowserGpuError(WGPUDevice** device, WGPUErrorType type, WGPUStringView* message, void* userdata1, void* userdata2)
     {
-        ReportGpuError(type, *message);
+        ReportGpuError(type, *message, (nint)userdata1);
     }
 #else
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void OnGpuError(WGPUDevice** device, WGPUErrorType type, WGPUStringView message, void* userdata1, void* userdata2)
     {
-        ReportGpuError(type, message);
+        ReportGpuError(type, message, (nint)userdata1);
     }
 #endif
 
-    private static void ReportGpuError(WGPUErrorType type, WGPUStringView message)
+#if BROWSER
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnBrowserDeviceLost(WGPUDevice** device, WGPUDeviceLostReason reason, WGPUStringView* message, void* userdata1, void* userdata2)
+        => ReportDeviceLost(reason, *message, (nint)userdata1);
+#else
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static void OnDeviceLost(WGPUDevice** device, WGPUDeviceLostReason reason, WGPUStringView message, void* userdata1, void* userdata2)
+        => ReportDeviceLost(reason, message, (nint)userdata1);
+#endif
+
+    private static void ReportDeviceLost(WGPUDeviceLostReason reason, WGPUStringView message, nint generation)
     {
-        var error = $"WebGPU {type}: {Marshal.PtrToStringUTF8((nint)message.Data, checked((int)message.Length))}";
-        if (Interlocked.CompareExchange(ref _gpuError, error, null) is null)
-            Console.Error.WriteLine(error);
+        var session = FindGpuErrorSession(generation);
+        if (session is null) return;
+        // No native calls or exception propagation from this spontaneous callback.
+        try {
+            var timestamp = Stopwatch.GetTimestamp();
+            var utc = DateTimeOffset.UtcNow;
+            var length = checked((int)System.Math.Min((ulong)message.Length, 16ul * 1024));
+            var text = message.Data == null ? string.Empty : Marshal.PtrToStringUTF8((nint)message.Data, length) ?? string.Empty;
+            var loss = session.TryRecordLoss(reason.ToString(), reason == WGPUDeviceLostReason.Destroyed, text, utc, timestamp);
+            if (loss is null) return;
+            var error = $"WebGPU device lost ({loss.Reason}), session {loss.SessionGeneration}, at {loss.Utc:O}, stopwatch {loss.StopwatchTimestamp}: {loss.Message}";
+            session.TryRecordError(error);
+            try { Console.Error.WriteLine(error); } catch { }
+        }
+        catch { session.TryRecordError("WebGPU device lost; native loss diagnostics were unavailable."); }
+    }
+
+    private static void ReportGpuError(WGPUErrorType type, WGPUStringView message, nint generation)
+    {
+        var session = FindGpuErrorSession(generation);
+        if (session is null) return;
+        try {
+            var length = checked((int)System.Math.Min((ulong)message.Length, 16ul * 1024));
+            var text = message.Data == null ? string.Empty : Marshal.PtrToStringUTF8((nint)message.Data, length) ?? string.Empty;
+            var error = $"WebGPU {type}: {text}";
+            if (session.TryRecordError(error)) {
+                try { Console.Error.WriteLine(error); } catch { }
+            }
+        }
+        catch { session.TryRecordError("WebGPU uncaptured error; native diagnostics were unavailable."); }
     }
 
     private static void ThrowGpuError()
     {
-        if (Volatile.Read(ref _gpuError) is { } error)
+        if (Volatile.Read(ref _gpuCurrentSession)?.Error is { } error)
             throw new WgpuException(error);
     }
 
@@ -279,7 +337,7 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             var format = PickSurfaceFormat(in capabilities);
             var alphaMode = PickAlphaMode(in capabilities);
             var presentMode = PickPresentMode(in capabilities);
-            return new SurfaceInfo(format, alphaMode, presentMode);
+            return new SurfaceInfo(format, alphaMode, presentMode, capabilities.Usages);
         }
         finally {
             WgpuUnsafe.wgpuSurfaceCapabilitiesFreeMembers(capabilities);
@@ -357,6 +415,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
             AlphaMode = _alphaMode,
             PresentMode = _presentMode,
         };
+#if !BROWSER
+        if (UsePresentationCopy) configuration.Usage |= WGPUTextureUsage.CopyDst;
+#endif
         Wgpu.ConfigureSurface(_surface, in configuration);
         _surfaceConfigured = true;
 
@@ -366,36 +427,42 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
 
     private void RenderFrame()
     {
-        var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
-        if (surfaceTexture.Status is not (
-            WGPUSurfaceGetCurrentTextureStatus.SuccessOptimal
-            or WGPUSurfaceGetCurrentTextureStatus.SuccessSuboptimal)) {
-            if (surfaceTexture.HasTexture) {
-                Wgpu.Release(ref surfaceTexture);
-            }
-
-            if (surfaceTexture.Status is WGPUSurfaceGetCurrentTextureStatus.Outdated
-                or WGPUSurfaceGetCurrentTextureStatus.Lost) {
-                ResizeIfNeeded(force: true);
-                return;
-            }
-            if (surfaceTexture.Status == WGPUSurfaceGetCurrentTextureStatus.Timeout) {
-                return;
-            }
-
-            throw new WgpuException($"Surface texture acquisition failed with status {surfaceTexture.Status}.");
+        ThrowGpuError();
+#if !BROWSER
+        if (UsePresentationCopy) {
+            RenderPresentationCopyFrame();
+            return;
         }
+#endif
+        RenderFrameDirect();
+    }
 
+    private void RenderFrameDirect()
+    {
+        ThrowGpuError();
+        var surfaceTexture = Wgpu.AcquireSurfaceTexture(_surface);
         try {
+            ThrowGpuError();
+            if (surfaceTexture.Status is not (
+                WGPUSurfaceGetCurrentTextureStatus.SuccessOptimal
+                or WGPUSurfaceGetCurrentTextureStatus.SuccessSuboptimal)) {
+                if (surfaceTexture.Status is WGPUSurfaceGetCurrentTextureStatus.Outdated
+                    or WGPUSurfaceGetCurrentTextureStatus.Lost) {
+                    ResizeIfNeeded(force: true);
+                    return;
+                }
+                if (surfaceTexture.Status == WGPUSurfaceGetCurrentTextureStatus.Timeout) return;
+                throw new WgpuException($"Surface texture acquisition failed with status {surfaceTexture.Status}.");
+            }
             UpdateRenderGraph(surfaceTexture.Texture);
             ExecuteRenderGraph();
+            ThrowGpuError();
 #if !BROWSER
             Wgpu.PresentSurfaceOrThrow(_surface);
+            ThrowGpuError();
 #endif
         }
-        finally {
-            Wgpu.Release(ref surfaceTexture);
-        }
+        finally { Wgpu.Release(ref surfaceTexture); }
     }
 
 #if !BROWSER
@@ -442,8 +509,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
                 ThrowFailures();
             }
             var graphDisposed = Attempt(DisposeRenderGraph);
+            if (!graphDisposed) ThrowFailures();
             var sceneDisposed = Attempt(DisposeScene);
-            if (!graphDisposed || !sceneDisposed) ThrowFailures();
+            if (!sceneDisposed) ThrowFailures();
 
             Attempt(() => Wgpu.Release(ref _queue));
             Attempt(() => {
@@ -452,14 +520,16 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
                     _surfaceConfigured = false;
                 }
             });
-            if (_queue.IsNull && !_surfaceConfigured) {
+            // Unconfigure can retain a backend swapchain. Release it before
+            // explicit device destruction while the backend deleter is alive.
+            if (!_surfaceConfigured) Attempt(() => Wgpu.Release(ref _surface));
+            if (_queue.IsNull && !_surfaceConfigured && _surface.IsNull) {
                 if (!_device.IsNull && !_deviceDestroyed)
-                    Attempt(() => { Wgpu.DestroyDevice(_device); _deviceDestroyed = true; });
+                    Attempt(() => { _gpuSession.ExpectDestroy(); Wgpu.DestroyDevice(_device); _deviceDestroyed = true; });
                 if (_device.IsNull || _deviceDestroyed)
                     Attempt(() => Wgpu.Release(ref _device));
             }
             if (_device.IsNull) Attempt(() => Wgpu.Release(ref _adapter));
-            if (!_surfaceConfigured) Attempt(() => Wgpu.Release(ref _surface));
             if (_queue.IsNull && _device.IsNull && _adapter.IsNull && _surface.IsNull)
                 Attempt(() => Wgpu.Release(ref _instance));
 
@@ -485,7 +555,8 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
     private readonly record struct SurfaceInfo(
         WGPUTextureFormat Format,
         WGPUCompositeAlphaMode AlphaMode,
-        WGPUPresentMode PresentMode);
+        WGPUPresentMode PresentMode,
+        WGPUTextureUsage Usages);
 
     private void ReadAdapterDescription()
     {
@@ -493,6 +564,9 @@ internal sealed unsafe partial class SceneExampleApp : IDisposable
         if (WgpuUnsafe.wgpuAdapterGetInfo(Pointer(_adapter), &info) != WGPUStatus.Success)
             return;
         try {
+#if !BROWSER
+            _presentationBackend = info.BackendType;
+#endif
             static string Text(WGPUStringView text) => Marshal.PtrToStringUTF8((nint)text.Data, checked((int)text.Length)) ?? "";
             Console.WriteLine($"Adapter: {Text(info.Vendor)}; {Text(info.Device)}; {Text(info.Description)}; {info.BackendType}");
         }

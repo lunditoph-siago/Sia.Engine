@@ -8,7 +8,7 @@ public sealed partial class PbrRenderer
     private double _diffuseWeight, _specularWeight, _f0Weight, _directWeight;
     // Static shading inputs are immutable through this renderer's lifetime. This
     // admission uses declared receiver ranges, never forces page IO or residency.
-    private float StaticRadianceScale(float minimum, ReadOnlySpan<PbrMaterialAsset> materials)
+    private float StaticRadianceScale(ReadOnlySpan<PbrMaterialAsset> materials)
     {
         double specular = 0, irradiance = 0, lutX = 1, lutY = 0;
         if (Settings.BakedEnvironment is { } environment) {
@@ -67,7 +67,7 @@ public sealed partial class PbrRenderer
             || diffuseWeight > float.MaxValue / 4096.0 || specularWeight > float.MaxValue / 4096.0
             || _directWeight > float.MaxValue / 4096.0)
             throw new ArgumentException("Static PBR shading exceeds finite Float32 working admission.");
-        return StorageScale(peak, minimum, "Static");
+        return StorageScale(peak, "Static");
     }
 
     internal float FrameRadianceScale(double directRadiance)
@@ -82,7 +82,7 @@ public sealed partial class PbrRenderer
             var hitIrradiance = System.Math.Max(Environment.MaximumIrradiance, transport.MaximumIrradiance);
             peak += specularWeight * transport.SurfaceRadianceBound(hitIrradiance, directRadiance);
         }
-        return StorageScale(peak, MathF.Max(HdrRadianceScale, Environment.CubeRadianceScale), "Live");
+        return StorageScale(peak, "Live");
     }
 
     internal Aabb LightingBounds => Settings.Reflections is not null && _traceData is { } trace
@@ -94,17 +94,17 @@ public sealed partial class PbrRenderer
             throw new ArgumentException("Live direct lighting exceeds finite Float32 working admission.");
     }
 
-    private static float StorageScale(double peak, float minimum, string subject)
+    private float StorageScale(double peak, string subject)
     {
         if (!double.IsFinite(peak) || peak > float.MaxValue / 4096d)
             throw new ArgumentException(subject + " PBR shading exceeds finite Float32 working admission.");
-        // Keep one bit of storage headroom for filtering and finite arithmetic.
-        while (peak / minimum > 32752) {
-            if (minimum >= MathF.ScaleB(1, 100))
-                throw new ArgumentException(subject + " PBR shading exceeds the HDR attachment scale range.");
-            minimum *= 2;
-        }
-        return minimum;
+        // Keep physical radiance through opaque storage, alpha blending and exposure.
+        // A scene-wide Half scale derived from a conservative light bound can erase
+        // ordinary shaded surfaces even when their own radiance is small.
+        if (FullPrecisionHdr) return 1;
+        if (peak > 32752)
+            throw new NotSupportedException(subject + " PBR radiance requires Float32 HDR. Enable the Float32Blendable device feature; scaled Half storage would lose scene precision.");
+        return 1;
     }
 
     private static double CubePeak(IblEnvironmentAsset environment)

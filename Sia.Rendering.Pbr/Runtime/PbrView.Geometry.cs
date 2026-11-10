@@ -94,7 +94,7 @@ internal sealed unsafe partial class PbrView
             }
             if (shadow)
                 Wgpu.DrawIndexed(pass, draw.Count * 3, draw.InstanceCount, draw.FirstIndex,
-                    firstInstance: _instanceIds == default ? (draw.Instance << 3) | layer : draw.Instance);
+                    firstInstance: _instanceIds == default ? PbrPointShadow.PackInstance(draw.Instance, layer) : draw.Instance);
             else Wgpu.Draw(pass, draw.Count * 3, draw.InstanceCount, _instanceIds == default ? draw.First * 3 : 0,
                 firstInstance: draw.Instance);
         }

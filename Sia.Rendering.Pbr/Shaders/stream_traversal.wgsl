@@ -14,18 +14,27 @@
 @group(0) @binding(5) var<storage, read_write> args: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> feedback: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read> instances: array<Instance>;
+@group(0) @binding(8) var<storage, read_write> shadow_cuts: array<atomic<u32>>;
 
 @compute @workgroup_size(64)
 fn reset_feedback(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x < selection.table.z + arrayLength(&nodes)) { atomicStore(&feedback[id.x], 0u); }
 }
 
-@compute @workgroup_size(1)
-fn reset_draws() {
-    for (var i = 0u; i < 20u; i++) { atomicStore(&args[i], 0u); }
-    atomicStore(&args[0], STREAM_WORK_BLOCK_TRIANGLES * 3u);
-    atomicStore(&args[4], STREAM_WORK_BLOCK_TRIANGLES * 3u);
-    atomicStore(&args[6], selection.output.x * STREAM_WORK_BLOCK_TRIANGLES * 3u);
+@compute @workgroup_size(64)
+fn reset_draws(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let index = (group.y * 65535u + group.x) * 64u + lane;
+    if (index == 0u) {
+        for (var i = 0u; i < 20u; i++) { atomicStore(&args[i], 0u); }
+        atomicStore(&args[0], STREAM_WORK_BLOCK_TRIANGLES * 3u);
+        atomicStore(&args[4], STREAM_WORK_BLOCK_TRIANGLES * 3u);
+        atomicStore(&args[6], selection.output.x * STREAM_WORK_BLOCK_TRIANGLES * 3u);
+        if (selection.screen.w >= 2.0) { atomicStore(&args[19], 1u); }
+    }
+    if (selection.screen.w > 0.0) {
+        let words = selection.shadow.y;
+        if (index < words) { atomicStore(&shadow_cuts[selection.shadow.x * words + index], 0u); }
+    }
 }
 
 fn touch(n: Node) {
@@ -55,7 +64,10 @@ fn children_ready(n: Node, instance: Instance, priority: f32) -> bool {
         let child_id = n.links.x + c;
         let child = nodes[child_id];
         if (!node_visible(child, instance)) { continue; }
-        atomicMax(&feedback[selection.table.z + child_id], bitcast<u32>(importance));
+        // Main-camera demand outranks shadow-only demand; the low 31 bits keep
+        // the exact positive pixel-error ordering within either band.
+        let band = select(0u, 0x80000000u, selection.shadow.z != 0u);
+        atomicMax(&feedback[selection.table.z + child_id], bitcast<u32>(importance) | band);
         for (var p = 0u; p < child.links.w; p++) {
             let part = parts[child.links.z + p];
             let page = residency[part.x];
@@ -68,7 +80,7 @@ fn children_ready(n: Node, instance: Instance, priority: f32) -> bool {
     return ready;
 }
 
-fn emit(node: u32, n: Node, instance: u32, side: u32) {
+fn emit(node: u32, n: Node, instance: u32, side: u32, shadow_base: u32) {
     var count = 0u;
     var triangles = 0u;
     for (var p = 0u; p < n.links.w; p++) {
@@ -84,14 +96,47 @@ fn emit(node: u32, n: Node, instance: u32, side: u32) {
     let node_capacity = frontier_capacity();
     if (selected >= node_capacity) { atomicAdd(&args[10], 1u); return; }
     let record = selection.output.w + selected;
-    work[record] = vec4<u32>(node, instance, base + first, 0u);
+    // Source-instance domains were appended in source row order. Within each
+    // domain the ordinal is the immutable source-local node index.
+    let ordinal = shadow_base + (node - n.owner.y);
+    work[record] = vec4<u32>(node, instance, base + first, ordinal);
     atomicAdd(&args[15], triangles);
+    if (selection.screen.w > 0.0) {
+        // Each actual instance owns a disjoint source-tree domain. No hash or
+        // traversal ordering participates in depth-cache identity.
+        let words = selection.shadow.y;
+        if (ordinal / 32u >= words) { atomicAdd(&args[10], 1u); return; }
+        atomicOr(&shadow_cuts[selection.shadow.x * words + ordinal / 32u], 1u << (ordinal % 32u));
+    }
+}
+
+@compute @workgroup_size(64)
+fn compare_shadow_cut(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let index = (group.y * 65535u + group.x) * 64u + lane;
+    let words = selection.shadow.y;
+    if (index >= words) { return; }
+    let current = atomicLoad(&shadow_cuts[selection.shadow.x * words + index]);
+    let previous_at = selection.output.z * words + index;
+    if (current != atomicLoad(&shadow_cuts[previous_at])) { atomicOr(&args[19], 1u); }
+    atomicStore(&shadow_cuts[previous_at], current);
 }
 
 @compute @workgroup_size(1)
 fn prepare_expansion() {
     let capacity = frontier_capacity();
-    let count = min(atomicLoad(&args[12]), capacity);
+    var count = min(atomicLoad(&args[12]), capacity);
+    if (selection.screen.w > 0.0) {
+        let changed = atomicLoad(&args[19]) != 0u || atomicLoad(&args[10]) != 0u;
+        atomicStore(&args[20], 3u);
+        atomicStore(&args[21], select(0u, 1u, changed));
+        atomicStore(&args[22], 0u);
+        atomicStore(&args[23], 0u);
+        if (!changed) {
+            atomicStore(&args[1], 0u);
+            atomicStore(&args[5], 0u);
+            count = 0u;
+        }
+    }
     atomicStore(&args[16], min(count, 65535u));
     atomicStore(&args[17], (count + 65534u) / 65535u);
     atomicStore(&args[18], 1u);
@@ -103,6 +148,179 @@ fn frontier_capacity() -> u32 {
 
 fn frontier_base(odd: bool) -> u32 {
     return selection.output.w + frontier_capacity() * select(1u, 2u, odd);
+}
+
+// Traversal frontiers are dead once the selected cut is complete. Reuse one
+// for immutable counts and canonical keys before assigning dense work bases.
+// No physical page address participates in the equal-depth draw-order policy.
+@compute @workgroup_size(64)
+fn prepare_stable_work(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    if (lane != 0u) { return; }
+    let selected = group.y * 65535u + group.x;
+    if (selected >= min(atomicLoad(&args[12]), frontier_capacity())) { return; }
+    let entry = work[selection.output.w + selected];
+    let n = nodes[entry.x];
+    var records = 0u;
+    for (var p = 0u; p < n.links.w; p++) {
+        records += (parts[n.links.z + p].z + STREAM_WORK_BLOCK_TRIANGLES - 1u) / STREAM_WORK_BLOCK_TRIANGLES;
+    }
+    let side = select(0u, 1u, entry.z >= selection.output.x);
+    work[frontier_base(false) + selected] = vec4<u32>(records, side, entry.y, entry.x);
+}
+
+var<workgroup> stable_work_sums: array<vec2<u32>, 64>;
+
+@compute @workgroup_size(64)
+fn prefix_stable_work(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let selected = group.y * 65535u + group.x;
+    let count = min(atomicLoad(&args[12]), frontier_capacity());
+    let valid = selected < count;
+    var own = vec4<u32>(0u);
+    if (valid) { own = work[frontier_base(false) + selected]; }
+    var sum = 0u; var invalid = 0u;
+    for (var other = lane; other < count; other += 64u) {
+        let entry = work[frontier_base(false) + other];
+        if (valid && entry.y == own.y) {
+            if (entry.z < own.z || (entry.z == own.z && entry.w < own.w)) { sum += entry.x; }
+            if (other != selected && entry.z == own.z && entry.w == own.w) { invalid = 1u; }
+        }
+    }
+    stable_work_sums[lane] = vec2<u32>(sum, invalid);
+    workgroupBarrier();
+    for (var step = 32u; step != 0u; step /= 2u) {
+        if (lane < step) {
+            let right = stable_work_sums[lane + step];
+            stable_work_sums[lane] = vec2<u32>(stable_work_sums[lane].x + right.x, stable_work_sums[lane].y | right.y);
+        }
+        workgroupBarrier();
+    }
+    if (lane == 0u && valid) {
+        let first = stable_work_sums[0].x;
+        let capacity = select(selection.output.x, selection.output.y, own.y != 0u);
+        if (stable_work_sums[0].y != 0u || first > capacity || own.x > capacity - first) {
+            atomicAdd(&args[10], 1u); return;
+        }
+        let at = selection.output.w + selected;
+        let entry = work[at];
+        work[at] = vec4<u32>(entry.xy, select(0u, selection.output.x, own.y != 0u) + first, entry.w);
+    }
+}
+
+fn stable_scan_domain() -> u32 {
+    return selection.shadow.y * 32u;
+}
+
+// The main-view CPU eligibility check bounds D + ceil(D/64) by both dead
+// frontiers. Nothing in the persistent shadow-cut planes is modified here.
+@compute @workgroup_size(64)
+fn clear_stable_scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let domain = stable_scan_domain();
+    let records = domain + (domain + 63u) / 64u;
+    let block = group.y * 65535u + group.x;
+    if (block >= (records + 63u) / 64u) { return; }
+    let index = block * 64u + lane;
+    if (index < records) {
+        work[frontier_base(false) + index] = vec4<u32>(0u);
+    }
+    let words = selection.shadow.y;
+    if (index < words) { atomicStore(&shadow_cuts[selection.shadow.x * words + index], 0u); }
+}
+
+@compute @workgroup_size(64)
+fn count_stable_scan(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    if (lane != 0u) { return; }
+    let selected = group.y * 65535u + group.x;
+    if (selected >= min(atomicLoad(&args[12]), frontier_capacity())) { return; }
+    let entry = work[selection.output.w + selected];
+    if (entry.w >= stable_scan_domain()) { atomicAdd(&args[10], 1u); return; }
+    let words = selection.shadow.y;
+    let bit = 1u << (entry.w % 32u);
+    let previous = atomicOr(&shadow_cuts[selection.shadow.x * words + entry.w / 32u], bit);
+    if ((previous & bit) != 0u) { atomicAdd(&args[10], 1u); return; }
+    let n = nodes[entry.x];
+    var records = 0u;
+    for (var p = 0u; p < n.links.w; p++) {
+        records += (parts[n.links.z + p].z + STREAM_WORK_BLOCK_TRIANGLES - 1u) / STREAM_WORK_BLOCK_TRIANGLES;
+    }
+    let side = entry.z >= selection.output.x;
+    work[frontier_base(false) + entry.w] = vec4<u32>(select(records, 0u, side), select(0u, records, side), 0u, 0u);
+}
+
+@compute @workgroup_size(64)
+fn scan_stable_blocks(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let block = group.y * 65535u + group.x;
+    let domain = stable_scan_domain();
+    // Extra workgroups in a rectangular2D dispatch still cross all barriers,
+    // but do not multiply their padded block index into a u32 address.
+    var ordinal = domain;
+    if (block < (domain + 63u) / 64u) { ordinal = block * 64u + lane; }
+    var own = vec2<u32>(0u);
+    if (ordinal < domain) { own = work[frontier_base(false) + ordinal].xy; }
+    stable_work_sums[lane] = own;
+    workgroupBarrier();
+    for (var step = 1u; step < 64u; step *= 2u) {
+        var previous = vec2<u32>(0u);
+        if (lane >= step) { previous = stable_work_sums[lane - step]; }
+        // Snapshot every predecessor before any lane updates this scan step.
+        workgroupBarrier();
+        stable_work_sums[lane] += previous;
+        workgroupBarrier();
+    }
+    if (ordinal < domain) {
+        work[frontier_base(false) + ordinal] = vec4<u32>(stable_work_sums[lane] - own, own);
+    }
+    if (lane == 63u && block < (domain + 63u) / 64u) {
+        work[frontier_base(false) + domain + block] = vec4<u32>(stable_work_sums[lane], 0u, 0u);
+    }
+}
+
+@compute @workgroup_size(64)
+fn prefix_stable_blocks(@builtin(local_invocation_index) lane: u32) {
+    let domain = stable_scan_domain();
+    let blocks = (domain + 63u) / 64u;
+    let chunk = (blocks + 63u) / 64u;
+    let first = min(lane * chunk, blocks);
+    let end = min(first + chunk, blocks);
+    var sum = vec2<u32>(0u);
+    // Lanes own disjoint contiguous chunks. The only global writes here are
+    // local exclusive prefixes; the block totals.xy remain immutable.
+    for (var block = first; block < end; block++) {
+        let at = frontier_base(false) + domain + block;
+        let total = work[at].xy;
+        work[at] = vec4<u32>(total, sum);
+        sum += total;
+    }
+    stable_work_sums[lane] = sum;
+    workgroupBarrier();
+    for (var step = 1u; step < 64u; step *= 2u) {
+        var previous = vec2<u32>(0u);
+        if (lane >= step) { previous = stable_work_sums[lane - step]; }
+        workgroupBarrier();
+        stable_work_sums[lane] += previous;
+        workgroupBarrier();
+    }
+    let base = stable_work_sums[lane] - sum;
+    for (var block = first; block < end; block++) {
+        let at = frontier_base(false) + domain + block;
+        let entry = work[at];
+        work[at] = vec4<u32>(entry.xy, entry.zw + base);
+    }
+}
+
+@compute @workgroup_size(1)
+fn assign_stable_scan(@builtin(workgroup_id) group: vec3<u32>) {
+    let selected = group.y * 65535u + group.x;
+    if (selected >= min(atomicLoad(&args[12]), frontier_capacity()) || atomicLoad(&args[10]) != 0u) { return; }
+    let entry = work[selection.output.w + selected];
+    if (entry.w >= stable_scan_domain()) { return; }
+    let local = work[frontier_base(false) + entry.w];
+    let block = work[frontier_base(false) + stable_scan_domain() + entry.w / 64u].zw;
+    let side = entry.z >= selection.output.x;
+    let first = select(block.x + local.x, block.y + local.y, side);
+    let records = select(local.z, local.w, side);
+    let capacity = select(selection.output.x, selection.output.y, side);
+    if (first > capacity || records > capacity - first) { atomicAdd(&args[10], 1u); return; }
+    work[selection.output.w + selected] = vec4<u32>(entry.xy, select(0u, selection.output.x, side) + first, entry.w);
 }
 
 @compute @workgroup_size(64)
@@ -166,7 +384,7 @@ fn visit(index: u32, odd: bool) {
                     if (first <= capacity && n.links.y <= capacity - first) {
                         let next = frontier_base(!odd) + first;
                         for (var c = 0u; c < n.links.y; c++) {
-                            work[next + c] = vec4<u32>(n.links.x + c, entry.y, side, 0u);
+                            work[next + c] = vec4<u32>(n.links.x + c, entry.y, side, entry.w);
                         }
                         return;
                     }
@@ -176,7 +394,7 @@ fn visit(index: u32, odd: bool) {
             }
             else { atomicAdd(&args[11], 1u); }
         }
-        emit(current, n, entry.y, side);
+        emit(current, n, entry.y, side, entry.w);
     }
 }
 
@@ -188,3 +406,12 @@ fn traverse_even(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocat
 fn traverse_odd(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     visit((group.y * 65535u + group.x) * 64u + lane, true);
 }
+
+@vertex
+fn clear_shadow_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let corner = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
+    return vec4<f32>(corner * 2.0 - 1.0, 1.0, 1.0);
+}
+
+@fragment
+fn clear_shadow_depth() -> @builtin(frag_depth) f32 { return 1.0; }

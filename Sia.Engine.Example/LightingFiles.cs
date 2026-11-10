@@ -19,15 +19,17 @@ internal static partial class LightingFiles
         ArgumentNullException.ThrowIfNull(world);
         var authored = scene is { HasAuthoredLights: true };
         var lights = authored ? scene!.Lights : default;
-        var directionals = 0; var locals = 0;
+        var directionals = 0; var locals = 0; var shadowedPoints = 0;
         foreach (var light in lights) {
             if (light.Kind == PbrSceneLightKind.Point && light.CastShadows)
-                throw new NotSupportedException("Authored point-light shadows are not supported.");
+                shadowedPoints++;
             if (light.Kind == PbrSceneLightKind.Directional) directionals++;
             else if (math.any(light.Color * light.Intensity != 0)) locals++;
         }
         if (directionals > 4 || locals > 256)
             throw new ArgumentException("Authored scene exceeds four directional or 256 active local lights.");
+        if (shadowedPoints > 4)
+            throw new ArgumentException("Authored scene exceeds four shadowed point lights.");
         var environment = sky ?? new ProceduralSky { Intensity = authored ? 0 : .75f };
         var entities = new Entity[authored ? lights.Length : 4]; var count = 0;
         try {
@@ -41,7 +43,7 @@ internal static partial class LightingFiles
                 var transform = new GlobalTransform(new AffineTransform(light.Position, rotation));
                 entities[count++] = light.Kind switch {
                     PbrSceneLightKind.Directional => Create(new DirectionalLight(), color, transform, light.CastShadows),
-                    PbrSceneLightKind.Point => Create(new PointLight(light.Range), color, transform, false),
+                    PbrSceneLightKind.Point => Create(new PointLight(light.Range), color, transform, light.CastShadows),
                     PbrSceneLightKind.Spot => Create(new SpotLight(light.Range, light.InnerAngle, light.OuterAngle), color, transform, light.CastShadows),
                     _ => throw new ArgumentException("Unsupported authored light kind.")
                 };
@@ -54,6 +56,9 @@ internal static partial class LightingFiles
                 var spot = quaternion.LookRotation(math.normalize(new float3(0, 1, -.3f)), new(0, 0, 1));
                 entities[count++] = Create(new SpotLight(12, .3f, .6f), new(new(1, .9f, .75f), 18), new(new AffineTransform(new(2, 6, -5), spot)), true);
             }
+            // Capacity is fixed before any PBR view is created; no unused cube
+            // layers are allocated for the existing non-point-shadow scenes.
+            world.AcquireAddon<ShadowAtlasConfig>().MaxShadowedPointLights = authored ? shadowedPoints : 0;
             world.AcquireAddon<EnvironmentLighting>().Sky = environment;
             return entities;
         }
@@ -73,16 +78,49 @@ internal static partial class LightingFiles
     internal sealed record Prepared(IblEnvironmentRecord? Environment)
     {
         internal AssetContent<IblEnvironmentRecord>? EnvironmentContent { get; init; }
+        internal DisplayTransformRecord? DisplayTransform { get; init; }
     }
 
     internal static async Task<Prepared> PrepareAsync(string? environment, HttpClient http,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? displayTransform = null)
     {
         ArgumentNullException.ThrowIfNull(http); cancellationToken.ThrowIfCancellationRequested();
         var preparedEnvironment = environment is null ? null
             : await ReadEnvironmentAsync(environment, http, cancellationToken);
+        var preparedDisplay = displayTransform is null ? null
+            : await ReadDisplayTransformAsync(displayTransform, http, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        return new(preparedEnvironment);
+        return new(preparedEnvironment) { DisplayTransform = preparedDisplay };
+    }
+
+    private static async Task<DisplayTransformRecord> ReadDisplayTransformAsync(string path, HttpClient http,
+        CancellationToken cancellationToken)
+    {
+        using var input = await AssetInput.OpenAsync(path, http, cancellationToken);
+        var bytes = await AssetInput.ReadBoundedAsync(input, checked((int)DisplayTransformData.MaximumEncodedBytes), cancellationToken);
+        if (!MemoryMarshal.TryGetArray(bytes, out var segment))
+            throw new InvalidOperationException("Asset input must return an array-backed payload.");
+        DisplayTransformRecord Decode(CancellationToken token) {
+            token.ThrowIfCancellationRequested(); cancellationToken.ThrowIfCancellationRequested();
+            using var payload = new MemoryStream(segment.Array!, segment.Offset, segment.Count, writable: false);
+            return DisplayTransformRecord.Load(payload, path);
+        }
+#if BROWSER
+        return await Program.BrowserOwner.RunCpuAsync(Decode, cancellationToken);
+#else
+        return Decode(cancellationToken);
+#endif
+    }
+
+    internal static Entity AcquireDisplayTransform(World world, Prepared prepared, Entity owner)
+    {
+        ArgumentNullException.ThrowIfNull(world); ArgumentNullException.ThrowIfNull(prepared);
+        if (!owner.IsValid || !ReferenceEquals(owner.Host.World, world)
+            || Unsafe.IsNullRef(ref owner.GetOrNullRef<AssetMetadata>()))
+            throw new ArgumentException("Display owner must be an asset entity in the target World.", nameof(owner));
+        _ = world.GetAddon<AssetLibrary>();
+        AssetLibrary.RegisterAsset<DisplayTransformResource, DisplayTransformRecord>();
+        return prepared.DisplayTransform is { } display ? world.AcquireAsset(display, owner) : default;
     }
 
     private static async Task<IblEnvironmentRecord> ReadEnvironmentAsync(string path, HttpClient http,

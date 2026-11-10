@@ -20,10 +20,10 @@ internal sealed class PbrGpuSelection : IDisposable
 
     private readonly GpuResources _gpu;
     private readonly PbrGpuHierarchy _hierarchy;
-    private readonly Entity[] _configuration = new Entity[8];
-    private readonly Entity[] _groups = new Entity[8];
-    private readonly Entity[] _expansionGroups = new Entity[8];
-    private readonly Entity[] _rasterGroups = new Entity[8];
+    private readonly Entity[] _configuration;
+    private readonly Entity[] _groups;
+    private readonly Entity[] _expansionGroups;
+    private readonly Entity[] _rasterGroups;
     private readonly Slot[] _slots = new Slot[3];
     private readonly uint[] _latest;
     private readonly List<int> _activePages = [];
@@ -39,6 +39,11 @@ internal sealed class PbrGpuSelection : IDisposable
     public Entity Arguments { get; }
     public Entity DispatchArguments { get; }
     public Entity Feedback { get; }
+    internal Entity ShadowCuts { get; }
+    internal bool ShadowCacheEnabled => _shadowWords != 0;
+    internal string ShadowCacheStatus { get; }
+    private readonly uint _shadowWords;
+    private readonly uint _stableScanBlocks;
     public Entity CaptureBuffer => _capture < 0 ? default : _slots[_capture].Buffer;
 
     public ulong Bytes => _gpu.Bytes;
@@ -48,6 +53,8 @@ internal sealed class PbrGpuSelection : IDisposable
     public uint LimitedRefinements { get; private set; }
     public long FeedbackDropped { get; private set; }
     public long FeedbackFailures { get; private set; }
+    private Exception? _firstFeedbackFailure;
+    private long _firstFeedbackFailureFrame = -1;
     public int PendingReadbacks {
         get {
             var count = 0;
@@ -60,13 +67,22 @@ internal sealed class PbrGpuSelection : IDisposable
     public long FeedbackAge => _latestFrame < 0 ? -1 : _clock - _latestFrame;
 
     internal ReadOnlySpan<Entity> Configurations => _configuration;
+    internal int MainViewIndex { get; }
 
     private int FeedbackWords => checked((int)_hierarchy.PageCount + (int)_hierarchy.SourceNodeCount);
     private ulong FeedbackBytes => checked((ulong)FeedbackWords * sizeof(uint));
     private ulong ReadbackBytes => FeedbackBytes + 64;
 
-    public PbrGpuSelection(in GpuFrame frame, PbrGpuHierarchy hierarchy, Entity rasterLayout, ulong budget)
+    public PbrGpuSelection(in GpuFrame frame, PbrGpuHierarchy hierarchy, Entity rasterLayout, ulong budget,
+        int shadowLayers = PbrPointShadow.BaseLayers)
     {
+        if (shadowLayers is < PbrPointShadow.BaseLayers or > 31)
+            throw new ArgumentOutOfRangeException(nameof(shadowLayers));
+        MainViewIndex = shadowLayers;
+        _configuration = new Entity[shadowLayers + 1];
+        _groups = new Entity[shadowLayers + 1];
+        _expansionGroups = new Entity[shadowLayers + 1];
+        _rasterGroups = new Entity[shadowLayers + 1];
         _gpu = new(frame, budget);
         _hierarchy = hierarchy;
         _latest = new uint[checked(FeedbackWords + 16)];
@@ -75,12 +91,24 @@ internal sealed class PbrGpuSelection : IDisposable
             // Sharing the binding keeps the compute storage-buffer count unchanged.
             var workRecords = checked((ulong)hierarchy.SingleCapacity + hierarchy.DoubleCapacity
                 + ((ulong)hierarchy.NodeCapacity * 3));
+            var mandatoryBytes = PbrGpuHierarchy.SelectionBufferBytes(workRecords, FeedbackBytes,
+                (ulong)Marshal.SizeOf<PbrGpuHierarchy.Configuration>(), shadowLayers);
+            var cacheAvailable = PbrTextureStreamingPolicy.AvailableBytes(budget, mandatoryBytes, 16);
+            _shadowWords = PbrGpuHierarchy.ShadowCacheWords(hierarchy.ShadowNodeCount,
+                System.Math.Min(cacheAvailable, _gpu.Limits.MaxStorageBufferBindingSize), shadowLayers);
+            ShadowCacheStatus = ShadowCacheEnabled ? "enabled" : hierarchy.ShadowNodeCount > uint.MaxValue
+                ? "domain-overflow" : hierarchy.ShadowNodeCount == 0 ? "empty-domain"
+                : PbrGpuHierarchy.ShadowCacheWords(hierarchy.ShadowNodeCount, _gpu.Limits.MaxStorageBufferBindingSize, shadowLayers) == 0
+                    ? "storage-binding-limit" : "view-budget";
             Work = _gpu.Buffer(checked(workRecords * (ulong)Unsafe.SizeOf<uint4>()),
                 WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
-            Arguments = _gpu.Buffer(80, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
+            Arguments = _gpu.Buffer(ShadowCacheEnabled ? 96ul : 80ul, WGPUBufferUsage.Storage | WGPUBufferUsage.Indirect | WGPUBufferUsage.CopySrc);
             // A writable counter buffer cannot also supply this dispatch's indirect arguments.
             DispatchArguments = _gpu.Buffer(16, WGPUBufferUsage.Indirect | WGPUBufferUsage.CopyDst);
             Feedback = _gpu.Buffer(FeedbackBytes, WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
+            ShadowCuts = _gpu.Buffer(ShadowCacheEnabled ? (ulong)_shadowWords * (ulong)(shadowLayers + 1) * sizeof(uint) : 16ul,
+                WGPUBufferUsage.Storage | WGPUBufferUsage.CopySrc);
+            _stableScanBlocks = StableScanBlocks(_shadowWords, hierarchy.NodeCapacity);
             for (var i = 0; i < _groups.Length; i++) {
                 _configuration[i] = _gpu.Buffer((ulong)Marshal.SizeOf<PbrGpuHierarchy.Configuration>(),
                     WGPUBufferUsage.Uniform | WGPUBufferUsage.CopyDst);
@@ -91,7 +119,7 @@ internal sealed class PbrGpuSelection : IDisposable
                     GpuBinding.Buffer(0, _configuration[i]), GpuBinding.Buffer(1, hierarchy.Nodes),
                     GpuBinding.Buffer(2, hierarchy.Parts), GpuBinding.Buffer(3, hierarchy.Residency),
                     GpuBinding.Buffer(4, Work), GpuBinding.Buffer(5, Arguments), GpuBinding.Buffer(6, Feedback),
-                    GpuBinding.Buffer(7, hierarchy.Instances)
+                    GpuBinding.Buffer(7, hierarchy.Instances), GpuBinding.Buffer(8, ShadowCuts)
                 ]);
                 _expansionGroups[i] = GpuBinding.Group(_gpu, hierarchy.ExpansionLayout, [
                     GpuBinding.Buffer(0, _configuration[i]), GpuBinding.Buffer(1, hierarchy.Nodes),
@@ -124,6 +152,7 @@ internal sealed class PbrGpuSelection : IDisposable
         }
         foreach (var slot in _slots) {
             if (slot.Mapping is { IsCompleted: true } mapping) {
+                Exception? mappingFailure = null;
                 try {
                     mapping.GetAwaiter().GetResult();
                     if (AcceptFeedback(slot.Frame)) {
@@ -149,8 +178,23 @@ internal sealed class PbrGpuSelection : IDisposable
                         }
                     }
                 }
-                catch (Exception) { FeedbackFailures++; }
-                finally { Wgpu.UnmapBuffer(slot.Buffer.GetWgpu<WGPUBuffer>()); slot.Mapping = null; }
+                catch (Exception error) {
+                    mappingFailure = error;
+                    FeedbackFailures++;
+                    if (_firstFeedbackFailure is null) {
+                        _firstFeedbackFailure = error;
+                        _firstFeedbackFailureFrame = slot.Frame;
+                    }
+                    // A queue fence can report Success after device loss. Never turn an
+                    // aborted/invalid feedback map into apparently healthy rendering.
+                    throw new InvalidOperationException(
+                        $"GPU hierarchy feedback for frame {_firstFeedbackFailureFrame} failed.", _firstFeedbackFailure);
+                }
+                finally {
+                    try { Wgpu.UnmapBuffer(slot.Buffer.GetWgpu<WGPUBuffer>()); }
+                    catch when (mappingFailure is not null) { /* Preserve the first map/parse exception. */ }
+                    finally { slot.Mapping = null; }
+                }
                 if (_latest[FeedbackWords + 10] != 0)
                     throw new InvalidOperationException("GPU hierarchy work capacity invariant failed.");
             }
@@ -171,15 +215,17 @@ internal sealed class PbrGpuSelection : IDisposable
         if (_capture < 0) FeedbackDropped++;
     }
 
-    public void Configure(int view, float4x4 projection, uint width, uint height, float error, uint refinementLimit)
+    public void Configure(int view, float4x4 projection, uint width, uint height, float error, uint refinementLimit,
+        bool forceShadowUpdate = false)
     {
+        if ((uint)view >= (uint)_configuration.Length) throw new ArgumentOutOfRangeException(nameof(view));
         var lod = ProjectedGeometryError.PrepareLodProjection(projection, width, height);
         var value = new PbrGpuHierarchy.Configuration(projection,
             new(_hierarchy.RootBase, _hierarchy.RootCount, _hierarchy.PageCount, refinementLimit),
-            new(width, height, error, 0),
-            new(_hierarchy.SingleCapacity, _hierarchy.DoubleCapacity, view == 7 ? 0u : (uint)view,
+            new(width, height, error, view == MainViewIndex || !ShadowCacheEnabled ? 0 : forceShadowUpdate ? 2 : 1),
+            new(_hierarchy.SingleCapacity, _hierarchy.DoubleCapacity, view == MainViewIndex ? 0u : (uint)view,
                 checked(_hierarchy.SingleCapacity + _hierarchy.DoubleCapacity)),
-            lod.EyeNear, lod.ForwardPixels);
+            lod.EyeNear, lod.ForwardPixels, new((uint)MainViewIndex, _shadowWords, view == MainViewIndex ? 1u : 0u, 0));
         Wgpu.WriteBuffer<PbrGpuHierarchy.Configuration>(_gpu.Queue, _configuration[view].GetWgpu<WGPUBuffer>(), 0, [value]);
     }
 
@@ -189,7 +235,7 @@ internal sealed class PbrGpuSelection : IDisposable
     {
         var pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
         try {
-            Wgpu.SetBindGroup(pass, 0, _groups[7].GetWgpu<WGPUBindGroup>());
+            Wgpu.SetBindGroup(pass, 0, _groups[MainViewIndex].GetWgpu<WGPUBindGroup>());
             Wgpu.SetComputePipeline(pass, _hierarchy.ResetFeedback.GetWgpu<WGPUComputePipeline>());
             Wgpu.DispatchWorkgroups(pass, checked((uint)(((ulong)FeedbackWords + 63) / 64)));
         }
@@ -208,7 +254,8 @@ internal sealed class PbrGpuSelection : IDisposable
         try {
             Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
             Wgpu.SetComputePipeline(pass, _hierarchy.ResetDraws.GetWgpu<WGPUComputePipeline>());
-            Wgpu.DispatchWorkgroups(pass, 1);
+            var resetGroups = view < MainViewIndex && ShadowCacheEnabled ? (_shadowWords + 63) / 64 : 1;
+            Wgpu.DispatchWorkgroups(pass, System.Math.Min(resetGroups, 65535u), (resetGroups + 65534) / 65535);
             Wgpu.SetComputePipeline(pass, _hierarchy.SeedRoots.GetWgpu<WGPUComputePipeline>());
             Wgpu.DispatchWorkgroups(pass, (_hierarchy.RootCount + 63) / 64);
         }
@@ -234,10 +281,84 @@ internal sealed class PbrGpuSelection : IDisposable
         pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
         try {
             Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+            if (view < MainViewIndex && ShadowCacheEnabled) {
+                Wgpu.SetComputePipeline(pass, _hierarchy.CompareShadowCut.GetWgpu<WGPUComputePipeline>());
+                var groups = (_shadowWords + 63) / 64;
+                Wgpu.DispatchWorkgroups(pass, System.Math.Min(groups, 65535u), (groups + 65534) / 65535);
+            }
             Wgpu.SetComputePipeline(pass, _hierarchy.PrepareExpansion.GetWgpu<WGPUComputePipeline>());
             Wgpu.DispatchWorkgroups(pass, 1);
         }
         finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        if (view == MainViewIndex) StabilizeWork(encoder, view);
+    }
+
+    private void StabilizeWork(WgpuHandle<WGPUCommandEncoder> encoder, int view)
+    {
+        // The existing separate indirect buffer avoids binding writable args
+        // as indirect input in either stabilization dispatch.
+        Wgpu.CopyBufferToBuffer(encoder, Arguments.GetWgpu<WGPUBuffer>(), 64,
+            DispatchArguments.GetWgpu<WGPUBuffer>(), 0, 12);
+        if (_stableScanBlocks != 0) {
+            ScanStableWork(encoder, view);
+            return;
+        }
+        var pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
+        try {
+            Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+            Wgpu.SetComputePipeline(pass, _hierarchy.PrepareStableWork.GetWgpu<WGPUComputePipeline>());
+            Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+        }
+        finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
+        try {
+            Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+            Wgpu.SetComputePipeline(pass, _hierarchy.PrefixStableWork.GetWgpu<WGPUComputePipeline>());
+            Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+        }
+        finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+    }
+
+    // One vec4 per padded source ordinal and one per 64-ordinal block fit in
+    // the two dead frontiers. The disabled-cache 16B buffer is not a domain.
+    internal static uint StableScanBlocks(uint shadowWords, uint nodeCapacity)
+    {
+        var domain = (ulong)shadowWords * 32;
+        var blocks = (domain + 63) / 64;
+        return domain != 0 && domain + blocks <= uint.MaxValue - 63ul && domain + blocks <= (ulong)nodeCapacity * 2
+            ? (uint)blocks : 0;
+    }
+
+    private void ScanStableWork(WgpuHandle<WGPUCommandEncoder> encoder, int view)
+    {
+        // Shadow comparisons have already copied the scratch plane into the
+        // persistent layer cuts. Every later shadow selection clears scratch.
+        // Main selection owns the shared buffers through WriteStreamWork.
+        var domain = (ulong)_shadowWords * 32;
+        var clearGroups = checked((uint)((domain + _stableScanBlocks + 63) / 64));
+        Dispatch(_hierarchy.ClearStableScan, clearGroups);
+        Dispatch(_hierarchy.CountStableScan, 0);
+        Dispatch(_hierarchy.ScanStableBlocks, _stableScanBlocks);
+        Dispatch(_hierarchy.PrefixStableBlocks, 1);
+        Dispatch(_hierarchy.AssignStableScan, 0);
+
+        void Dispatch(Entity pipeline, uint groups)
+        {
+            var pass = Wgpu.BeginComputePass(encoder, WGPUComputePassDescriptor.Default);
+            try {
+                Wgpu.SetBindGroup(pass, 0, _groups[view].GetWgpu<WGPUBindGroup>());
+                Wgpu.SetComputePipeline(pass, pipeline.GetWgpu<WGPUComputePipeline>());
+                if (groups == 0) Wgpu.DispatchWorkgroupsIndirect(pass, DispatchArguments.GetWgpu<WGPUBuffer>(), 0);
+                else Wgpu.DispatchWorkgroups(pass, System.Math.Min(groups, 65535u), (groups + 65534u) / 65535u);
+            }
+            finally { Wgpu.EndComputePass(pass); Wgpu.Release(ref pass); }
+        }
+    }
+
+    internal void ClearShadow(WgpuHandle<WGPURenderPassEncoder> pass)
+    {
+        Wgpu.SetRenderPipeline(pass, _hierarchy.ShadowClear.GetWgpu<WGPURenderPipeline>());
+        Wgpu.DrawIndirect(pass, Arguments.GetWgpu<WGPUBuffer>(), 80);
     }
 
     public void ExpandTriangles(WgpuHandle<WGPUCommandEncoder> encoder, int view)

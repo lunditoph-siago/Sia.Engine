@@ -38,7 +38,7 @@ internal sealed partial class PbrStreamResidency
         var parts = new List<uint4>(checked(partCount + rootCount));
         var roots = new List<uint4>(rootCount);
         var geometries = new Dictionary<int, (int First, ulong Triangles, ulong Nodes, ulong Records)>(assets.Count);
-        ulong single = 0, twice = 0, selectedNodes = 0, triangles = 0;
+        ulong single = 0, twice = 0, selectedNodes = 0, triangles = 0, shadowNodes = 0;
         for (var instance = 0; instance < _source.Instances.Length; instance++) {
             var info = _source.Instances.Span[instance];
             var tree = _source.Hierarchies[info.AssetIndex];
@@ -64,7 +64,7 @@ internal sealed partial class PbrStreamResidency
                     nodes.Add(new(new(bounds.Min, node.ChildCount == 0 ? 0 : SafeError(node.Error)), new(bounds.Max, radius),
                         new((uint)(geometry.First + node.FirstChild), (uint)node.ChildCount, (uint)at, (uint)node.RangeCount),
                         new(node.Parent < 0 ? uint.MaxValue : (uint)(geometry.First + node.Parent),
-                            0, 0, 0)));
+                            (uint)geometry.First, 0, 0)));
                     nodeRequests.Add(new(-1, info.AssetIndex, n));
                     if (((ulong)nodes.Count * 64) + ((ulong)(parts.Count + rootCount) * 16) + ((ulong)keys.Count * 16) > _settings.HierarchyBytes)
                         throw new ArgumentException("GPU hierarchy metadata exceeds its explicit allocation budget; use CPU traversal or recook cheaper hierarchy roots.");
@@ -74,8 +74,9 @@ internal sealed partial class PbrStreamResidency
             else twice = checked(twice + geometry.Records);
             triangles = checked(triangles + geometry.Triangles);
             selectedNodes = checked(selectedNodes + geometry.Nodes);
+            var shadowBase = PbrGpuHierarchy.AppendShadowDomain(ref shadowNodes, tree.Nodes.Length);
             for (var root = 0; root < tree.Roots; root++)
-                roots.Add(new((uint)(geometry.First + root), (uint)instance, side, 0));
+                roots.Add(new((uint)(geometry.First + root), (uint)instance, side, shadowBase));
         }
         var rootBase = parts.Count;
         parts.AddRange(roots);
@@ -90,7 +91,7 @@ internal sealed partial class PbrStreamResidency
             throw new NotSupportedException("GPU logical cut exceeds indirect vertex addressing capacity.");
         var hierarchy = new PbrGpuHierarchy(frame, _settings.HierarchyBytes, CollectionsMarshal.AsSpan(nodes),
             CollectionsMarshal.AsSpan(parts), mapping, (uint)rootBase, (uint)roots.Count,
-            checked((uint)single), checked((uint)twice), checked((uint)selectedNodes), instances);
+            checked((uint)single), checked((uint)twice), checked((uint)selectedNodes), instances, shadowNodes);
         _gpuKeys = [.. keys];
         _gpuNodes = [.. nodeRequests];
         _gpuSlots = slots;
@@ -123,13 +124,11 @@ internal sealed partial class PbrStreamResidency
             if ((uint)n >= (uint)_gpuNodes.Length) throw new InvalidDataException("GPU feedback child index is invalid.");
             var word = words[_gpuKeys.Length + n];
             if (word == 0) continue;
-            var priority = BitConverter.UInt32BitsToSingle(word);
-            if (!float.IsFinite(priority) || priority <= 0)
-                throw new InvalidDataException("GPU feedback priority is invalid.");
+            var (priority, mainView) = PbrGeometryFeedback.Decode(word);
             var child = _gpuNodes[n];
             if (_source.Hierarchies[child.Asset].Nodes[child.Node].Parent < 0)
                 throw new InvalidDataException("GPU feedback cannot request a hierarchy root as a child.");
-            RequestChild(child, priority, ownerFrame < 0 || _clock - ownerFrame <= 8);
+            RequestChild(child, priority, ownerFrame < 0 || _clock - ownerFrame <= 8, mainView);
         }
     }
 

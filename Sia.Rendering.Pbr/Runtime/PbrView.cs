@@ -16,7 +16,8 @@ internal sealed unsafe partial class PbrView : IDisposable
     private const uint k_LightsPerCell = 64;
     private const uint k_MaximumLights = 256;
     internal const uint ShadowMatrixBase = k_MaximumLights * 4;
-    private const uint k_ShadowLayers = 7;
+    private readonly uint _shadowLayers;
+    private readonly int _pointShadowCapacity;
 
     private static readonly IEntityMatcher s_Casters = Matchers.Of<ShadowCaster>();
     private static readonly IEntityMatcher s_Directionals = Matchers.Of<DirectionalLight, LightColor, GlobalTransform>();
@@ -42,12 +43,13 @@ internal sealed unsafe partial class PbrView : IDisposable
     private double _localRadianceBound;
     private readonly Entity _sampler;
     private readonly Entity _depthSampler;
-    private readonly Entity[] _shadowViews = new Entity[k_ShadowLayers];
-    private readonly bool[] _shadowValid = new bool[k_ShadowLayers];
-    private readonly bool[] _shadowDirty = new bool[k_ShadowLayers];
-    private readonly float4x4[] _shadowMatrices = new float4x4[k_ShadowLayers];
-    private readonly bool[] _shadowActive = new bool[k_ShadowLayers];
-    private readonly float4[] _sceneData = new float4[ShadowMatrixBase + (k_ShadowLayers * 4)];
+    private readonly Entity _shadowGatherSampler;
+    private readonly Entity[] _shadowViews;
+    private readonly bool[] _shadowValid;
+    private readonly bool[] _shadowDirty;
+    private readonly float4x4[] _shadowMatrices;
+    private readonly bool[] _shadowActive;
+    private readonly float4[] _sceneData;
     private readonly List<Entity> _directional = [];
     private readonly HashSet<Entity> _casters = [];
     private readonly EntityHandler _collectCaster, _collectDirectional, _collectPoint, _collectSpot;
@@ -68,6 +70,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private uint _width, _height;
     private uint _tileStride;
     private uint _spotCount;
+    private int _pointShadowCount;
     private bool _needsSnapshot;
     private bool _hasVisibilityTargets;
     private Entity _backgroundGroup;
@@ -80,7 +83,7 @@ internal sealed unsafe partial class PbrView : IDisposable
     private float3 _transparentEye;
     private readonly List<PbrGpuScene.Draw> _opaque = [];
     private readonly float[] _materialPixels;
-    private readonly List<PbrGpuScene.Draw>[] _shadowDraws = [.. Enumerable.Range(0, (int)k_ShadowLayers).Select(_ => new List<PbrGpuScene.Draw>())];
+    private readonly List<PbrGpuScene.Draw>[] _shadowDraws;
     private readonly RenderGraphBufferKey _timingsKey;
     private readonly List<(RenderGraphBufferKey Key, Entity Value, RenderGraphBufferUsage Usage)> _sceneBuffers = [];
     private readonly List<(RenderGraphTextureKey Key, Entity Value)> _sceneTextures = [];
@@ -99,6 +102,16 @@ internal sealed unsafe partial class PbrView : IDisposable
     public PbrView(PbrRenderer owner, RenderView view, in GpuFrame frame)
     {
         _owner = owner;
+        _pointShadowCapacity = frame.MainWorld.AcquireAddon<ShadowAtlasConfig>().MaxShadowedPointLights;
+        _shadowLayers = (uint)PbrPointShadow.LayerCount(_pointShadowCapacity);
+        _shadowViews = new Entity[_shadowLayers];
+        _shadowValid = new bool[_shadowLayers];
+        _shadowDirty = new bool[_shadowLayers];
+        _shadowMatrices = new float4x4[_shadowLayers];
+        _shadowActive = new bool[_shadowLayers];
+        _shadowGeometryRevision = new ulong[_shadowLayers];
+        _shadowDraws = [.. Enumerable.Range(0, (int)_shadowLayers).Select(_ => new List<PbrGpuScene.Draw>())];
+        _sceneData = new float4[ShadowMatrixBase + (_shadowLayers * 4)];
         _sortTransparent = CompareTransparent;
         _sortInstanceBatches = CompareInstanceBatches;
         _materialPixels = new float[owner.Materials.MaterialBatches.Length];
@@ -136,7 +149,6 @@ internal sealed unsafe partial class PbrView : IDisposable
         _referenceInstancesKey = new(_prefix + "probe-reference-instances");
         _probeTextureKey = new(_prefix + "probe-texture");
         void Buffer(Entity entity, RenderGraphBufferUsage usage) => _sceneBuffers.Add((new(_prefix + "scene-buffer/" + _sceneBuffers.Count), entity, usage));
-        void Texture(Entity entity) => _sceneTextures.Add((new(_prefix + "scene-texture/" + _sceneTextures.Count), entity));
         Buffer(owner.Materials.Table, RenderGraphBufferUsage.Storage);
         Buffer(owner.Scene.Vertices, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Vertex);
         Buffer(owner.Scene.Topology, RenderGraphBufferUsage.Storage | RenderGraphBufferUsage.Index);
@@ -145,15 +157,10 @@ internal sealed unsafe partial class PbrView : IDisposable
         foreach (var entity in owner.Materials.Uniforms)
             Buffer(entity, RenderGraphBufferUsage.Uniform);
         _sceneBuffers.Add((_environmentShKey, owner.Environment.Sh, RenderGraphBufferUsage.Uniform));
-        foreach (var entity in owner.Materials.Textures)
-            Texture(entity);
         _environmentCubeKey = new(_prefix + "environment-cube");
-        _sceneTextures.Add((_environmentCubeKey, owner.Environment.Cube));
-        Texture(owner.Environment.Lut);
-        if (owner.Captures is { } captureResources) {
-            Buffer(captureResources.Regions, RenderGraphBufferUsage.Uniform); Texture(captureResources.Texture);
-        }
-        if (owner.Lightmaps is { } lightmapTextures) foreach (var entity in lightmapTextures.Textures) Texture(entity);
+        RefreshSceneTextures();
+        if (owner.Captures is { } captureResources)
+            Buffer(captureResources.Regions, RenderGraphBufferUsage.Uniform);
         _collectCaster = e => _casters.Add(e);
         _collectDirectional = e => {
             if (_directional.Count == 4)
@@ -164,7 +171,7 @@ internal sealed unsafe partial class PbrView : IDisposable
         _collectSpot = CollectSpot;
         try {
             if (owner.Scene.Streaming is null) {
-                var references = checked((ulong)(owner.Scene.Opaque.Length + owner.Scene.Transparent.Length) * (k_ShadowLayers + 1));
+                var references = checked((ulong)(owner.Scene.Opaque.Length + owner.Scene.Transparent.Length) * (_shadowLayers + 1));
                 _instanceIds = _gpu.Buffer(System.Math.Max(1, references) * (ulong)System.Runtime.CompilerServices.Unsafe.SizeOf<PbrDrawInstance>(),
                     WGPUBufferUsage.Vertex | WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
                 Buffer(_instanceIds, RenderGraphBufferUsage.Vertex);
@@ -178,6 +185,7 @@ internal sealed unsafe partial class PbrView : IDisposable
             _outputUniform = _gpu.Upload<float4>([new(owner.HdrRadianceScale * MathF.Pow(2, _outputExposure), owner.OutputFormat is WGPUTextureFormat.BGRA8Unorm or WGPUTextureFormat.RGBA8Unorm ? 1 : 0, 1 / owner.HdrRadianceScale, owner.Settings.AutoExposure is null ? 0 : _outputExposure)],
                 WGPUBufferUsage.Uniform | (owner.Settings.AutoExposure is null ? 0 : WGPUBufferUsage.Storage));
             InitializeExposure();
+            InitializeDisplayTransform();
             var sampler = WGPUSamplerDescriptor.Default;
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Linear;
             sampler.AddressModeU = sampler.AddressModeV = WGPUAddressMode.ClampToEdge;
@@ -185,18 +193,24 @@ internal sealed unsafe partial class PbrView : IDisposable
             sampler.MinFilter = sampler.MagFilter = WGPUFilterMode.Nearest;
             sampler.Compare = WGPUCompareFunction.LessEqual;
             _depthSampler = _gpu.Own(Wgpu.CreateSampler(_gpu.Device, sampler));
+            sampler.Compare = WGPUCompareFunction.Undefined;
+            sampler.AddressModeW = WGPUAddressMode.ClampToEdge;
+            sampler.MipmapFilter = WGPUMipmapFilterMode.Nearest;
+            _shadowGatherSampler = _gpu.Own(Wgpu.CreateSampler(_gpu.Device, sampler));
             var desc = WGPUTextureDescriptor.Default;
             desc.Dimension = WGPUTextureDimension._2D;
             desc.Format = WGPUTextureFormat.Depth32Float;
             desc.Size = new() {
-                Width = owner.Settings.ShadowResolution, Height = owner.Settings.ShadowResolution, DepthOrArrayLayers = k_ShadowLayers
+                Width = owner.Settings.ShadowResolution, Height = owner.Settings.ShadowResolution, DepthOrArrayLayers = _shadowLayers
             };
             desc.Usage = WGPUTextureUsage.RenderAttachment | WGPUTextureUsage.TextureBinding;
-            _shadowAtlas = _gpu.Texture(desc, (ulong)desc.Size.Width * desc.Size.Height * k_ShadowLayers * 4);
+            if (_shadowLayers > _gpu.Limits.MaxTextureArrayLayers)
+                throw new NotSupportedException("Point shadow cube capacity exceeds the device texture-array layer limit.");
+            _shadowAtlas = _gpu.Texture(desc, (ulong)desc.Size.Width * desc.Size.Height * _shadowLayers * 4);
             var array = WGPUTextureViewDescriptor.Default;
             array.Dimension = WGPUTextureViewDimension._2DArray;
             _shadowArray = _gpu.Own(Wgpu.CreateTextureView(_shadowAtlas.GetWgpu<WGPUTexture>(), array));
-            for (uint i = 0; i < k_ShadowLayers; i++) {
+            for (uint i = 0; i < _shadowLayers; i++) {
                 var layer = WGPUTextureViewDescriptor.Default;
                 layer.Dimension = WGPUTextureViewDimension._2D;
                 layer.BaseArrayLayer = i;
@@ -215,6 +229,7 @@ internal sealed unsafe partial class PbrView : IDisposable
                 GpuBinding.Sampler(6, owner.Environment.Sampler),
                 GpuBinding.Sampler(7, owner.Environment.Sampler),
                 GpuBinding.Sampler(11, _depthSampler),
+                GpuBinding.Sampler(17, _shadowGatherSampler),
                 GpuBinding.Buffer(8, owner.Environment.Sh)
             };
             if (owner.Probes is { } probes) {
@@ -237,7 +252,9 @@ internal sealed unsafe partial class PbrView : IDisposable
                 _queryScratch = _gpu.Buffer(count * 16, WGPUBufferUsage.QueryResolve | WGPUBufferUsage.CopySrc);
                 _timing = _gpu.Buffer(count * 16, WGPUBufferUsage.CopyDst | WGPUBufferUsage.CopySrc);
             }
+            InitializeAlphaShadowResources();
             InitializeGpuSelection();
+            InitializeAlphaShadowSelection();
             if (owner.Settings.Reflections is { } reflectionSettings) {
                 _reflectionConfig = _gpu.Upload<Sia.Math.float4>(reflectionSettings.Pack(), WGPUBufferUsage.Uniform);
                 _reflectionCurrentPoses = new PbrReflectionInstancePose[owner.ReflectionTrace.Scene.Instances.Length];

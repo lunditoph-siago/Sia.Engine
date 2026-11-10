@@ -25,6 +25,7 @@ struct Material {
 @group(0) @binding(6) var environment_sampler: sampler;
 @group(0) @binding(7) var brdf_sampler: sampler;
 @group(0) @binding(11) var depth_sampler: sampler_comparison;
+@group(0) @binding(17) var shadow_gather_sampler: sampler;
 @group(0) @binding(8) var<uniform> sh: array<vec4<f32>, 9>;
 #if REFLECTION_CAPTURES
 @group(0) @binding(15) var capture_environment: texture_2d_array<f32>;
@@ -40,7 +41,11 @@ struct Material {
 @group(0) @binding(13) var lightmap_mapping: texture_2d<u32>;
 @group(0) @binding(14) var lightmap_pages: texture_2d_array<u32>;
 #endif
+#if STREAM_INSTANCES || SHADING_WORK
+@group(1) @binding(0) var<storage, read> vertices: array<vec4<u32>>;
+#else
 @group(1) @binding(0) var<storage, read> vertices: array<u32>;
+#endif
 @group(1) @binding(1) var<storage, read> topology: array<u32>;
 #if RASTER_POSITION_TABLES
 @group(1) @binding(3) var<storage, read> vertex_attributes: array<u32>;
@@ -95,7 +100,19 @@ fn unit(v: vec3<f32>) -> vec3<f32> {
 }
 
 fn resident_vec4(offset: u32) -> vec4<u32> {
+#if STREAM_INSTANCES || SHADING_WORK
+    return vertices[offset / 4u];
+#else
     return vec4<u32>(vertices[offset], vertices[offset+1u], vertices[offset+2u], vertices[offset+3u]);
+#endif
+}
+
+fn vertex_word(offset: u32) -> u32 {
+#if STREAM_INSTANCES || SHADING_WORK
+    return vertices[offset / 4u][offset % 4u];
+#else
+    return vertices[offset];
+#endif
 }
 
 fn vertex_plane(index: u32) -> vec4<f32> {
@@ -164,7 +181,7 @@ fn stream_vertex_value(index: u32) -> Vertex {
     let p = vertex_plane(index);
     let n = resident_vec4(frame.geometry.x * 4u + index * 4u);
     let t = resident_vec4(frame.geometry.x * 8u + index * 4u);
-    let metadata = vertices[frame.geometry.x * 12u + index];
+    let metadata = vertex_word(frame.geometry.x * 12u + index);
     return Vertex(p.xyz, stream_direction(n.x, n.y), vec2<f32>(p.w, bitcast<f32>(n.z)),
         vec4<f32>(stream_direction(t.x, t.y), bitcast<f32>(t.z)), bitcast<vec2<f32>>(vec2<u32>(n.w, t.w)),
         (metadata & 0x80000000u) != 0u, metadata & 0x7fffffffu);
@@ -173,8 +190,8 @@ fn stream_vertex_value(index: u32) -> Vertex {
 #if RASTER_POSITION_TABLES
 fn raster_position(index: u32) -> vec3<f32> {
     var offset = index * 5u;
-    if (frame.geometry.y == 2u) { offset = frame.geometry.x * 3u + vertices[index * 3u] * 3u; }
-    return bitcast<vec3<f32>>(vec3<u32>(vertices[offset], vertices[offset + 1u], vertices[offset + 2u]));
+    if (frame.geometry.y == 2u) { offset = frame.geometry.x * 3u + vertex_word(index * 3u) * 3u; }
+    return bitcast<vec3<f32>>(vec3<u32>(vertex_word(offset), vertex_word(offset + 1u), vertex_word(offset + 2u)));
 }
 
 fn raster_vertex_value(index: u32, row: u32) -> Vertex {
@@ -193,7 +210,7 @@ fn raster_vertex_value(index: u32, row: u32) -> Vertex {
     let instance = instances[row];
     return Vertex((instance.transform * vec4<f32>(raster_position(index), 1.0)).xyz,
         (instance.normal_transform * vec4<f32>(normal, 0.0)).xyz,
-        bitcast<vec2<f32>>(vec2<u32>(vertices[uv_offset], vertices[uv_offset + 1u])),
+        bitcast<vec2<f32>>(vec2<u32>(vertex_word(uv_offset), vertex_word(uv_offset + 1u))),
         vec4<f32>((instance.transform * vec4<f32>(tangent.xyz, 0.0)).xyz, tangent.w),
         bitcast<vec2<f32>>(bake), (flags & 2u) != 0u, instance.material.y);
 }
@@ -208,7 +225,7 @@ fn vertex_data(triangle: u32, corner: u32) -> Vertex {
 #if RESIDENT_INSTANCES
     let n = resident_vec4(frame.geometry.x * 4u + index * 4u);
     let offset = frame.geometry.x * 8u + index * 2u;
-    let words = vec2<u32>(vertices[offset], vertices[offset+1u]);
+    let words = vec2<u32>(vertex_word(offset), vertex_word(offset+1u));
     let instance = instances[resident_instance(triangle)];
     let tangent = resident_tangent(words);
     return Vertex(
@@ -257,6 +274,6 @@ fn triangle_material(triangle: u32) -> u32 {
 #elif RESIDENT_INSTANCES || CPU_STREAM_INSTANCES
     return instances[resident_instance(triangle)].material.x;
 #else
-    return u32(abs(bitcast<f32>(vertices[frame.geometry.x * 8u + vertex_index(triangle, 0u) * 4u + 2u]))) - 1u;
+    return u32(abs(bitcast<f32>(vertex_word(frame.geometry.x * 8u + vertex_index(triangle, 0u) * 4u + 2u)))) - 1u;
 #endif
 }

@@ -117,12 +117,12 @@ fn shadow_vertex(
     let position = vec4<f32>(p.xyz, 1.0);
 #endif
 #if RESIDENT_INSTANCES
-    let world = instances[draw_instance.x >> 3u].transform * position;
-    return shadow_matrix(draw_instance.x & 7u) * world;
+    let world = instances[draw_instance.x >> 5u].transform * position;
+    return shadow_matrix(draw_instance.x & 31u) * world;
 #elif CPU_STREAM_INSTANCES
-    let world = instances[packed >> 3u].transform * position;
-    return shadow_matrix(packed & 7u) * world;
+    let world = instances[packed >> 5u].transform * position;
+    return shadow_matrix(packed & 31u) * world;
 #else
-    return shadow_matrix(packed & 7u) * position;
+    return shadow_matrix(packed & 31u) * position;
 #endif
 }

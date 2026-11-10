@@ -34,7 +34,7 @@ fn measure_exposure(@builtin(global_invocation_id) id: vec3<u32>,
     let dimensions = textureDimensions(exposure_hdr);
     let groups = exposure_group_count();
     let stride = groups * 8u;
-    // Legal HDR storage factors extend down to 2^-100. Keep their physical units intact.
+    // Meter physical radiance before tone mapping, independently of its storage encoding.
     let inverse_scale = max(exposure_output.z, 1.17549435e-38);
     var log_sum = 0.0;
     var count = 0u;

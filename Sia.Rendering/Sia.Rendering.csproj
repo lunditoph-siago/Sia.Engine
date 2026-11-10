@@ -24,5 +24,6 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Shaders/**/*.wgsl" />
+    <EmbeddedResource Include="Environment/BrdfLut.bin" LogicalName="Sia.Engine.Rendering.BrdfLut.bin" />
   </ItemGroup>
 </Project>
