@@ -16,11 +16,15 @@ public enum ConfigurationLayer
 internal readonly record struct ConfigurationOverride(bool HasValue, object? Value);
 
 /// <summary>A batch of overrides for a single configuration layer.</summary>
+/// <remarks>One operation at a time can edit or apply a patch.</remarks>
 public sealed class ConfigurationPatch
 {
     private readonly Dictionary<ConfigurationKey, ConfigurationOverride> _entries = [];
+    private int _operation;
     internal ConfigurationSchema Schema { get; }
     internal Dictionary<ConfigurationKey, ConfigurationOverride> Entries => _entries;
+
+    internal ConfigurationOperation BeginApply() => new(ref _operation);
 
     public ConfigurationPatch(ConfigurationSchema schema)
     {
@@ -30,6 +34,7 @@ public sealed class ConfigurationPatch
 
     public ConfigurationPatch Set<T>(ConfigurationKey<T> key, T value)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         Schema.RequireKey(key);
         key.Validate(value);
         _entries[key] = new(true, value);
@@ -39,6 +44,7 @@ public sealed class ConfigurationPatch
     /// <summary>Set a value from a data adapter after checking it against the registered key type.</summary>
     public ConfigurationPatch SetValue(ConfigurationKey key, object? value)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         Schema.RequireKey(key);
         key.ValidateValue(value);
         _entries[key] = new(true, value);
@@ -47,6 +53,7 @@ public sealed class ConfigurationPatch
 
     public ConfigurationPatch Clear(ConfigurationKey key)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         Schema.RequireKey(key);
         _entries[key] = default;
         return this;
@@ -55,6 +62,7 @@ public sealed class ConfigurationPatch
 
 /// <summary>
 /// Resolves overrides on its owning thread and publishes the latest effective snapshot for readers.
+/// Concurrent and reentrant writes are rejected.
 /// Consumers that apply changes asynchronously can retain their own last applied snapshot.
 /// </summary>
 public sealed class ConfigurationStore : IAddon
@@ -62,6 +70,7 @@ public sealed class ConfigurationStore : IAddon
     private const int LayerCount = (int)ConfigurationLayer.Session + 1;
     private readonly ConfigurationOverride[][] _layers = new ConfigurationOverride[LayerCount][];
     private ConfigurationSnapshot _active;
+    private int _operation;
 
     public ConfigurationSchema Schema { get; }
     public ConfigurationSnapshot Active => Volatile.Read(ref _active);
@@ -80,6 +89,7 @@ public sealed class ConfigurationStore : IAddon
     /// <summary>Set one layer override. Returns true when the effective configuration changes.</summary>
     public bool Set<T>(ConfigurationLayer layer, ConfigurationKey<T> key, T value)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         Schema.RequireKey(key);
         key.Validate(value);
         var layerIndex = GetLayerIndex(layer);
@@ -91,6 +101,7 @@ public sealed class ConfigurationStore : IAddon
     /// <summary>Remove one layer override. Returns true when the effective configuration changes.</summary>
     public bool Clear(ConfigurationLayer layer, ConfigurationKey key)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         Schema.RequireKey(key);
         return ApplyOne(GetLayerIndex(layer), key, default);
     }
@@ -103,10 +114,12 @@ public sealed class ConfigurationStore : IAddon
 
     private bool Apply(ConfigurationLayer layer, ConfigurationPatch patch, bool replace)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         ArgumentNullException.ThrowIfNull(patch);
         if (!ReferenceEquals(patch.Schema, Schema))
             throw new ArgumentException("The configuration patch belongs to a different schema.", nameof(patch));
         var layerIndex = GetLayerIndex(layer);
+        using var patchOperation = patch.BeginApply();
         object?[]? changed = null;
         var entries = _layers[layerIndex];
         foreach (var (key, entry) in patch.Entries) PrepareChange(key, entry);

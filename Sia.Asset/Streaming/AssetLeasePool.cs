@@ -40,7 +40,8 @@ public sealed class AssetLeasePool<TKey, TValue> : IAsyncDisposable
                     _entries.Add(key, entry);
                     _owned.Add(entry);
                 }
-                if (!start && entry.References == 0) retired = entry.Drained.Task;
+                if (!start && (entry.References == 0 || entry.Ready.Task.IsFaulted || entry.Ready.Task.IsCanceled))
+                    retired = entry.Drained.Task;
                 else entry.References++;
             }
             if (retired is not null) {
@@ -57,7 +58,7 @@ public sealed class AssetLeasePool<TKey, TValue> : IAsyncDisposable
                 }
             }
             catch {
-                _ = Release(entry);
+                Release(entry);
                 throw;
             }
         }
@@ -84,22 +85,22 @@ public sealed class AssetLeasePool<TKey, TValue> : IAsyncDisposable
             entry.Ready.SetResult(value ?? throw new InvalidOperationException("Asset preparation returned no value."));
         }
         catch (Exception error) {
-            lock (_gate) RemoveIndex(entry);
             if (error is OperationCanceledException cancelled) entry.Ready.SetCanceled(cancelled.CancellationToken);
             else entry.Ready.SetException(error);
         }
     }
 
-    private Task<Exception?>? Release(Entry entry)
+    private void Release(Entry entry)
     {
-        Task cancellation;
+        Task? cancellation;
         lock (_gate) {
-            if (--entry.References != 0) return null;
-            cancellation = CancelPreparation(entry);
+            cancellation = BeginRelease(entry);
         }
-        _ = DrainAsync(entry, cancellation);
-        return entry.Drained.Task;
+        if (cancellation is not null) _ = DrainAsync(entry, cancellation);
     }
+
+    private static Task? BeginRelease(Entry entry)
+        => --entry.References == 0 ? CancelPreparation(entry) : null;
 
     private static Task CancelPreparation(Entry entry)
         => entry.Cancellation ?? (entry.Ready.Task.IsCompleted ? Task.CompletedTask : entry.Cancellation = entry.Stop.CancelAsync());
@@ -152,19 +153,31 @@ public sealed class AssetLeasePool<TKey, TValue> : IAsyncDisposable
         private AssetLeasePool<TKey, TValue>? _pool;
         private Entry? _entry;
         private TValue? _value;
+        private Task? _release;
 
         internal Lease(AssetLeasePool<TKey, TValue> pool, Entry entry, TValue value)
             => (_pool, _entry, _value) = (pool, entry, value);
 
         public TValue Value => Volatile.Read(ref _value) ?? throw new ObjectDisposedException(nameof(Lease));
 
+        /// <summary>Release the lease. Repeated calls observe the same completion and cleanup failure.</summary>
         public ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _value, null) is null) return default;
-            var drain = _pool!.Release(_entry!);
-            _pool = null;
-            _entry = null;
-            return drain is null ? default : new(ObserveReleaseAsync(drain));
+            var pool = Volatile.Read(ref _pool);
+            if (pool is null) return _release is { } released ? new(released) : default;
+            Entry entry;
+            Task? cancellation;
+            lock (pool._gate) {
+                if (_entry is not { } current) return _release is { } released ? new(released) : default;
+                entry = current;
+                Volatile.Write(ref _value, null);
+                cancellation = BeginRelease(entry);
+                _release = cancellation is null ? null : ObserveReleaseAsync(entry.Drained.Task);
+                _entry = null;
+                Volatile.Write(ref _pool, null);
+            }
+            if (cancellation is not null) _ = pool.DrainAsync(entry, cancellation);
+            return _release is { } release ? new(release) : default;
         }
 
         private static async Task ObserveReleaseAsync(Task<Exception?> drain)

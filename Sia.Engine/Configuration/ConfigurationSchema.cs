@@ -7,6 +7,7 @@ public sealed class ConfigurationSchema
 {
     private readonly Dictionary<string, ConfigurationKey> _keys = new(StringComparer.Ordinal);
     private readonly List<ConfigurationKey> _ordered = [];
+    private int _operation;
     private bool _sealed;
 
     public IReadOnlyList<ConfigurationKey> Keys { get; }
@@ -16,6 +17,7 @@ public sealed class ConfigurationSchema
     /// <summary>Use immutable values and deterministic validators for configuration keys.</summary>
     public ConfigurationKey<T> Register<T>(string name, T defaultValue, Func<T, bool>? validate = null)
     {
+        using var operation = new ConfigurationOperation(ref _operation);
         if (_sealed) throw new InvalidOperationException("The configuration schema is already in use.");
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (name != name.Trim() || name.Any(char.IsControl))
@@ -32,7 +34,12 @@ public sealed class ConfigurationSchema
 
     public bool TryGetKey(string name, [NotNullWhen(true)] out ConfigurationKey? key) => _keys.TryGetValue(name, out key);
 
-    internal void Seal() => _sealed = true;
+    internal void Seal()
+    {
+        if (Volatile.Read(ref _sealed)) return;
+        using var operation = new ConfigurationOperation(ref _operation);
+        Volatile.Write(ref _sealed, true);
+    }
 
     internal void RequireKey(ConfigurationKey key)
     {
@@ -40,6 +47,22 @@ public sealed class ConfigurationSchema
         if (!ReferenceEquals(key.Schema, this))
             throw new ArgumentException($"Configuration key '{key.Name}' belongs to a different schema.", nameof(key));
     }
+}
+
+// Validation and value comparison can invoke caller code. An exclusive scope
+// protects the current operation without tying it to a permanent thread.
+internal readonly ref struct ConfigurationOperation
+{
+    private readonly ref int _state;
+
+    internal ConfigurationOperation(ref int state)
+    {
+        if (Interlocked.CompareExchange(ref state, 1, 0) != 0)
+            throw new InvalidOperationException("A configuration operation on this instance is already in progress.");
+        _state = ref state;
+    }
+
+    public void Dispose() => Volatile.Write(ref _state, 0);
 }
 
 public abstract class ConfigurationKey
